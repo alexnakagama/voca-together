@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"vocatogether/backend/internal/config"
+	"vocatogether/backend/internal/db"
 	"vocatogether/backend/internal/server"
 )
 
@@ -25,6 +26,17 @@ func main() {
 func run(logger *slog.Logger) error {
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {
+		return err
+	}
+
+	startCtx, cancelStart := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelStart()
+	pool, err := db.Connect(startCtx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	if err := db.Migrate(startCtx, pool); err != nil {
 		return err
 	}
 

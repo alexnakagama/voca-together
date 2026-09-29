@@ -11,6 +11,8 @@ type Config struct {
 	Env        string // development | test | production
 	HTTPAddr   string
 	AppBaseURL string // public base URL used in emailed links; no trailing slash
+	// DatabaseURL is a secret (it contains credentials): never log it.
+	DatabaseURL string
 }
 
 func (c Config) IsProduction() bool { return c.Env == "production" }
@@ -18,9 +20,14 @@ func (c Config) IsProduction() bool { return c.Env == "production" }
 // Load reads configuration through getenv (os.Getenv in main, a map in tests).
 func Load(getenv func(string) string) (Config, error) {
 	cfg := Config{
-		Env:        withDefault(getenv("ENV"), "development"),
-		HTTPAddr:   withDefault(getenv("HTTP_ADDR"), ":8080"),
-		AppBaseURL: strings.TrimRight(withDefault(getenv("APP_BASE_URL"), "http://localhost:8080"), "/"),
+		Env:         withDefault(getenv("ENV"), "development"),
+		HTTPAddr:    withDefault(getenv("HTTP_ADDR"), ":8080"),
+		AppBaseURL:  strings.TrimRight(withDefault(getenv("APP_BASE_URL"), "http://localhost:8080"), "/"),
+		DatabaseURL: getenv("DATABASE_URL"),
+	}
+
+	if cfg.DatabaseURL == "" {
+		return Config{}, fmt.Errorf("DATABASE_URL is required")
 	}
 
 	switch cfg.Env {

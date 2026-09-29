@@ -2,8 +2,15 @@ package config
 
 import "testing"
 
+const testDBURL = "postgres://u:p@localhost:5432/voca"
+
+// env returns a getenv with DATABASE_URL set, overridden/extended by m.
 func env(m map[string]string) func(string) string {
-	return func(k string) string { return m[k] }
+	vars := map[string]string{"DATABASE_URL": testDBURL}
+	for k, v := range m {
+		vars[k] = v
+	}
+	return func(k string) string { return vars[k] }
 }
 
 func TestLoadDefaults(t *testing.T) {
@@ -19,6 +26,15 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.AppBaseURL != "http://localhost:8080" {
 		t.Errorf("AppBaseURL = %q", cfg.AppBaseURL)
+	}
+	if cfg.DatabaseURL != testDBURL {
+		t.Errorf("DatabaseURL = %q", cfg.DatabaseURL)
+	}
+}
+
+func TestLoadRequiresDatabaseURL(t *testing.T) {
+	if _, err := Load(env(map[string]string{"DATABASE_URL": ""})); err == nil {
+		t.Fatal("expected error when DATABASE_URL is missing")
 	}
 }
 

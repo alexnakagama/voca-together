@@ -10,7 +10,7 @@ db-down:
 	docker compose down
 
 test:
-	cd backend && TEST_DATABASE_URL="$(TEST_DATABASE_URL)" go test ./...
+	cd backend && TEST_DATABASE_URL="$(TEST_DATABASE_URL)" go test -p 1 ./...  # -p 1: DB-backed packages share one test database
 
 vet:
 	cd backend && go vet ./...
