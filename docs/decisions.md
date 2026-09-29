@@ -33,6 +33,13 @@ and a wrong password. `email_not_verified` (403) is returned only after the pass
 
 ## 007: Email behind an interface
 `email.Sender` with a dev `LogSender` and a test `Recorder`. The real provider will be chosen later.
+- `email` handles delivery only. `auth` owns the content, links and expiry wording. The dependency runs
+  `auth → email`, never the reverse.
+- Production must refuse to start with `LogSender`: it logs message bodies, which contain live tokens.
+  There is no silent fallback.
+- Auth sends email in the background (so response timing doesn't reveal accounts), with its own timeout
+  derived via `context.WithoutCancel`, never the finished request's context. `Recorder` rejects cancelled
+  contexts, so tests catch that mistake.
 
 ## 008: Minimal libraries
 - Backend: stdlib `net/http` routing (Go 1.22+ patterns), pgx, goose, x/crypto, x/time/rate.

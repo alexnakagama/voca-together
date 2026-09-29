@@ -40,7 +40,10 @@ func HashToken(raw string) []byte {
 	return sum[:]
 }
 
-// String and LogValue keep the secret out of logs and error messages.
+// String, GoString and LogValue keep the secret out of logs, error messages
+// and debug output (%v, %+v, %s, %#v and slog).
 func (Token) String() string { return "[REDACTED]" }
+
+func (Token) GoString() string { return "auth.Token{[REDACTED]}" }
 
 func (Token) LogValue() slog.Value { return slog.StringValue("[REDACTED]") }

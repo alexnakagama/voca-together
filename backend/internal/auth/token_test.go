@@ -82,10 +82,21 @@ func TestTokenPrefixesAreDistinct(t *testing.T) {
 // Accidentally logging a Token (fmt or slog) must not leak the secret.
 func TestTokenIsRedactedWhenFormattedOrLogged(t *testing.T) {
 	tok := NewToken(RefreshTokenPrefix)
+	nested := struct{ Tok Token }{tok}
 
-	for _, s := range []string{fmt.Sprint(tok), fmt.Sprintf("%v %+v %s", tok, tok, tok)} {
+	formats := map[string]string{
+		"Sprint":      fmt.Sprint(tok),
+		"%v":          fmt.Sprintf("%v", tok),
+		"%+v":         fmt.Sprintf("%+v", tok),
+		"%s":          fmt.Sprintf("%s", tok),
+		"%#v":         fmt.Sprintf("%#v", tok),
+		"%#v pointer": fmt.Sprintf("%#v", &tok),
+		"%+v nested":  fmt.Sprintf("%+v", nested),
+		"%#v nested":  fmt.Sprintf("%#v", nested),
+	}
+	for verb, s := range formats {
 		if strings.Contains(s, tok.Raw) {
-			t.Errorf("formatted token leaks raw value: %q", s)
+			t.Errorf("%s leaks the raw token: %q", verb, s)
 		}
 	}
 
