@@ -1,0 +1,21 @@
+# Local PostgreSQL for development and tests. Not a production setup.
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: voca
+      POSTGRES_PASSWORD: voca
+      POSTGRES_DB: voca
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/create-test-db.sql:/docker-entrypoint-initdb.d/create-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U voca -d voca"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  pgdata:
