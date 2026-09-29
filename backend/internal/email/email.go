@@ -14,7 +14,8 @@ import (
 //
 // Implementations must honor ctx cancellation and deadlines; the caller owns
 // the timeout. Errors must never include the message body, which may carry
-// secrets such as one-time links.
+// secrets such as one-time links, nor the recipient address (personal data):
+// callers log them.
 type Sender interface {
 	Send(ctx context.Context, msg Message) error
 }

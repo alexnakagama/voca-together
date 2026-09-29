@@ -5,13 +5,16 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"vocatogether/backend/internal/auth"
 	"vocatogether/backend/internal/config"
 	"vocatogether/backend/internal/db"
+	"vocatogether/backend/internal/email"
 	"vocatogether/backend/internal/server"
 )
 
@@ -28,6 +31,14 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	sender, err := newEmailSender(cfg, logger)
+	if err != nil {
+		return err
+	}
+	baseURL, err := url.Parse(cfg.AppBaseURL) // already validated by config.Load
+	if err != nil {
+		return err
+	}
 
 	startCtx, cancelStart := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelStart()
@@ -40,9 +51,13 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
+	authSvc := auth.NewService(pool, sender, baseURL, logger)
+	// Runs after the server has shut down: lets in-flight emails finish.
+	defer authSvc.Wait()
+
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           server.New(),
+		Handler:           server.New(logger, authSvc),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -70,5 +85,17 @@ func run(logger *slog.Logger) error {
 	logger.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
 	return srv.Shutdown(shutdownCtx)
+}
+
+// newEmailSender returns the email.Sender for cfg. Only the development
+// LogSender exists so far. It logs live tokens, so production refuses to start
+// rather than fall back to it (decision 007).
+func newEmailSender(cfg config.Config, logger *slog.Logger) (email.Sender, error) {
+	if cfg.IsProduction() {
+		return nil, errors.New("no email sender for production: LogSender logs live tokens and is not allowed")
+	}
+
+	return email.NewLogSender(logger), nil
 }

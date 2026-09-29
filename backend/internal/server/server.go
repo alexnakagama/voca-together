@@ -2,15 +2,18 @@
 package server
 
 import (
-	"encoding/json"
+	"log/slog"
 	"net/http"
+
+	"vocatogether/backend/internal/auth"
 )
 
-func New() http.Handler {
+// New returns the API's router. Dependencies are built by the caller (main).
+func New(logger *slog.Logger, authSvc *auth.Service) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	mux.HandleFunc("POST /v1/auth/register", handleRegister(logger, authSvc))
 	return mux
 }
