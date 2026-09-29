@@ -63,6 +63,53 @@ func (s *Service) Register(ctx context.Context, emailInput, password string) err
 	return nil
 }
 
+// VerifyEmail consumes a verification token and marks its owner's email as
+// verified. It does not log the user in. Every unusable token (malformed,
+// unknown, expired, used, or for another purpose) gets the same
+// *ValidationError, so the result reveals nothing about accounts or token
+// history.
+func (s *Service) VerifyEmail(ctx context.Context, rawToken string) error {
+	if !wellFormedToken(rawToken, "") {
+		return validationError(ErrTokenInvalid)
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("auth: verify email: %w", err)
+	}
+
+	ok, err := consumeVerificationToken(ctx, s.pool, HashToken(rawToken))
+	if err != nil {
+		return fmt.Errorf("auth: verify email: %w", err)
+	}
+	if !ok {
+		return validationError(ErrTokenInvalid)
+	}
+	return nil
+}
+
+// ResendVerification emails a new verification link if the address belongs
+// to an unverified account, which invalidates the previous link. For unknown
+// or already verified addresses it does nothing. All three return nil, so the
+// result doesn't reveal which addresses have accounts.
+func (s *Service) ResendVerification(ctx context.Context, emailInput string) error {
+	addr, err := NormalizeEmail(emailInput)
+	if err != nil {
+		return validationError(err)
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("auth: resend verification: %w", err)
+	}
+
+	token := NewToken("")
+	issued, err := reissueVerificationToken(ctx, s.pool, addr, token.Hash, verificationTokenTTL)
+	if err != nil {
+		return fmt.Errorf("auth: resend verification: %w", err)
+	}
+	if issued {
+		s.sendInBackground(ctx, "email_verification", verificationEmail(s.baseURL, addr, token.Raw, verificationTokenTTL))
+	}
+	return nil
+}
+
 // sendInBackground delivers msg without delaying the response, so response
 // timing doesn't depend on the email provider or reveal which email was sent.
 // The send gets its own timeout, detached from the request's cancellation

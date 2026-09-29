@@ -146,7 +146,7 @@ func TestRegisterInternalErrorIsOpaque(t *testing.T) {
 
 	api.svc.Wait()
 	logs := api.logs.String()
-	if !strings.Contains(logs, "register failed") {
+	if !strings.Contains(logs, "request failed") || !strings.Contains(logs, registerPath) {
 		t.Errorf("failure not logged: %s", logs)
 	}
 	for _, secret := range []string{"ana@example.com", "plum-lantern-47-orbit"} {

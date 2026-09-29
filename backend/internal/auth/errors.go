@@ -20,6 +20,9 @@ var (
 	ErrPasswordTooLong     = &FieldError{Field: "password", Code: "too_long"}
 	ErrPasswordTooCommon   = &FieldError{Field: "password", Code: "too_common"}
 	ErrPasswordSameAsEmail = &FieldError{Field: "password", Code: "same_as_email"}
+	// ErrTokenInvalid covers malformed, unknown, expired, used and
+	// wrong-purpose tokens alike, so responses don't reveal token history.
+	ErrTokenInvalid = &FieldError{Field: "token", Code: "invalid"}
 )
 
 // ValidationError reports every invalid field of a request at once, so

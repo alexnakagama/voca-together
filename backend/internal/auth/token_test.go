@@ -106,3 +106,38 @@ func TestTokenIsRedactedWhenFormattedOrLogged(t *testing.T) {
 		t.Errorf("slog output leaks raw token: %s", buf.String())
 	}
 }
+
+func TestWellFormedTokenAcceptsGeneratedTokens(t *testing.T) {
+	for _, prefix := range []string{AccessTokenPrefix, RefreshTokenPrefix, ""} {
+		for range 100 {
+			if tok := NewToken(prefix); !wellFormedToken(tok.Raw, prefix) {
+				t.Fatalf("rejected generated token with prefix %q", prefix)
+			}
+		}
+	}
+}
+
+func TestWellFormedTokenRejectsMalformed(t *testing.T) {
+	valid := NewToken("").Raw
+	tests := map[string]string{
+		"empty":              "",
+		"one char short":     valid[:42],
+		"one char long":      valid + "A",
+		"padded":             valid + "=",
+		"standard base64":    "+" + valid[1:],
+		"slash":              "/" + valid[1:],
+		"space":              " " + valid[1:],
+		"non-ASCII":          "ñ" + valid[2:],
+		"hex SHA-256":        strings.Repeat("ab", 32),
+		"non-canonical bits": valid[:42] + "B", // last char must encode 2 zero padding bits
+		"wrong prefix":       AccessTokenPrefix + valid,
+	}
+	for name, raw := range tests {
+		if wellFormedToken(raw, "") {
+			t.Errorf("%s: %q accepted", name, raw)
+		}
+	}
+	if wellFormedToken(valid, AccessTokenPrefix) {
+		t.Error("token without the required prefix accepted")
+	}
+}

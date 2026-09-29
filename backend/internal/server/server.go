@@ -15,5 +15,7 @@ func New(logger *slog.Logger, authSvc *auth.Service) http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("POST /v1/auth/register", handleRegister(logger, authSvc))
+	mux.HandleFunc("POST /v1/auth/verify-email", handleVerifyEmail(logger, authSvc))
+	mux.HandleFunc("POST /v1/auth/resend-verification", handleResendVerification(logger, authSvc))
 	return mux
 }

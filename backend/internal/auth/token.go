@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"log/slog"
+	"strings"
 )
 
 // Prefixes make leaked tokens recognizable (grep, secret scanners) and let
@@ -30,6 +31,19 @@ func NewToken(prefix string) Token {
 	rand.Read(b) // never fails: since Go 1.24 it crashes the program rather than return weak randomness
 	raw := prefix + base64.RawURLEncoding.EncodeToString(b)
 	return Token{Raw: raw, Hash: HashToken(raw)}
+}
+
+// wellFormedToken reports whether raw has exactly the shape NewToken(prefix)
+// produces: the prefix, then 32 bytes as canonical unpadded base64url. Callers
+// use it to reject junk before any database lookup; the format is public, so
+// this reveals nothing.
+func wellFormedToken(raw, prefix string) bool {
+	body, found := strings.CutPrefix(raw, prefix)
+	if !found || len(body) != base64.RawURLEncoding.EncodedLen(tokenBytes) {
+		return false
+	}
+	b, err := base64.RawURLEncoding.Strict().DecodeString(body)
+	return err == nil && len(b) == tokenBytes
 }
 
 // HashToken returns the SHA-256 of the full raw token. A fast hash is
