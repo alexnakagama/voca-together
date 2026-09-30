@@ -20,9 +20,10 @@ const PurposeEmailVerification = "email_verification"
 // user and token rows taken in opposite orders. Registration is exempt: the
 // user row it creates is invisible to others until commit. Login takes the
 // user row FOR SHARE (see createSession), so logins don't block each other
-// but do serialize with anything that changes the password. Refresh is also
-// exempt: it locks a single session row and nothing else, so it can't be part
-// of a deadlock cycle (see rotateRefreshToken).
+// but do serialize with anything that changes the password. Refresh and
+// logout are also exempt: each locks a single session row and nothing else,
+// so neither can be part of a deadlock cycle (see rotateRefreshToken and
+// revokeSessionByAccessToken).
 
 // createUserWithVerificationToken inserts a user and its email verification
 // token in one transaction, so a user never exists without the token that
@@ -378,4 +379,30 @@ func rotateRefreshTokenTx(ctx context.Context, tx pgx.Tx, presented, accessHash,
 	r.outcome = refreshRotated
 	r.expiresIn = accessExpiresAt.Sub(now)
 	return r, nil
+}
+
+// revokeSessionByAccessToken revokes the live session whose current access
+// token hash is accessHash, which kills its access and refresh tokens alike
+// (decision 015). It reports the session it revoked; revoked=false, with
+// nothing written, if none matched: unknown, rotated out, or already revoked
+// (whose original revocation time is kept). Expiry is deliberately not
+// checked: logging out only reduces privilege.
+//
+// The single UPDATE locks the row it changes. If a refresh holds the row, it
+// waits and re-evaluates its WHERE against the committed row: after a
+// rotation the old access hash no longer matches, and after a rollback the
+// original row is revoked.
+func revokeSessionByAccessToken(ctx context.Context, pool *pgxpool.Pool, accessHash []byte) (sessionID, userID string, revoked bool, err error) {
+	err = pool.QueryRow(ctx,
+		`UPDATE sessions SET revoked_at = now()
+		 WHERE access_token_hash = $1 AND revoked_at IS NULL
+		 RETURNING id, user_id`,
+		accessHash).Scan(&sessionID, &userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, fmt.Errorf("auth: revoke session: %w", err)
+	}
+	return sessionID, userID, true, nil
 }

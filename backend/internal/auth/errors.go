@@ -44,6 +44,11 @@ var (
 // session). One error for all keeps the response from revealing which.
 var ErrInvalidRefreshToken = errors.New("auth: invalid refresh token")
 
+// ErrInvalidAccessToken means a request carried no well-formed access token:
+// missing, another scheme, or not in the vt_at_ format. The format is
+// public, so this reveals nothing about sessions.
+var ErrInvalidAccessToken = errors.New("auth: invalid access token")
+
 // ValidationError reports every invalid field of a request at once, so
 // clients can show all problems together. Its message names fields and codes
 // only, never the submitted values.

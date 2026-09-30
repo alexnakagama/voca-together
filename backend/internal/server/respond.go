@@ -22,6 +22,7 @@ const (
 	codeEmailNotVerified   = "email_not_verified"
 
 	codeInvalidRefreshToken = "invalid_refresh_token"
+	codeInvalidAccessToken  = "invalid_access_token"
 )
 
 type errorResponse struct {

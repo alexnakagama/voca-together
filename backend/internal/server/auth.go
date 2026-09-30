@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"vocatogether/backend/internal/auth"
 )
@@ -142,6 +143,39 @@ func handleRefresh(logger *slog.Logger, svc *auth.Service) http.HandlerFunc {
 	}
 }
 
+// handleLogout revokes the session of the request's Bearer access token and
+// answers 204 (decision 015). Any well-formed access token gets the same 204,
+// whether its session was revoked now, already revoked, expired, or unknown,
+// so logout is idempotent and reveals nothing. A missing or malformed
+// credential gets 401, so a client bug can't pass for a logout. The body is
+// never read. Every response is marked no-store, as for login.
+func handleLogout(logger *slog.Logger, svc *auth.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		if err := svc.Logout(r.Context(), bearerToken(r)); err != nil {
+			writeServiceError(w, r, logger, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// bearerToken returns the token of the request's single Authorization header
+// if it uses the Bearer scheme (RFC 6750 2.1, scheme case-insensitive per
+// RFC 7235), else "". The token is not trimmed or otherwise validated: the
+// service rejects anything that isn't exactly a well-formed token.
+func bearerToken(r *http.Request) string {
+	values := r.Header.Values("Authorization")
+	if len(values) != 1 {
+		return ""
+	}
+	scheme, token, found := strings.Cut(values[0], " ")
+	if !found || !strings.EqualFold(scheme, "Bearer") {
+		return ""
+	}
+	return token
+}
+
 // writeTokens writes credentials as a 200 tokenResponse. expires_in is
 // rounded down, so a client never believes a token lives longer than it does.
 func writeTokens(w http.ResponseWriter, c auth.Credentials) {
@@ -154,7 +188,7 @@ func writeTokens(w http.ResponseWriter, c auth.Credentials) {
 }
 
 // writeServiceError maps an auth service error to a response: validation
-// errors to 422 with their fields, login and refresh outcomes to 401/403, anything else
+// errors to 422 with their fields, login, refresh and access-token outcomes to 401/403, anything else
 // to an opaque 500 whose details go only to the log. Service errors never
 // contain secrets.
 func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, err error) {
@@ -171,6 +205,11 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logg
 		return
 	case errors.Is(err, auth.ErrInvalidRefreshToken):
 		writeError(w, http.StatusUnauthorized, codeInvalidRefreshToken)
+		return
+	case errors.Is(err, auth.ErrInvalidAccessToken):
+		// The HTTP Bearer scheme (RFC 6750 3), unlike login's credential form.
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		writeError(w, http.StatusUnauthorized, codeInvalidAccessToken)
 		return
 	}
 	logger.ErrorContext(r.Context(), "request failed", "route", r.Pattern, "err", err)
