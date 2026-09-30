@@ -20,7 +20,9 @@ const PurposeEmailVerification = "email_verification"
 // user and token rows taken in opposite orders. Registration is exempt: the
 // user row it creates is invisible to others until commit. Login takes the
 // user row FOR SHARE (see createSession), so logins don't block each other
-// but do serialize with anything that changes the password.
+// but do serialize with anything that changes the password. Refresh is also
+// exempt: it locks a single session row and nothing else, so it can't be part
+// of a deadlock cycle (see rotateRefreshToken).
 
 // createUserWithVerificationToken inserts a user and its email verification
 // token in one transaction, so a user never exists without the token that
@@ -256,4 +258,124 @@ func updatePasswordHash(ctx context.Context, pool *pgxpool.Pool, userID, oldHash
 		return false, fmt.Errorf("auth: update password hash: %w", err)
 	}
 	return tag.RowsAffected() == 1, nil
+}
+
+// refreshOutcome is what rotateRefreshToken did with a presented token.
+type refreshOutcome int
+
+const (
+	refreshRotated        refreshOutcome = iota // new tokens stored
+	refreshUnknown                              // no session has this token
+	refreshRevoked                              // session already revoked
+	refreshReused                               // an already-rotated token: session revoked now
+	refreshSessionExpired                       // absolute lifetime over (or under minAccessTokenLifetime left)
+	refreshTokenExpired                         // sliding refresh expiry passed
+)
+
+// refreshReason names each outcome for logs.
+var refreshReason = map[refreshOutcome]string{
+	refreshUnknown:        "unknown",
+	refreshRevoked:        "revoked",
+	refreshReused:         "reused",
+	refreshSessionExpired: "session_expired",
+	refreshTokenExpired:   "refresh_expired",
+}
+
+// rotation reports the result of rotateRefreshToken. sessionID and userID
+// are set whenever a session matched; expiresIn only when rotated.
+type rotation struct {
+	outcome           refreshOutcome
+	sessionID, userID string
+	expiresIn         time.Duration
+}
+
+// rotateRefreshToken validates the refresh token with hash presented and, if
+// it is the current token of a live session, replaces both token hashes with
+// accessHash and refreshHash in one transaction (decision 002). The old
+// access token stops working at once. The rotated-out refresh hash is kept
+// as previous_refresh_token_hash; presenting it again revokes the session
+// (reuse detection), which is committed although no tokens are issued.
+// Nothing else is written for an unusable token.
+//
+// The session row is locked FOR UPDATE, so of two requests presenting the
+// same token only one rotates. The other waits, and PostgreSQL re-evaluates
+// its WHERE against the committed row: it now matches through
+// previous_refresh_token_hash, so it is treated as reuse (strict policy,
+// decision 014). If the first rolls back, the second sees the original row.
+//
+// Both new expiries are capped at the session's absolute expires_at (the
+// sessions_expiry_order CHECK enforces it). A session with less than
+// minAccessTokenLifetime left is treated as expired. All times use the
+// transaction clock.
+func rotateRefreshToken(ctx context.Context, pool *pgxpool.Pool, presented, accessHash, refreshHash []byte) (r rotation, err error) {
+	err = pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+		r, err = rotateRefreshTokenTx(ctx, tx, presented, accessHash, refreshHash)
+		return err
+	})
+	if err != nil {
+		return rotation{}, fmt.Errorf("auth: rotate refresh token: %w", err)
+	}
+	return r, nil
+}
+
+func rotateRefreshTokenTx(ctx context.Context, tx pgx.Tx, presented, accessHash, refreshHash []byte) (rotation, error) {
+	var r rotation
+	var current, revoked, sessionExpired, refreshExpired bool
+	err := tx.QueryRow(ctx,
+		`SELECT id, user_id, refresh_token_hash = $1, revoked_at IS NOT NULL,
+		        expires_at <= now() + make_interval(secs => $2), refresh_expires_at <= now()
+		 FROM sessions
+		 WHERE refresh_token_hash = $1 OR previous_refresh_token_hash = $1
+		 FOR UPDATE`,
+		presented, minAccessTokenLifetime.Seconds()).
+		Scan(&r.sessionID, &r.userID, &current, &revoked, &sessionExpired, &refreshExpired)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		r.outcome = refreshUnknown
+		return r, nil
+	case err != nil:
+		return rotation{}, fmt.Errorf("lock session: %w", err)
+	}
+
+	// Order matters: reuse is detected before expiry, so a replayed token
+	// revokes the session even if it has expired (a signal worth logging).
+	switch {
+	case revoked:
+		r.outcome = refreshRevoked
+		return r, nil
+	case !current:
+		if _, err := tx.Exec(ctx,
+			`UPDATE sessions SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL`,
+			r.sessionID); err != nil {
+			return rotation{}, fmt.Errorf("revoke session: %w", err)
+		}
+		r.outcome = refreshReused
+		return r, nil
+	case sessionExpired:
+		r.outcome = refreshSessionExpired
+		return r, nil
+	case refreshExpired:
+		r.outcome = refreshTokenExpired
+		return r, nil
+	}
+
+	var accessExpiresAt, now time.Time
+	err = tx.QueryRow(ctx,
+		`UPDATE sessions SET
+		     previous_refresh_token_hash = refresh_token_hash,
+		     refresh_token_hash = $2,
+		     refresh_expires_at = LEAST(now() + make_interval(secs => $3), expires_at),
+		     access_token_hash  = $4,
+		     access_expires_at  = LEAST(now() + make_interval(secs => $5), expires_at),
+		     last_used_at       = now()
+		 WHERE id = $1
+		 RETURNING access_expires_at, now()`,
+		r.sessionID, refreshHash, refreshTokenTTL.Seconds(), accessHash, accessTokenTTL.Seconds()).
+		Scan(&accessExpiresAt, &now)
+	if err != nil {
+		return rotation{}, fmt.Errorf("rotate tokens: %w", err)
+	}
+	r.outcome = refreshRotated
+	r.expiresIn = accessExpiresAt.Sub(now)
+	return r, nil
 }

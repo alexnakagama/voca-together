@@ -61,7 +61,8 @@ func dumpTables(t *testing.T, pool *pgxpool.Pool) string {
 		if err := rows.Scan(&row); err != nil {
 			t.Fatal(err)
 		}
-		sb.WriteString(row + "\n")
+		sb.WriteString(row)
+		sb.WriteByte('\n')
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)

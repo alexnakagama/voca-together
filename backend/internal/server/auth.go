@@ -30,9 +30,14 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 
-// loginResponse follows the OAuth 2.0 token response shape (RFC 6749 5.1).
-// expires_in is relative seconds, so client clock skew doesn't matter.
-type loginResponse struct {
+type refreshRequest struct {
+	RefreshToken string `json:"refresh_token"`
+}
+
+// tokenResponse is the body of a successful login or refresh. It follows the
+// OAuth 2.0 token response shape (RFC 6749 5.1). expires_in is relative
+// seconds, so client clock skew doesn't matter.
+type tokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	TokenType    string `json:"token_type"`
 	ExpiresIn    int    `json:"expires_in"`
@@ -111,17 +116,45 @@ func handleLogin(logger *slog.Logger, svc *auth.Service) http.HandlerFunc {
 			writeServiceError(w, r, logger, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, loginResponse{
-			AccessToken:  res.AccessToken.Raw,
-			TokenType:    "Bearer",
-			ExpiresIn:    int(res.AccessTokenTTL.Seconds()),
-			RefreshToken: res.RefreshToken.Raw,
-		})
+		writeTokens(w, res)
 	}
 }
 
+// handleRefresh answers 200 with the session's rotated credentials. Every
+// unusable token (malformed, unknown, expired, revoked, reused) gets the same
+// 401, so clients can't tell them apart and simply log in again. Any
+// Authorization header is ignored: refreshing must work once the access
+// token has expired. Every response is marked no-store, as for login.
+func handleRefresh(logger *slog.Logger, svc *auth.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		var req refreshRequest
+		if err := decodeJSON(w, r, &req, maxAuthBodyBytes); err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidRequest)
+			return
+		}
+		res, err := svc.Refresh(r.Context(), req.RefreshToken)
+		if err != nil {
+			writeServiceError(w, r, logger, err)
+			return
+		}
+		writeTokens(w, res)
+	}
+}
+
+// writeTokens writes credentials as a 200 tokenResponse. expires_in is
+// rounded down, so a client never believes a token lives longer than it does.
+func writeTokens(w http.ResponseWriter, c auth.Credentials) {
+	writeJSON(w, http.StatusOK, tokenResponse{
+		AccessToken:  c.AccessToken.Raw,
+		TokenType:    "Bearer",
+		ExpiresIn:    int(c.ExpiresIn.Seconds()),
+		RefreshToken: c.RefreshToken.Raw,
+	})
+}
+
 // writeServiceError maps an auth service error to a response: validation
-// errors to 422 with their fields, login outcomes to 401/403, anything else
+// errors to 422 with their fields, login and refresh outcomes to 401/403, anything else
 // to an opaque 500 whose details go only to the log. Service errors never
 // contain secrets.
 func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, err error) {
@@ -135,6 +168,9 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logg
 		return
 	case errors.Is(err, auth.ErrEmailNotVerified):
 		writeError(w, http.StatusForbidden, codeEmailNotVerified)
+		return
+	case errors.Is(err, auth.ErrInvalidRefreshToken):
+		writeError(w, http.StatusUnauthorized, codeInvalidRefreshToken)
 		return
 	}
 	logger.ErrorContext(r.Context(), "request failed", "route", r.Pattern, "err", err)

@@ -20,6 +20,8 @@ const (
 
 	codeInvalidCredentials = "invalid_credentials"
 	codeEmailNotVerified   = "email_not_verified"
+
+	codeInvalidRefreshToken = "invalid_refresh_token"
 )
 
 type errorResponse struct {

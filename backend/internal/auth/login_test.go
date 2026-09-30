@@ -381,7 +381,7 @@ func newLoginFixture(t *testing.T) loginFixture {
 
 // requireLoginLogsClean checks the service log for every secret login
 // handles: password, email, user agent, and each issued token with its hash.
-func requireLoginLogsClean(t *testing.T, s testService, results ...LoginResult) {
+func requireLoginLogsClean(t *testing.T, s testService, results ...Credentials) {
 	t.Helper()
 	s.Wait()
 	secrets := []string{testPassword, "ana@example.com", "Ana@Example.com", testUserAgent}
@@ -416,8 +416,8 @@ func TestLogin(t *testing.T) {
 	if !wellFormedToken(res.AccessToken.Raw, AccessTokenPrefix) || !wellFormedToken(res.RefreshToken.Raw, RefreshTokenPrefix) {
 		t.Errorf("tokens not well formed: %q %q", res.AccessToken.Raw, res.RefreshToken.Raw)
 	}
-	if res.AccessTokenTTL != 15*time.Minute {
-		t.Errorf("AccessTokenTTL = %v, want 15m", res.AccessTokenTTL)
+	if res.ExpiresIn != 15*time.Minute {
+		t.Errorf("ExpiresIn = %v, want 15m", res.ExpiresIn)
 	}
 	sessions := loadSessions(t, f.pool)
 	if len(sessions) != 1 {
@@ -733,7 +733,7 @@ func TestLoginDatabaseFailure(t *testing.T) {
 func TestLoginConcurrentSameAccount(t *testing.T) {
 	f := newLoginFixture(t)
 	const n = 20
-	results := make([]LoginResult, n)
+	results := make([]Credentials, n)
 	var wg sync.WaitGroup
 	for i := range n {
 		wg.Go(func() {
@@ -762,8 +762,8 @@ func TestLoginConcurrentSameAccount(t *testing.T) {
 	requireLoginLogsClean(t, f.testService, results...)
 }
 
-func TestLoginResultIsRedacted(t *testing.T) {
-	res := LoginResult{AccessToken: NewToken(AccessTokenPrefix), RefreshToken: NewToken(RefreshTokenPrefix), AccessTokenTTL: accessTokenTTL}
+func TestCredentialsAreRedacted(t *testing.T) {
+	res := Credentials{AccessToken: NewToken(AccessTokenPrefix), RefreshToken: NewToken(RefreshTokenPrefix), ExpiresIn: accessTokenTTL}
 	var jsonLog, textLog bytes.Buffer
 	slog.New(slog.NewJSONHandler(&jsonLog, nil)).Info("x", "res", res)
 	slog.New(slog.NewTextHandler(&textLog, nil)).Info("x", "res", res)

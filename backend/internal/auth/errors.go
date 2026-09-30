@@ -24,6 +24,9 @@ var (
 	// ErrTokenInvalid covers malformed, unknown, expired, used and
 	// wrong-purpose tokens alike, so responses don't reveal token history.
 	ErrTokenInvalid = &FieldError{Field: "token", Code: "invalid"}
+	// ErrRefreshTokenRequired is the only field error refresh returns; every
+	// unusable non-empty token is ErrInvalidRefreshToken instead.
+	ErrRefreshTokenRequired = &FieldError{Field: "refresh_token", Code: "required"}
 )
 
 // Login outcomes other than success and invalid input.
@@ -35,6 +38,11 @@ var (
 	// ErrEmailNotVerified is returned only after the password was verified.
 	ErrEmailNotVerified = errors.New("auth: email not verified")
 )
+
+// ErrInvalidRefreshToken covers every refresh token that can't be used:
+// malformed, unknown, expired, revoked, and reused (which also revokes its
+// session). One error for all keeps the response from revealing which.
+var ErrInvalidRefreshToken = errors.New("auth: invalid refresh token")
 
 // ValidationError reports every invalid field of a request at once, so
 // clients can show all problems together. Its message names fields and codes

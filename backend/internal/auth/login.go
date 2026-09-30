@@ -16,14 +16,20 @@ const (
 	accessTokenTTL     = 15 * time.Minute
 	refreshTokenTTL    = 30 * 24 * time.Hour
 	sessionMaxLifetime = 90 * 24 * time.Hour
+	// minAccessTokenLifetime is the least time a refreshed access token must
+	// have before the session's absolute expiry; with less left, refresh is
+	// refused instead of issuing a token that is useless on arrival.
+	minAccessTokenLifetime = time.Minute
 )
 
-// LoginResult holds the credentials of a new session. The tokens are secrets
-// for the response body only; Token redacts itself everywhere else.
-type LoginResult struct {
-	AccessToken    Token
-	RefreshToken   Token
-	AccessTokenTTL time.Duration
+// Credentials holds a session's current tokens, as issued by login or
+// refresh. The tokens are secrets for the response body only; Token redacts
+// itself everywhere else. ExpiresIn is the access token's remaining lifetime:
+// accessTokenTTL, or less near the session's absolute expiry.
+type Credentials struct {
+	AccessToken  Token
+	RefreshToken Token
+	ExpiresIn    time.Duration
 }
 
 // Login checks an email and password and, for a verified account, creates a
@@ -36,22 +42,22 @@ type LoginResult struct {
 // password is correct. Invalid input returns a *ValidationError before any
 // hashing or database access. Credentials are returned only after the
 // session is committed.
-func (s *Service) Login(ctx context.Context, emailInput, password, userAgent string) (LoginResult, error) {
+func (s *Service) Login(ctx context.Context, emailInput, password, userAgent string) (Credentials, error) {
 	addr, emailErr := NormalizeEmail(emailInput)
 	var passwordErr error
 	if password == "" {
 		passwordErr = ErrPasswordRequired
 	}
 	if err := validationError(emailErr, passwordErr); err != nil {
-		return LoginResult{}, err
+		return Credentials{}, err
 	}
 	if err := ctx.Err(); err != nil {
-		return LoginResult{}, fmt.Errorf("auth: login: %w", err)
+		return Credentials{}, fmt.Errorf("auth: login: %w", err)
 	}
 
 	u, found, err := findUserByEmail(ctx, s.pool, addr)
 	if err != nil {
-		return LoginResult{}, fmt.Errorf("auth: login: %w", err)
+		return Credentials{}, fmt.Errorf("auth: login: %w", err)
 	}
 	stored := s.dummyHash
 	if found {
@@ -65,32 +71,32 @@ func (s *Service) Login(ctx context.Context, emailInput, password, userAgent str
 		ok, err = false, nil
 	}
 	if err != nil {
-		return LoginResult{}, fmt.Errorf("auth: login: %w", err)
+		return Credentials{}, fmt.Errorf("auth: login: %w", err)
 	}
 	if !found || !ok {
 		s.logLoginFailed(ctx, "invalid_credentials", u.id)
-		return LoginResult{}, ErrInvalidCredentials
+		return Credentials{}, ErrInvalidCredentials
 	}
 	if !u.verified {
 		s.logLoginFailed(ctx, "email_not_verified", u.id)
-		return LoginResult{}, ErrEmailNotVerified
+		return Credentials{}, ErrEmailNotVerified
 	}
 
 	access, refresh := NewToken(AccessTokenPrefix), NewToken(RefreshTokenPrefix)
 	sessionID, err := createSession(ctx, s.pool, u.id, u.passwordHash, access.Hash, refresh.Hash, normalizeUserAgent(userAgent))
 	if errors.Is(err, errPasswordChanged) {
 		s.logLoginFailed(ctx, "password_changed", u.id)
-		return LoginResult{}, ErrInvalidCredentials
+		return Credentials{}, ErrInvalidCredentials
 	}
 	if err != nil {
-		return LoginResult{}, fmt.Errorf("auth: login: %w", err)
+		return Credentials{}, fmt.Errorf("auth: login: %w", err)
 	}
 
 	if needsRehash {
 		s.rehashPassword(ctx, u, password)
 	}
 	s.logger.InfoContext(ctx, "auth: login succeeded", "user_id", u.id, "session_id", sessionID)
-	return LoginResult{AccessToken: access, RefreshToken: refresh, AccessTokenTTL: accessTokenTTL}, nil
+	return Credentials{AccessToken: access, RefreshToken: refresh, ExpiresIn: accessTokenTTL}, nil
 }
 
 // logLoginFailed records a failed login for auditing (e.g. spotting
