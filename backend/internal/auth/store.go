@@ -23,7 +23,8 @@ const PurposeEmailVerification = "email_verification"
 // but do serialize with anything that changes the password. Refresh and
 // logout are also exempt: each locks a single session row and nothing else,
 // so neither can be part of a deadlock cycle (see rotateRefreshToken and
-// revokeSessionByAccessToken).
+// revokeSessionByAccessToken). Authentication takes no locks at all: it is
+// a single read (see findSessionByAccessToken).
 
 // createUserWithVerificationToken inserts a user and its email verification
 // token in one transaction, so a user never exists without the token that
@@ -405,4 +406,43 @@ func revokeSessionByAccessToken(ctx context.Context, pool *pgxpool.Pool, accessH
 		return "", "", false, fmt.Errorf("auth: revoke session: %w", err)
 	}
 	return sessionID, userID, true, nil
+}
+
+// findSessionByAccessToken returns the identity of the live session whose
+// current access token hash is accessHash: not revoked, access token not
+// expired, and within the absolute lifetime (implied by the
+// sessions_expiry_order CHECK, but stated so the rule doesn't rest on it).
+// found=false if none matches, including a token rotated out by refresh.
+//
+// One plain SELECT on the unique access_token_hash index, without a lock:
+// it sees the last committed row, so a concurrent refresh or logout neither
+// blocks it nor leaves it seeing a half-written session.
+func findSessionByAccessToken(ctx context.Context, pool *pgxpool.Pool, accessHash []byte) (id Identity, found bool, err error) {
+	err = pool.QueryRow(ctx,
+		`SELECT id, user_id FROM sessions
+		 WHERE access_token_hash = $1 AND revoked_at IS NULL
+		   AND access_expires_at > now() AND expires_at > now()`,
+		accessHash).Scan(&id.SessionID, &id.UserID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Identity{}, false, nil
+	}
+	if err != nil {
+		return Identity{}, false, fmt.Errorf("auth: find session: %w", err)
+	}
+	return id, true, nil
+}
+
+// findUserByID returns the user's public account data; the password hash is
+// never selected.
+func findUserByID(ctx context.Context, pool *pgxpool.Pool, userID string) (u User, found bool, err error) {
+	err = pool.QueryRow(ctx,
+		`SELECT id, email, email_verified_at, created_at FROM users WHERE id = $1`,
+		userID).Scan(&u.ID, &u.Email, &u.EmailVerifiedAt, &u.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, false, nil
+	}
+	if err != nil {
+		return User{}, false, fmt.Errorf("auth: find user by id: %w", err)
+	}
+	return u, true, nil
 }

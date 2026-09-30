@@ -44,9 +44,12 @@ var (
 // session). One error for all keeps the response from revealing which.
 var ErrInvalidRefreshToken = errors.New("auth: invalid refresh token")
 
-// ErrInvalidAccessToken means a request carried no well-formed access token:
-// missing, another scheme, or not in the vt_at_ format. The format is
-// public, so this reveals nothing about sessions.
+// ErrInvalidAccessToken means a request carried no usable access token.
+// Logout returns it only when there is no well-formed one (missing, another
+// scheme, or not in the vt_at_ format), which reveals nothing about sessions
+// since the format is public. Authenticate also returns it for a token that
+// is unknown, rotated out, revoked or expired, so protected endpoints can't
+// tell those apart either.
 var ErrInvalidAccessToken = errors.New("auth: invalid access token")
 
 // ValidationError reports every invalid field of a request at once, so

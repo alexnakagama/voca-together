@@ -20,5 +20,10 @@ func New(logger *slog.Logger, authSvc *auth.Service) http.Handler {
 	mux.HandleFunc("POST /v1/auth/login", handleLogin(logger, authSvc))
 	mux.HandleFunc("POST /v1/auth/refresh", handleRefresh(logger, authSvc))
 	mux.HandleFunc("POST /v1/auth/logout", handleLogout(logger, authSvc))
+
+	// Protected routes: each is wrapped individually, so public routes never
+	// require a token and a route can't become public by accident of order.
+	authn := requireAccessToken(logger, authSvc)
+	mux.Handle("GET /v1/me", authn(handleMe(logger, authSvc)))
 	return mux
 }
