@@ -202,3 +202,39 @@ func TestDeletingUserCascades(t *testing.T) {
 		t.Errorf("after deleting the user: %d tokens, %d sessions remain; want 0", tokens, sessions)
 	}
 }
+
+func TestSessionsUserAgentLength(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	uid := mustInsertUser(t, pool, "ana@example.com")
+	insert := func(access, refresh []byte, ua string) error {
+		_, err := pool.Exec(ctx,
+			`INSERT INTO sessions (user_id, access_token_hash, access_expires_at, refresh_token_hash, refresh_expires_at, expires_at, user_agent)
+			 VALUES ($1, $2, now() + interval '15 minutes', $3, now() + interval '30 days', now() + interval '90 days', $4)`,
+			uid, access, refresh, ua)
+		return err
+	}
+	if err := insert(hash(1), hash(2), strings.Repeat("a", 256)); err != nil {
+		t.Fatalf("256-byte user agent rejected: %v", err)
+	}
+	// The limit counts bytes, not characters: 128 two-byte runes plus one byte is 257.
+	requirePgError(t, insert(hash(3), hash(4), strings.Repeat("ñ", 128)+"a"), checkViolation, "sessions_user_agent_length")
+}
+
+func TestSessionsExpiriesWithinAbsoluteLifetime(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	uid := mustInsertUser(t, pool, "ana@example.com")
+	insert := func(access, refresh []byte, accessTTL, refreshTTL string) error {
+		_, err := pool.Exec(ctx,
+			`INSERT INTO sessions (user_id, access_token_hash, access_expires_at, refresh_token_hash, refresh_expires_at, expires_at)
+			 VALUES ($1, $2, now() + $3::interval, $4, now() + $5::interval, now() + interval '90 days')`,
+			uid, access, accessTTL, refresh, refreshTTL)
+		return err
+	}
+	if err := insert(hash(1), hash(2), "90 days", "90 days"); err != nil {
+		t.Fatalf("expiries equal to the absolute lifetime rejected: %v", err)
+	}
+	requirePgError(t, insert(hash(3), hash(4), "91 days", "30 days"), checkViolation, "sessions_expiry_order")
+	requirePgError(t, insert(hash(5), hash(6), "15 minutes", "91 days"), checkViolation, "sessions_expiry_order")
+}

@@ -2,9 +2,12 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
+	"runtime"
 	"sync"
 	"time"
 
@@ -27,10 +30,26 @@ type Service struct {
 	baseURL *url.URL // public base URL for emailed links
 	logger  *slog.Logger
 	sends   sync.WaitGroup
+
+	// hashSlots bounds concurrent argon2 work, shared by every flow that
+	// hashes or verifies a password (see withHashSlot).
+	hashSlots chan struct{}
+	// dummyHash is verified against when login finds no usable hash, so
+	// unknown emails cost as much as wrong passwords.
+	dummyHash string
 }
 
 func NewService(pool *pgxpool.Pool, sender email.Sender, baseURL *url.URL, logger *slog.Logger) *Service {
-	return &Service{pool: pool, sender: sender, baseURL: baseURL, logger: logger}
+	return &Service{
+		pool:    pool,
+		sender:  sender,
+		baseURL: baseURL,
+		logger:  logger,
+		// argon2 with parallelism 1 is single-threaded CPU work: more
+		// concurrent hashes than CPUs add memory (19 MiB each) but no throughput.
+		hashSlots: make(chan struct{}, runtime.GOMAXPROCS(0)),
+		dummyHash: HashPassword(rand.Text()),
+	}
 }
 
 // Register creates an unverified account and emails a verification link.
@@ -48,7 +67,10 @@ func (s *Service) Register(ctx context.Context, emailInput, password string) err
 
 	// Hash even when the address turns out to be taken, so the argon2 cost
 	// doesn't reveal which addresses have accounts.
-	passwordHash := HashPassword(password)
+	passwordHash, err := s.hashPassword(ctx, password)
+	if err != nil {
+		return fmt.Errorf("auth: register: %w", err)
+	}
 	token := NewToken("")
 
 	created, err := createUserWithVerificationToken(ctx, s.pool, addr, passwordHash, token.Hash, verificationTokenTTL)
@@ -108,6 +130,49 @@ func (s *Service) ResendVerification(ctx context.Context, emailInput string) err
 		s.sendInBackground(ctx, "email_verification", verificationEmail(s.baseURL, addr, token.Raw, verificationTokenTTL))
 	}
 	return nil
+}
+
+// withHashSlot runs f, which does argon2 work, once a hash slot is free.
+// Without this bound, concurrent unauthenticated requests (register, login)
+// could allocate 19 MiB each without limit and exhaust memory. Waiting
+// requests give up when their context ends, e.g. when the client disconnects.
+// Every account state waits in the same queue, so queueing time reveals
+// nothing about accounts.
+func (s *Service) withHashSlot(ctx context.Context, f func()) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case s.hashSlots <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-s.hashSlots }()
+	f()
+	return nil
+}
+
+// hashPassword is HashPassword under the hash limiter.
+func (s *Service) hashPassword(ctx context.Context, password string) (hash string, err error) {
+	err = s.withHashSlot(ctx, func() { hash = HashPassword(password) })
+	return hash, err
+}
+
+// verifyPassword is VerifyPassword under the hash limiter. A malformed stored
+// hash would fail before any argon2 work and so answer faster; it is verified
+// against the dummy hash instead, keeping the cost uniform, and still reported
+// as ErrMalformedHash.
+func (s *Service) verifyPassword(ctx context.Context, encoded, password string) (ok, needsRehash bool, err error) {
+	slotErr := s.withHashSlot(ctx, func() {
+		ok, needsRehash, err = VerifyPassword(encoded, password)
+		if errors.Is(err, ErrMalformedHash) {
+			_, _, _ = VerifyPassword(s.dummyHash, password)
+		}
+	})
+	if slotErr != nil {
+		return false, false, slotErr
+	}
+	return ok, needsRehash, err
 }
 
 // sendInBackground delivers msg without delaying the response, so response

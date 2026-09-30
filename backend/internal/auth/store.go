@@ -13,12 +13,14 @@ import (
 // Values of user_tokens.purpose.
 const PurposeEmailVerification = "email_verification"
 
-// Lock order: a transaction that changes user_tokens rows of an existing user
+// Lock order: a transaction that changes user_tokens or sessions rows of an existing user
 // must first lock that user's row (SELECT … FOR UPDATE on users). Every token
 // flow (verification, resend, and later password reset) follows it, so two
 // flows on one account serialize on the user row instead of deadlocking on
 // user and token rows taken in opposite orders. Registration is exempt: the
-// user row it creates is invisible to others until commit.
+// user row it creates is invisible to others until commit. Login takes the
+// user row FOR SHARE (see createSession), so logins don't block each other
+// but do serialize with anything that changes the password.
 
 // createUserWithVerificationToken inserts a user and its email verification
 // token in one transaction, so a user never exists without the token that
@@ -165,4 +167,93 @@ func reissueVerificationTokenTx(ctx context.Context, tx pgx.Tx,
 		return false, err
 	}
 	return true, nil
+}
+
+// loginUser is what login needs to know about the account for an email.
+type loginUser struct {
+	id           string
+	passwordHash string
+	verified     bool
+}
+
+// findUserByEmail looks up the account for a normalized email, without
+// locking: createSession re-checks the password hash under a lock.
+func findUserByEmail(ctx context.Context, pool *pgxpool.Pool, email string) (u loginUser, found bool, err error) {
+	err = pool.QueryRow(ctx,
+		`SELECT id, password_hash, email_verified_at IS NOT NULL FROM users WHERE email = $1`,
+		email).Scan(&u.id, &u.passwordHash, &u.verified)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return loginUser{}, false, nil
+	}
+	if err != nil {
+		return loginUser{}, false, fmt.Errorf("auth: find user: %w", err)
+	}
+	return u, true, nil
+}
+
+// errPasswordChanged reports that the user's password hash is no longer the
+// one login verified against.
+var errPasswordChanged = errors.New("auth: password changed during login")
+
+// createSession inserts a new session for the user and returns its id, but
+// only if the user's password hash is still passwordHash, the one login
+// verified. Otherwise it writes nothing and returns errPasswordChanged.
+//
+// The re-check holds the user row FOR SHARE until commit (see Lock order).
+// A password change (later: reset, which revokes all sessions) holding the
+// row FOR UPDATE makes this wait and then see the new hash, so no session
+// created with the old password can slip past the revocation; if login gets
+// the lock first, the change waits until the session exists and can revoke
+// it. Concurrent logins share the lock and don't wait for each other.
+//
+// All timestamps use one transaction clock (now()), so created_at equals
+// last_used_at and each expiry is an exact offset from it. The refresh-token
+// fields start in the state rotation expects: no previous hash, not revoked.
+func createSession(ctx context.Context, pool *pgxpool.Pool,
+	userID, passwordHash string, accessHash, refreshHash []byte, userAgent *string) (sessionID string, err error) {
+	err = pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+		var one int
+		err := tx.QueryRow(ctx,
+			`SELECT 1 FROM users WHERE id = $1 AND password_hash = $2 FOR SHARE`,
+			userID, passwordHash).Scan(&one)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errPasswordChanged
+		}
+		if err != nil {
+			return fmt.Errorf("lock user: %w", err)
+		}
+
+		err = tx.QueryRow(ctx,
+			`INSERT INTO sessions (user_id, access_token_hash, access_expires_at,
+			                       refresh_token_hash, refresh_expires_at, expires_at, user_agent)
+			 VALUES ($1, $2, now() + make_interval(secs => $3),
+			         $4, now() + make_interval(secs => $5), now() + make_interval(secs => $6), $7)
+			 RETURNING id`,
+			userID, accessHash, accessTokenTTL.Seconds(),
+			refreshHash, refreshTokenTTL.Seconds(), sessionMaxLifetime.Seconds(), userAgent).Scan(&sessionID)
+		if err != nil {
+			return fmt.Errorf("insert session: %w", err)
+		}
+		return nil
+	})
+	if errors.Is(err, errPasswordChanged) {
+		return "", err
+	}
+	if err != nil {
+		return "", fmt.Errorf("auth: create session: %w", err)
+	}
+	return sessionID, nil
+}
+
+// updatePasswordHash replaces the user's password hash with newHash only if
+// it is still oldHash (compare-and-swap), so a transparent rehash never
+// overwrites a password changed concurrently. It reports whether it wrote.
+func updatePasswordHash(ctx context.Context, pool *pgxpool.Pool, userID, oldHash, newHash string) (bool, error) {
+	tag, err := pool.Exec(ctx,
+		`UPDATE users SET password_hash = $3, updated_at = now() WHERE id = $1 AND password_hash = $2`,
+		userID, oldHash, newHash)
+	if err != nil {
+		return false, fmt.Errorf("auth: update password hash: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
 }

@@ -169,13 +169,14 @@ func TestValidatePassword(t *testing.T) {
 }
 
 func TestPasswordErrorsAreFieldErrors(t *testing.T) {
-	for _, err := range []error{ErrPasswordTooShort, ErrPasswordTooLong, ErrPasswordTooCommon, ErrPasswordSameAsEmail} {
+	for _, err := range []error{ErrPasswordRequired, ErrPasswordTooShort, ErrPasswordTooLong, ErrPasswordTooCommon, ErrPasswordSameAsEmail} {
 		var fe *FieldError
 		if !errors.As(err, &fe) || fe.Field != "password" || fe.Code == "" {
 			t.Errorf("%v is not a password FieldError with a code", err)
 		}
 	}
 	codes := map[error]string{
+		ErrPasswordRequired:    "required",
 		ErrPasswordTooShort:    "too_short",
 		ErrPasswordTooLong:     "too_long",
 		ErrPasswordTooCommon:   "too_common",

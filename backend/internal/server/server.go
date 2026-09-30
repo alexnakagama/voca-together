@@ -17,5 +17,6 @@ func New(logger *slog.Logger, authSvc *auth.Service) http.Handler {
 	mux.HandleFunc("POST /v1/auth/register", handleRegister(logger, authSvc))
 	mux.HandleFunc("POST /v1/auth/verify-email", handleVerifyEmail(logger, authSvc))
 	mux.HandleFunc("POST /v1/auth/resend-verification", handleResendVerification(logger, authSvc))
+	mux.HandleFunc("POST /v1/auth/login", handleLogin(logger, authSvc))
 	return mux
 }

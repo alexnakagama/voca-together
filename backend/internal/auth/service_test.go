@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -42,12 +44,13 @@ func newTestService(t *testing.T, sender email.Sender) testService {
 	return testService{Service: svc, pool: pool, logs: logs}
 }
 
-// dumpTables returns every row of users and user_tokens as text, to check
-// that no secret appears anywhere in them.
+// dumpTables returns every row of users, user_tokens and sessions as text,
+// to check that no secret appears anywhere in them.
 func dumpTables(t *testing.T, pool *pgxpool.Pool) string {
 	t.Helper()
 	rows, err := pool.Query(context.Background(),
-		`SELECT u::text FROM users u UNION ALL SELECT t::text FROM user_tokens t`)
+		`SELECT u::text FROM users u UNION ALL SELECT t::text FROM user_tokens t
+		 UNION ALL SELECT s::text FROM sessions s`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,5 +316,81 @@ func TestRegisterDatabaseFailure(t *testing.T) {
 	s.Wait()
 	if n := len(rec.Messages()); n != 0 {
 		t.Errorf("sent %d emails after a failed registration, want 0", n)
+	}
+}
+
+// ---- Password hashing limiter ----
+
+func TestHashSlotsBoundConcurrency(t *testing.T) {
+	s := &Service{hashSlots: make(chan struct{}, 2)}
+	var mu sync.Mutex
+	running, peak := 0, 0
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Go(func() {
+			err := s.withHashSlot(context.Background(), func() {
+				mu.Lock()
+				running++
+				peak = max(peak, running)
+				mu.Unlock()
+				time.Sleep(5 * time.Millisecond)
+				mu.Lock()
+				running--
+				mu.Unlock()
+			})
+			if err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	if peak != 2 {
+		t.Errorf("peak concurrency = %d, want 2", peak)
+	}
+}
+
+func TestHashSlotWaitHonorsContext(t *testing.T) {
+	s := &Service{hashSlots: make(chan struct{}, 1)}
+	s.hashSlots <- struct{}{} // the only slot is busy
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	ran := false
+	err := s.withHashSlot(ctx, func() { ran = true })
+	if !errors.Is(err, context.DeadlineExceeded) || ran {
+		t.Fatalf("err = %v, ran = %v; want DeadlineExceeded without running", err, ran)
+	}
+}
+
+func TestNewServiceSizesHashSlotsToCPUs(t *testing.T) {
+	s := NewService(nil, nil, nil, slog.New(slog.DiscardHandler))
+	if got, want := cap(s.hashSlots), runtime.GOMAXPROCS(0); got != want {
+		t.Errorf("hash slots = %d, want GOMAXPROCS = %d", got, want)
+	}
+	// Unknown emails must pay the cost of a current hash.
+	if p, _, _, err := parseHash(s.dummyHash); err != nil || p != defaultParams {
+		t.Errorf("dummy hash params = %+v, err = %v; want defaultParams", p, err)
+	}
+}
+
+// Registration shares the limiter with login: it can't hash while every slot
+// is taken, and gives up (writing nothing) when its context ends.
+func TestRegisterWaitsForHashSlot(t *testing.T) {
+	rec := &email.Recorder{}
+	s := newTestService(t, rec)
+	s.hashSlots = make(chan struct{}, 1)
+	s.hashSlots <- struct{}{}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	if err := s.Register(ctx, "ana@example.com", testPassword); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want DeadlineExceeded", err)
+	}
+	s.Wait()
+	if n := countRows(t, s.pool, `SELECT count(*) FROM users`); n != 0 {
+		t.Errorf("users = %d, want 0", n)
+	}
+	if n := len(rec.Messages()); n != 0 {
+		t.Errorf("sent %d emails, want 0", n)
 	}
 }

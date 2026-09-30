@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -104,6 +105,39 @@ func TestTokenIsRedactedWhenFormattedOrLogged(t *testing.T) {
 	slog.New(slog.NewJSONHandler(&buf, nil)).Info("issued", "token", tok)
 	if strings.Contains(buf.String(), tok.Raw) {
 		t.Errorf("slog output leaks raw token: %s", buf.String())
+	}
+}
+
+// JSON ignores String and LogValue, and slog's JSON handler uses json for
+// values nested in structs, so Token needs its own MarshalJSON.
+func TestTokenIsRedactedInJSON(t *testing.T) {
+	tok := NewToken(AccessTokenPrefix)
+	nested := struct{ Tok Token }{tok}
+	secrets := []string{tok.Raw, base64.StdEncoding.EncodeToString(tok.Hash)}
+
+	outputs := map[string]string{}
+	for name, v := range map[string]any{"token": tok, "pointer": &tok, "nested": nested} {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatalf("marshal %s: %v", name, err)
+		}
+		outputs["json "+name] = string(b)
+	}
+	var jsonLog, textLog bytes.Buffer
+	slog.New(slog.NewJSONHandler(&jsonLog, nil)).Info("issued", "nested", nested)
+	slog.New(slog.NewTextHandler(&textLog, nil)).Info("issued", "nested", nested)
+	outputs["slog JSON nested"] = jsonLog.String()
+	outputs["slog text nested"] = textLog.String()
+
+	for name, s := range outputs {
+		if !strings.Contains(s, "[REDACTED]") {
+			t.Errorf("%s is not redacted: %s", name, s)
+		}
+		for _, secret := range secrets {
+			if strings.Contains(s, secret) {
+				t.Errorf("%s leaks a secret: %s", name, s)
+			}
+		}
 	}
 }
 

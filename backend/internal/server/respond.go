@@ -17,6 +17,9 @@ const (
 	codeInvalidRequest   = "invalid_request"
 	codeValidationFailed = "validation_failed"
 	codeInternalError    = "internal_error"
+
+	codeInvalidCredentials = "invalid_credentials"
+	codeEmailNotVerified   = "email_not_verified"
 )
 
 type errorResponse struct {

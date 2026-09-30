@@ -54,10 +54,14 @@ func HashToken(raw string) []byte {
 	return sum[:]
 }
 
-// String, GoString and LogValue keep the secret out of logs, error messages
-// and debug output (%v, %+v, %s, %#v and slog).
+// String, GoString, LogValue and MarshalJSON keep the secret out of logs,
+// error messages and debug output (%v, %+v, %s, %#v, slog and JSON). JSON
+// needs its own method: encoding/json ignores String, and slog's JSON handler
+// encodes values nested in structs with encoding/json.
 func (Token) String() string { return "[REDACTED]" }
 
 func (Token) GoString() string { return "auth.Token{[REDACTED]}" }
 
 func (Token) LogValue() slog.Value { return slog.StringValue("[REDACTED]") }
+
+func (Token) MarshalJSON() ([]byte, error) { return []byte(`"[REDACTED]"`), nil }

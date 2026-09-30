@@ -16,6 +16,7 @@ func (e *FieldError) Error() string { return e.Field + ": " + e.Code }
 
 var (
 	ErrEmailInvalid        = &FieldError{Field: "email", Code: "invalid"}
+	ErrPasswordRequired    = &FieldError{Field: "password", Code: "required"}
 	ErrPasswordTooShort    = &FieldError{Field: "password", Code: "too_short"}
 	ErrPasswordTooLong     = &FieldError{Field: "password", Code: "too_long"}
 	ErrPasswordTooCommon   = &FieldError{Field: "password", Code: "too_common"}
@@ -23,6 +24,16 @@ var (
 	// ErrTokenInvalid covers malformed, unknown, expired, used and
 	// wrong-purpose tokens alike, so responses don't reveal token history.
 	ErrTokenInvalid = &FieldError{Field: "token", Code: "invalid"}
+)
+
+// Login outcomes other than success and invalid input.
+var (
+	// ErrInvalidCredentials covers an unknown email and a wrong password
+	// alike (and any other reason the password can't be accepted), so the
+	// result doesn't reveal which addresses have accounts.
+	ErrInvalidCredentials = errors.New("auth: invalid credentials")
+	// ErrEmailNotVerified is returned only after the password was verified.
+	ErrEmailNotVerified = errors.New("auth: email not verified")
 )
 
 // ValidationError reports every invalid field of a request at once, so

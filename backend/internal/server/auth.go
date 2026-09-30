@@ -25,6 +25,20 @@ type resendVerificationRequest struct {
 	Email string `json:"email"`
 }
 
+type loginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+// loginResponse follows the OAuth 2.0 token response shape (RFC 6749 5.1).
+// expires_in is relative seconds, so client clock skew doesn't matter.
+type loginResponse struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int    `json:"expires_in"`
+	RefreshToken string `json:"refresh_token"`
+}
+
 // handleRegister always answers 202 for valid input, whether or not the
 // address already has an account (no account enumeration).
 func handleRegister(logger *slog.Logger, svc *auth.Service) http.HandlerFunc {
@@ -76,13 +90,51 @@ func handleResendVerification(logger *slog.Logger, svc *auth.Service) http.Handl
 	}
 }
 
+// handleLogin answers 200 with new session credentials. Unknown email and
+// wrong password get the same 401 (no account enumeration); 403
+// email_not_verified comes only after a correct password.
+//
+// Every response, including errors, is marked no-store: success carries
+// credentials, and identical headers on all failures keep them
+// indistinguishable. Any credentials the request carries are ignored: each
+// login gets new server-generated tokens (no session fixation).
+func handleLogin(logger *slog.Logger, svc *auth.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		var req loginRequest
+		if err := decodeJSON(w, r, &req, maxAuthBodyBytes); err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidRequest)
+			return
+		}
+		res, err := svc.Login(r.Context(), req.Email, req.Password, r.UserAgent())
+		if err != nil {
+			writeServiceError(w, r, logger, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, loginResponse{
+			AccessToken:  res.AccessToken.Raw,
+			TokenType:    "Bearer",
+			ExpiresIn:    int(res.AccessTokenTTL.Seconds()),
+			RefreshToken: res.RefreshToken.Raw,
+		})
+	}
+}
+
 // writeServiceError maps an auth service error to a response: validation
-// errors to 422 with their fields, anything else to an opaque 500 whose
-// details go only to the log. Service errors never contain secrets.
+// errors to 422 with their fields, login outcomes to 401/403, anything else
+// to an opaque 500 whose details go only to the log. Service errors never
+// contain secrets.
 func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, err error) {
 	var verr *auth.ValidationError
-	if errors.As(err, &verr) {
+	switch {
+	case errors.As(err, &verr):
 		writeValidationError(w, verr)
+		return
+	case errors.Is(err, auth.ErrInvalidCredentials):
+		writeError(w, http.StatusUnauthorized, codeInvalidCredentials)
+		return
+	case errors.Is(err, auth.ErrEmailNotVerified):
+		writeError(w, http.StatusForbidden, codeEmailNotVerified)
 		return
 	}
 	logger.ErrorContext(r.Context(), "request failed", "route", r.Pattern, "err", err)
