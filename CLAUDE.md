@@ -34,29 +34,34 @@ TEST_DATABASE_URL=postgres://voca:voca@localhost:5432/voca_test?sslmode=disable 
 Config (env): `DATABASE_URL` (required, secret, never log it), `ENV` (`development`|`test`|`production`),
 `HTTP_ADDR` (default `:8080`), `APP_BASE_URL` (used in emailed links; https and a public host required in production),
 `TRUSTED_PROXY_HOPS` (reverse proxies appending to `X-Forwarded-For`; default 0 = TCP peer; must be set explicitly in
-production; only valid if the server is reachable solely through those proxies, otherwise clients can spoof their IP).
-Production refuses to start because only the dev `LogSender` email implementation exists.
+production; only valid if the server is reachable solely through those proxies, otherwise clients can spoof their IP),
+`RESEND_API_KEY` (secret, held as `config.Secret`, never log it) and `EMAIL_FROM` (canonical `local@domain` or
+`Name <local@domain>` on a Resend-verified domain). Email sender by `ENV` (decision 019): production always uses Resend
+and refuses to start without both variables; development uses `LogSender` unless `RESEND_API_KEY` is set (then
+`EMAIL_FROM` is required too); test always uses `LogSender` and ignores both.
 
 ## Architecture
 
 Modular monolith: one Go service, one PostgreSQL database, stdlib only where possible (`net/http` Go 1.22+
 routing patterns, pgx, goose, x/crypto). Keep dependencies minimal.
 
-- `cmd/api/main.go` builds all dependencies (config → pool → migrations → rate limiters → services → router), runs
-  the hourly retention cleanup (`authSvc.RunCleanup`), and handles graceful shutdown, then `authSvc.Wait()` drains
-  background emails.
+- `cmd/api/main.go` builds all dependencies (config → email sender (`newEmailSender`) → pool → migrations → rate
+  limiters → services → router), runs the hourly retention cleanup (`authSvc.RunCleanup`), and handles graceful
+  shutdown, then `authSvc.Wait()` drains background emails.
 - `internal/server` is the HTTP layer only: routing (`server.go`, `Options`), JSON decode/encode and error codes
   (`respond.go`), the `requireAccessToken` middleware (`authn.go`), per-IP limits and client IP (`limits.go`,
   `clientip.go`), security headers and the request deadline (`middleware.go`), and the HTML pages that emailed links open
-  (`pages.go`, templates embedded from `pages/`; GET never uses a token, POST calls the same service). Protected
-  routes are wrapped **individually** in `server.New`; handlers read `auth.Identity` from context via
-  `identityFrom` and pass `UserID` explicitly to services, so domain packages never read the request context.
+  (`pages.go`, templates embedded from `pages/`: `/verify-email` and `/reset-password`; GET never uses a token or the DB,
+  POST calls the same service). Protected routes are wrapped **individually** in `server.New`; handlers read
+  `auth.Identity` from context via `identityFrom` and pass `UserID` explicitly to services, so domain packages never
+  read the request context.
 - `internal/auth` owns the domain: `Service` (business logic, argon2 slot limiter with a queue timeout, bounded
   best-effort background email sending), per-account limits (`limits.go`), retention cleanup (`cleanup.go`),
-  `store.go` (SQL), tokens, password policy/hashing, email content. Errors are typed (`errors.go`) and mapped to
-  HTTP in `server`.
-- `internal/email` handles delivery only (`Sender` interface, `LogSender` for dev, `Recorder` for tests). Dependency
-  direction is `auth → email`, never the reverse.
+  `store.go` (SQL), tokens, password policy/hashing, email content (text, plus HTML from `templates/` for link
+  emails). Errors are typed (`errors.go`) and mapped to HTTP in `server`.
+- `internal/email` handles delivery only (`Sender` interface; `ResendSender` for production, stdlib HTTP client, no
+  retries, sanitized errors; `LogSender` for dev/test; `Recorder` for unit tests). Dependency direction is
+  `auth → email`, never the reverse. Resend click/open tracking must stay disabled (links carry tokens).
 - `internal/ratelimit`: in-process per-key token bucket (limits are per process; see decision 018 before scaling out).
 - `internal/db`: pool + goose migrations embedded from `internal/db/migrations/*.sql` and applied on every startup.
   Add new numbered files; never edit applied ones.
@@ -90,6 +95,7 @@ design decision, append a new entry there in the same style. Key invariants:
 - One-time tokens are consumed with a single conditional `UPDATE … RETURNING`. Lock order: transactions that touch an
   existing user's `user_tokens` lock the `users` row `FOR UPDATE` first; session-only operations lock a single
   session row.
-- 202 means accepted, not delivered: email is best effort (bounded in-flight sends, excess dropped) until an outbox exists.
+- 202 means accepted, not delivered: email is best effort (bounded in-flight sends, excess dropped, no retries) until an
+  outbox exists.
 - Never log emails, passwords, tokens, token hashes, user agents, IPs, or request bodies. `auth.Token` redacts itself in
   fmt, slog and JSON.
