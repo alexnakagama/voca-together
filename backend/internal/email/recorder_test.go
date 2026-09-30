@@ -16,6 +16,7 @@ func TestRecorderRecordsInOrder(t *testing.T) {
 	ctx := context.Background()
 	first, second := validMessage(), validMessage()
 	second.Subject = "Second"
+	second.HTML = secretHTML // tests of callers inspect the HTML part too
 
 	for _, m := range []Message{first, second} {
 		if err := r.Send(ctx, m); err != nil {

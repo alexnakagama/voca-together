@@ -20,12 +20,18 @@ type Sender interface {
 	Send(ctx context.Context, msg Message) error
 }
 
-// Message is a provider-independent plain-text email. The sender address is
-// configured on the Sender, not chosen by callers.
+// Message is a provider-independent email. The sender address is configured
+// on the Sender, not chosen by callers.
+//
+// Text is required and is the canonical body: every message has a plain-text
+// part. HTML is an optional alternative rendering of the same content for
+// clients that display it; senders that can't deliver HTML send Text alone.
+// Both bodies may carry secrets such as one-time links.
 type Message struct {
 	To      string
 	Subject string
 	Text    string
+	HTML    string
 }
 
 // ErrInvalidMessage reports a message that must not be sent: a missing field,
@@ -50,11 +56,15 @@ func (m Message) validate() error {
 	return nil
 }
 
-// String, GoString and LogValue omit the body (it may contain live tokens)
-// and the recipient (personal data), so a Message printed or logged by
-// accident exposes neither.
+// String, GoString and LogValue omit both bodies (they may contain live
+// tokens) and the recipient (personal data), so a Message printed or logged by
+// accident exposes neither. String shows only whether an HTML part exists.
 func (m Message) String() string {
-	return fmt.Sprintf("email.Message{Subject: %q, To: [REDACTED], Text: [REDACTED]}", m.Subject)
+	html := ""
+	if m.HTML != "" {
+		html = ", HTML: [REDACTED]"
+	}
+	return fmt.Sprintf("email.Message{Subject: %q, To: [REDACTED], Text: [REDACTED]%s}", m.Subject, html)
 }
 
 func (m Message) GoString() string { return m.String() }

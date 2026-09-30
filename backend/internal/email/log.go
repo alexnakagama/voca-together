@@ -8,6 +8,9 @@ import (
 // LogSender writes messages to a logger instead of delivering them, so local
 // development can open verification and reset links from the log.
 //
+// Only the Text body is logged: it carries the same links as the optional
+// HTML part, which would only add noise to the log.
+//
 // It logs message bodies, which contain live tokens: it is for development
 // and tests only. The application must refuse to start in production with it.
 type LogSender struct {
