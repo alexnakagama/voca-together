@@ -379,6 +379,31 @@ func TestResendSenderIsRedactedWhenFormattedOrLogged(t *testing.T) {
 		t.Errorf("formatted sender leaks the API key: %q", formatted)
 	}
 
+	// Verbs that don't call String used to print the struct's fields. The
+	// formats are variables so vet doesn't reject the deliberately wrong ones.
+	hexKey := fmt.Sprintf("%x", testAPIKey)
+	for _, verb := range []string{"%v", "%+v", "%s", "%q", "%#v", "%d", "%+d", "%x", "%X", "% x", "%o",
+		"%b", "%t", "%e", "%10.3s", "%-40v", "%T", "%p", "%U", "%c"} {
+		for _, out := range []string{fmt.Sprintf(verb, s), fmt.Sprintf(verb, *s),
+			fmt.Sprintf(verb, []ResendSender{*s}), fmt.Sprintf(verb, struct{ S *ResendSender }{s})} {
+			if strings.Contains(out, "SECRET") || strings.Contains(strings.ToLower(out), hexKey) {
+				t.Errorf("%s leaks the API key: %q", verb, out)
+			}
+		}
+	}
+
+	// Normal formatting is unchanged.
+	want := `email.ResendSender{From: "VocaTogether <no-reply@mail.example.com>", APIKey: [REDACTED]}`
+	for verb, w := range map[string]string{"%v": want, "%+v": want, "%s": want, "%#v": want,
+		"%q": fmt.Sprintf("%q", want)} {
+		if got := fmt.Sprintf(verb, s); got != w {
+			t.Errorf("%s (pointer) = %s, want %s", verb, got, w)
+		}
+		if got := fmt.Sprintf(verb, *s); got != w {
+			t.Errorf("%s (value) = %s, want %s", verb, got, w)
+		}
+	}
+
 	var buf bytes.Buffer
 	slog.New(slog.NewJSONHandler(&buf, nil)).Info("sender", "s", s, "v", *s)
 	slog.New(slog.NewTextHandler(&buf, nil)).Info("sender", "s", s, "v", *s)

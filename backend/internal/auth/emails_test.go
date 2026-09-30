@@ -2,7 +2,9 @@ package auth
 
 import (
 	"context"
+	"html"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -180,5 +182,180 @@ func TestHumanDuration(t *testing.T) {
 		if got := humanDuration(d); got != want {
 			t.Errorf("humanDuration(%v) = %q, want %q", d, got, want)
 		}
+	}
+}
+
+var (
+	hrefAttr    = regexp.MustCompile(`(?is)\bhref\s*=`)
+	ctaAnchor   = regexp.MustCompile(`(?s)<a href="([^"]*)"[^>]*>([^<]*)</a>`)
+	fallbackURL = regexp.MustCompile(`(?s)copy this address into your browser:</p>\s*<p[^>]*>([^<]*)</p>`)
+	anyURL      = regexp.MustCompile(`(?i)https?://[^\s"<]*`)
+	eventAttr   = regexp.MustCompile(`(?i)\son[a-z]+\s*=`)
+	htmlTag     = regexp.MustCompile(`<[^>]*>`)
+)
+
+// checkSafeHTML fails if body could run code or load anything: scripts,
+// event handlers, images, frames, forms, stylesheets or other fetched URLs.
+// Attributes are checked inside tags only: escaped text (such as the visible
+// fallback URL) may spell anything and stays inert.
+func checkSafeHTML(t *testing.T, body string) {
+	t.Helper()
+	lower := strings.ToLower(body)
+	for _, bad := range []string{"<script", "<img", "<iframe", "<object", "<embed", "<form", "<link", "<style",
+		"<svg", "<video", "<audio", "<base", "<meta http-equiv"} {
+		if strings.Contains(lower, bad) {
+			t.Errorf("HTML contains %q", bad)
+		}
+	}
+	for _, tag := range htmlTag.FindAllString(lower, -1) {
+		for _, bad := range []string{"javascript:", "src=", "srcset=", "background=", "url(", "@import"} {
+			if strings.Contains(tag, bad) {
+				t.Errorf("tag %q contains %q", tag, bad)
+			}
+		}
+		if eventAttr.MatchString(tag) {
+			t.Errorf("tag %q has an event handler attribute", tag)
+		}
+	}
+}
+
+func TestTokenEmailHTML(t *testing.T) {
+	base := mustParseURL(t, "https://api.example.com/app")
+	token := NewToken("")
+	tests := []struct {
+		name    string
+		msg     email.Message
+		link    string
+		button  string
+		wantTTL string
+	}{
+		{"verification", verificationEmail(base, testRecipient, token.Raw, 24*time.Hour),
+			tokenLink(base, verifyEmailPath, token.Raw), "Verify my email", "expires in 24 hours"},
+		{"password reset", passwordResetEmail(base, testRecipient, token.Raw, 30*time.Minute),
+			tokenLink(base, resetPasswordPath, token.Raw), "Change password", "expires in 30 minutes"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := tt.msg.HTML
+			if body == "" {
+				t.Fatal("no HTML body")
+			}
+			if n := len(hrefAttr.FindAllString(body, -1)); n != 1 {
+				t.Fatalf("found %d href attributes, want exactly 1", n)
+			}
+			cta := ctaAnchor.FindStringSubmatch(body)
+			if cta == nil {
+				t.Fatal("no CTA anchor")
+			}
+			if got := html.UnescapeString(cta[1]); got != tt.link {
+				t.Errorf("CTA href = %q, want tokenLink %q", got, tt.link)
+			}
+			if cta[2] != tt.button {
+				t.Errorf("CTA label = %q, want %q", cta[2], tt.button)
+			}
+			fallback := fallbackURL.FindStringSubmatch(body)
+			if fallback == nil {
+				t.Fatal("no visible fallback URL")
+			}
+			if got := html.UnescapeString(fallback[1]); got != tt.link {
+				t.Errorf("fallback URL = %q, want tokenLink %q", got, tt.link)
+			}
+			// The link, twice, is the only URL in the message.
+			urls := anyURL.FindAllString(body, -1)
+			if len(urls) != 2 {
+				t.Errorf("found %d URLs, want 2 (button and fallback): %q", len(urls), urls)
+			}
+			for _, u := range urls {
+				if html.UnescapeString(u) != tt.link {
+					t.Errorf("unexpected URL %q", u)
+				}
+			}
+			if !strings.Contains(body, tt.wantTTL) {
+				t.Errorf("HTML does not mention the expiry %q", tt.wantTTL)
+			}
+			if !strings.Contains(body, "<title>"+html.EscapeString(tt.msg.Subject)+"</title>") {
+				t.Error("HTML title is not the subject")
+			}
+			checkSafeHTML(t, body)
+			// Plain text stays the canonical body and carries the same link.
+			if got := linkIn(t, tt.msg.Text).String(); got != tt.link {
+				t.Errorf("text link = %q, want %q", got, tt.link)
+			}
+			requireSendable(t, tt.msg)
+		})
+	}
+}
+
+// A token is never HTML: whatever it contains reaches the HTML only as part
+// of tokenLink's escaped query, and round-trips through both the button and
+// the fallback text.
+func TestTokenEmailHTMLEscapesHostileToken(t *testing.T) {
+	base := mustParseURL(t, "https://api.example.com")
+	hostile := `"><script>alert(1)</script><img src=x onerror=alert(1)>&amp;'` + "`javascript:alert(1)//"
+	for name, msg := range map[string]email.Message{
+		"verification":   verificationEmail(base, testRecipient, hostile, time.Hour),
+		"password reset": passwordResetEmail(base, testRecipient, hostile, time.Hour),
+	} {
+		t.Run(name, func(t *testing.T) {
+			checkSafeHTML(t, msg.HTML)
+			if n := len(hrefAttr.FindAllString(msg.HTML, -1)); n != 1 {
+				t.Fatalf("found %d href attributes, want exactly 1", n)
+			}
+			for _, raw := range []string{
+				ctaAnchor.FindStringSubmatch(msg.HTML)[1],
+				fallbackURL.FindStringSubmatch(msg.HTML)[1],
+			} {
+				link := mustParseURL(t, html.UnescapeString(raw))
+				if got := link.Query().Get("token"); got != hostile {
+					t.Errorf("token did not round-trip: got %q", got)
+				}
+			}
+		})
+	}
+}
+
+// The template escapes Link on its own too, should it ever receive a value
+// that didn't come from tokenLink.
+func TestActionEmailTemplateEscapesLink(t *testing.T) {
+	for _, link := range []string{
+		`javascript:alert(1)`,
+		`https://x.example/"><script>alert(1)</script>`,
+		`https://x.example/' onmouseover='alert(1)`,
+	} {
+		body := actionEmail{Subject: "s", Heading: "<b>h</b>", Button: "b", Link: link, Expiry: "e"}.html()
+		if body == "" {
+			t.Fatalf("%q: render failed", link)
+		}
+		checkSafeHTML(t, body)
+		if strings.Contains(body, "<b>") {
+			t.Error("heading markup was not escaped")
+		}
+		href := html.UnescapeString(ctaAnchor.FindStringSubmatch(body)[1])
+		if strings.HasPrefix(strings.ToLower(href), "javascript:") {
+			t.Errorf("%q: href kept a javascript: URL: %q", link, href)
+		}
+	}
+}
+
+func TestNotificationEmailsAreTextOnly(t *testing.T) {
+	for name, msg := range map[string]email.Message{
+		"account exists":   accountExistsEmail(testRecipient),
+		"password changed": passwordChangedEmail(testRecipient),
+	} {
+		if msg.HTML != "" {
+			t.Errorf("%s: has an HTML body", name)
+		}
+	}
+}
+
+func TestVerificationEmailHeading(t *testing.T) {
+	msg := verificationEmail(mustParseURL(t, "https://api.example.com"), testRecipient, "tok", time.Hour)
+	h1 := regexp.MustCompile(`(?s)<h1[^>]*>([^<]*)</h1>`).FindAllStringSubmatch(msg.HTML, -1)
+	if len(h1) != 1 || h1[0][1] != "Confirm your email address" {
+		t.Errorf("HTML headings = %q, want one \"Confirm your email address\"", h1)
+	}
+	// The text body keeps its greeting.
+	if !strings.HasPrefix(msg.Text, "Welcome to VocaTogether!\n") {
+		t.Errorf("text body changed: %q", strings.SplitN(msg.Text, "\n", 2)[0])
 	}
 }

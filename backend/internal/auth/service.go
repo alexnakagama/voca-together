@@ -133,6 +133,14 @@ func (s *Service) VerifyEmail(ctx context.Context, rawToken string) error {
 	return nil
 }
 
+// WellFormedVerificationToken reports whether raw has the shape of an email
+// verification token. It only checks the public format, never the database,
+// so the verification page can refuse to render a form for junk without
+// revealing anything.
+func WellFormedVerificationToken(raw string) bool {
+	return wellFormedToken(raw, "")
+}
+
 // ResendVerification emails a new verification link if the address belongs
 // to an unverified account, which invalidates the previous link. For unknown
 // or already verified addresses it does nothing. All three return nil, so the

@@ -2,11 +2,16 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
+
+	"vocatogether/backend/internal/email"
 )
 
 // maxTrustedProxyHops is a sanity bound: real deployments have one or two.
@@ -24,7 +29,46 @@ type Config struct {
 	// server is reachable exclusively through those proxies: exposed
 	// directly, clients could spoof their IP (decision 018).
 	TrustedProxyHops int
+	// ResendAPIKey and EmailFrom configure the Resend sender. ResendAPIKey is
+	// empty when Resend isn't configured; both are always empty in the test
+	// environment, which ignores them. EmailFrom is in canonical form
+	// ("local@domain" or "Name <local@domain>").
+	ResendAPIKey Secret
+	EmailFrom    string
 }
+
+// Secret is a string that is redacted whenever it is formatted, logged or
+// marshalled to JSON. Reveal returns the value, for the one place that uses it.
+// The zero value is the empty secret.
+type Secret struct {
+	// v is a pointer so that fmt's fallback, which skips Format and prints
+	// fields by reflection (%p on a value), shows an address, not the value.
+	v *string
+}
+
+const redacted = "[REDACTED]"
+
+func NewSecret(v string) Secret { return Secret{v: &v} }
+
+func (s Secret) Reveal() string {
+	if s.v == nil {
+		return ""
+	}
+	return *s.v
+}
+
+// Format, String, GoString, LogValue, MarshalJSON and MarshalText never show
+// the value. Format handles every fmt verb (String alone wouldn't cover %d or
+// %x on a struct field), including inside a printed Config; the one verb fmt
+// never passes to Format, %p on a value, finds only a pointer (see v).
+func (s Secret) Format(f fmt.State, _ rune) { io.WriteString(f, redacted) }
+func (s Secret) String() string             { return redacted }
+func (s Secret) GoString() string           { return redacted }
+func (s Secret) LogValue() slog.Value       { return slog.StringValue(redacted) }
+func (s Secret) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + redacted + `"`), nil
+}
+func (s Secret) MarshalText() ([]byte, error) { return []byte(redacted), nil }
 
 func (c Config) IsProduction() bool { return c.Env == "production" }
 
@@ -81,7 +125,50 @@ func Load(getenv func(string) string) (Config, error) {
 		}
 	}
 
+	if err := loadEmail(&cfg, getenv); err != nil {
+		return Config{}, err
+	}
+
 	return cfg, nil
+}
+
+// loadEmail reads the Resend settings for cfg.Env:
+//   - production: RESEND_API_KEY and EMAIL_FROM are both required;
+//   - development: both optional, but RESEND_API_KEY requires EMAIL_FROM
+//     (without a key, development uses LogSender);
+//   - test: both are ignored, even if set, so tests never reach the provider.
+//
+// Errors never echo either value: the key is a secret, and a misplaced key
+// could just as well end up in EMAIL_FROM.
+func loadEmail(cfg *Config, getenv func(string) string) error {
+	if cfg.Env == "test" {
+		return nil
+	}
+	key, from := getenv("RESEND_API_KEY"), getenv("EMAIL_FROM")
+
+	if cfg.IsProduction() && key == "" {
+		return errors.New("RESEND_API_KEY is required in production")
+	}
+	if key != "" && !email.ValidResendAPIKey(key) {
+		return errors.New("RESEND_API_KEY is invalid: want printable ASCII without spaces, starting with re_")
+	}
+	if from == "" {
+		if cfg.IsProduction() {
+			return errors.New("EMAIL_FROM is required in production")
+		}
+		if key != "" {
+			return errors.New("EMAIL_FROM is required when RESEND_API_KEY is set")
+		}
+		return nil
+	}
+	canonical, ok := email.CanonicalSender(from)
+	if !ok {
+		return errors.New(`EMAIL_FROM is invalid: want "local@domain" or "Name <local@domain>" ` +
+			"with a domain name, and a display name of ASCII letters, digits and single spaces")
+	}
+
+	cfg.ResendAPIKey, cfg.EmailFrom = NewSecret(key), canonical
+	return nil
 }
 
 // isLoopback reports whether host names this machine: localhost (and its

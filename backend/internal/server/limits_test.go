@@ -120,6 +120,7 @@ func TestUnlimitedRoutesNeverRateLimit(t *testing.T) {
 		for _, r := range []struct{ method, path string }{
 			{http.MethodGet, "/healthz"},
 			{http.MethodGet, resetEmailPath + "?token=x"},
+			{http.MethodGet, verifyEmailPath + "?token=x"},
 			{http.MethodPost, logoutPath}, // no credentials: 401 before any service call
 			{http.MethodGet, mePath},
 		} {

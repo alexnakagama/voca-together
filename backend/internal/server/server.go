@@ -46,6 +46,9 @@ func New(logger *slog.Logger, authSvc *auth.Service, opts Options) http.Handler 
 	mux.HandleFunc("GET /reset-password", handleResetPasswordPage())
 	mux.Handle("POST /reset-password",
 		limitByIP(lim.Token, opts.TrustedProxyHops, writeRateLimitedPage)(handleResetPasswordForm(logger, authSvc)))
+	mux.HandleFunc("GET /verify-email", handleVerifyEmailPage())
+	mux.Handle("POST /verify-email",
+		limitByIP(lim.Token, opts.TrustedProxyHops, writeRateLimitedVerifyPage)(handleVerifyEmailForm(logger, authSvc)))
 
 	// Protected routes: each is wrapped individually, so public routes never
 	// require a token and a route can't become public by accident of order.

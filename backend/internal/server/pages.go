@@ -19,9 +19,12 @@ import (
 //go:embed pages/*.html
 var pageFiles embed.FS
 
-var resetPasswordPage = template.Must(template.ParseFS(pageFiles, "pages/reset_password.html"))
+var (
+	resetPasswordPage = template.Must(template.ParseFS(pageFiles, "pages/reset_password.html"))
+	verifyEmailPage   = template.Must(template.ParseFS(pageFiles, "pages/verify_email.html"))
+)
 
-// Page states of resetPasswordPage.
+// Page states of resetPasswordPage and verifyEmailPage.
 const (
 	pageForm        = "form"
 	pageDone        = "done"
@@ -132,13 +135,82 @@ func formPage(token string) resetPasswordPageData {
 	}
 }
 
-// writePage renders the reset page with headers for a page whose URL and
-// form carry a secret: never cached, never sent as a referrer, never framed,
-// and allowed to load nothing but its own inline styles and post only to
-// this origin.
+type verifyEmailPageData struct {
+	State string
+	Token string // well-formed only: rendered into the hidden form field
+}
+
+// handleVerifyEmailPage renders a confirmation form for the token in the
+// emailed link. It never touches the database or uses the token: only POST
+// does, so a mail scanner prefetching the link verifies nothing. A token that
+// isn't well-formed gets the invalid-link page, and is not echoed.
+func handleVerifyEmailPage() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token := r.URL.Query().Get("token")
+		if !auth.WellFormedVerificationToken(token) {
+			writeVerifyPage(w, http.StatusBadRequest, verifyEmailPageData{State: pageInvalid})
+			return
+		}
+		writeVerifyPage(w, http.StatusOK, verifyEmailPageData{State: pageForm, Token: token})
+	}
+}
+
+// handleVerifyEmailForm verifies the address from the submitted form. Only the
+// form body counts: a token in the query string is ignored. As for the reset
+// form, CSRF protection isn't needed: the form carries the secret token.
+// Every unusable token gets the same invalid-link page.
+func handleVerifyEmailForm(logger *slog.Logger, svc *auth.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)
+		if err := r.ParseForm(); err != nil {
+			writeVerifyPage(w, http.StatusBadRequest, verifyEmailPageData{State: pageBadRequest})
+			return
+		}
+		token := r.PostForm.Get("token")
+		if !auth.WellFormedVerificationToken(token) {
+			writeVerifyPage(w, http.StatusBadRequest, verifyEmailPageData{State: pageInvalid})
+			return
+		}
+
+		err := svc.VerifyEmail(r.Context(), token)
+		var verr *auth.ValidationError
+		switch {
+		case err == nil:
+			writeVerifyPage(w, http.StatusOK, verifyEmailPageData{State: pageDone})
+		case errors.As(err, &verr):
+			writeVerifyPage(w, http.StatusBadRequest, verifyEmailPageData{State: pageInvalid})
+		case unavailable(err):
+			logger.WarnContext(r.Context(), "request unavailable", "route", r.Pattern, "err", err)
+			setRetryAfter(w, retryAfterUnavailable)
+			writeVerifyPage(w, http.StatusServiceUnavailable, verifyEmailPageData{State: pageUnavailable})
+		default:
+			logger.ErrorContext(r.Context(), "request failed", "route", r.Pattern, "err", err)
+			writeVerifyPage(w, http.StatusInternalServerError, verifyEmailPageData{State: pageError})
+		}
+	}
+}
+
+// writeRateLimitedVerifyPage is the verification form's 429, for the per-IP
+// limit it shares with the JSON API. Nothing was done: the link still works.
+func writeRateLimitedVerifyPage(w http.ResponseWriter, retryAfter time.Duration) {
+	setRetryAfter(w, retryAfter)
+	writeVerifyPage(w, http.StatusTooManyRequests, verifyEmailPageData{State: pageRateLimited})
+}
+
 func writePage(w http.ResponseWriter, status int, data resetPasswordPageData) {
+	renderPage(w, status, resetPasswordPage, data)
+}
+
+func writeVerifyPage(w http.ResponseWriter, status int, data verifyEmailPageData) {
+	renderPage(w, status, verifyEmailPage, data)
+}
+
+// renderPage renders page with headers for a page whose URL and form carry a
+// secret: never cached, never sent as a referrer, never framed, and allowed to
+// load nothing but its own inline styles and post only to this origin.
+func renderPage(w http.ResponseWriter, status int, page *template.Template, data any) {
 	var buf bytes.Buffer
-	if err := resetPasswordPage.Execute(&buf, data); err != nil {
+	if err := page.Execute(&buf, data); err != nil {
 		// Only a programming error in the template can get here.
 		status = http.StatusInternalServerError
 		buf.Reset()

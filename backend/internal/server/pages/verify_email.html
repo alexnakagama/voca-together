@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Confirm your email address · VocaTogether</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; background: #f6f6f4; color: #1d1d1b; }
+  main { max-width: 420px; margin: 48px auto; background: #fff; border-radius: 12px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  h1 { font-size: 1.4rem; margin: 0 0 16px; }
+  button { margin-top: 24px; width: 100%; padding: 12px; font-size: 1rem; border: 0; border-radius: 8px; background: #2d5bd7; color: #fff; cursor: pointer; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #161615; color: #ececea; }
+    main { background: #232321; box-shadow: none; }
+  }
+</style>
+</head>
+<body>
+<main>
+{{- if eq .State "form"}}
+  <h1>Confirm your email address</h1>
+  <p>Press the button to finish verifying the email address of your VocaTogether account.</p>
+  <form method="post" action="/verify-email">
+    <input type="hidden" name="token" value="{{.Token}}">
+    <button type="submit">Verify my email</button>
+  </form>
+{{- else if eq .State "done"}}
+  <h1>Email address verified</h1>
+  <p>Your email address is confirmed. You can go back to the VocaTogether app.</p>
+{{- else if eq .State "invalid"}}
+  <h1>This link can't be used</h1>
+  <p>The link is invalid, has expired, or was already used.</p>
+  <p>If you already verified your email address, there is nothing else to do. Otherwise, open the VocaTogether app and ask for a new verification email.</p>
+{{- else if eq .State "rate_limited"}}
+  <h1>Too many attempts</h1>
+  <p>Please wait a few minutes, then open the link from the email again. Your link still works if it hasn't expired.</p>
+{{- else if eq .State "unavailable"}}
+  <h1>We're busy right now</h1>
+  <p>Please try again in a moment by opening the link from the email again.</p>
+{{- else if eq .State "bad_request"}}
+  <h1>The form couldn't be read</h1>
+  <p>Please open the link from the email again.</p>
+{{- else}}
+  <h1>Something went wrong</h1>
+  <p>We couldn't complete your request. Please open the link from the email again in a few minutes.</p>
+{{- end}}
+</main>
+</body>
+</html>

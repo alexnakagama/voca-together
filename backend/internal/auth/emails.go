@@ -1,7 +1,10 @@
 package auth
 
 import (
+	"bytes"
+	"embed"
 	"fmt"
+	"html/template"
 	"net/url"
 	"time"
 
@@ -14,13 +17,48 @@ const (
 	resetPasswordPath = "/reset-password"
 )
 
+//go:embed templates/action_email.html
+var emailTemplates embed.FS
+
+// actionEmailHTML renders an email built around one link: a heading, intro
+// paragraphs, one button, the expiry, the link again as visible text, and
+// closing paragraphs. Table layout with inline styles only; no scripts,
+// images or other external resources.
+var actionEmailHTML = template.Must(template.ParseFS(emailTemplates, "templates/action_email.html"))
+
+// actionEmail is the data for actionEmailHTML. Every field is fixed text from
+// this package except Link, which comes from tokenLink; html/template escapes
+// all of them for their context, so none can add markup.
+type actionEmail struct {
+	Subject string
+	Heading string
+	Intro   []string
+	Button  string
+	Link    string
+	Expiry  string
+	Outro   []string
+}
+
+// html renders e. The text body is the canonical one and HTML is optional, so
+// if rendering ever failed the message would go out as text only; the error
+// is dropped rather than logged, since the data holds a live token.
+func (e actionEmail) html() string {
+	var buf bytes.Buffer
+	if err := actionEmailHTML.Execute(&buf, e); err != nil {
+		return ""
+	}
+	return buf.String()
+}
+
 // The builders below take `to` already normalized by NormalizeEmail and a raw
 // one-time token. Messages carrying a token are secrets: never log them.
 
 func verificationEmail(baseURL *url.URL, to, rawToken string, ttl time.Duration) email.Message {
+	const subject = "Verify your VocaTogether email address"
+	link := tokenLink(baseURL, verifyEmailPath, rawToken)
 	return email.Message{
 		To:      to,
-		Subject: "Verify your VocaTogether email address",
+		Subject: subject,
 		Text: fmt.Sprintf(`Welcome to VocaTogether!
 
 Confirm your email address by opening this link:
@@ -30,14 +68,25 @@ Confirm your email address by opening this link:
 The link expires in %s and can be used only once.
 
 If you didn't create a VocaTogether account, you can ignore this email.
-`, tokenLink(baseURL, verifyEmailPath, rawToken), humanDuration(ttl)),
+`, link, humanDuration(ttl)),
+		HTML: actionEmail{
+			Subject: subject,
+			Heading: "Confirm your email address",
+			Intro:   []string{"Confirm your email address to finish creating your account."},
+			Button:  "Verify my email",
+			Link:    link,
+			Expiry:  fmt.Sprintf("The link expires in %s and can be used only once.", humanDuration(ttl)),
+			Outro:   []string{"If you didn't create a VocaTogether account, you can ignore this email."},
+		}.html(),
 	}
 }
 
 func passwordResetEmail(baseURL *url.URL, to, rawToken string, ttl time.Duration) email.Message {
+	const subject = "Reset your VocaTogether password"
+	link := tokenLink(baseURL, resetPasswordPath, rawToken)
 	return email.Message{
 		To:      to,
-		Subject: "Reset your VocaTogether password",
+		Subject: subject,
 		Text: fmt.Sprintf(`We received a request to reset the password of your VocaTogether account.
 
 Choose a new password by opening this link:
@@ -49,7 +98,21 @@ signed out on all devices.
 
 If you didn't ask to reset your password, you can ignore this email. Your
 password will not change.
-`, tokenLink(baseURL, resetPasswordPath, rawToken), humanDuration(ttl)),
+`, link, humanDuration(ttl)),
+		HTML: actionEmail{
+			Subject: subject,
+			Heading: "Reset your password",
+			Intro: []string{
+				"We received a request to reset the password of your VocaTogether account.",
+				"Choose a new password with the button below.",
+			},
+			Button: "Change password",
+			Link:   link,
+			Expiry: fmt.Sprintf("The link expires in %s and can be used only once. "+
+				"After the reset you will be signed out on all devices.", humanDuration(ttl)),
+			Outro: []string{"If you didn't ask to reset your password, you can ignore this email. " +
+				"Your password will not change."},
+		}.html(),
 	}
 }
 

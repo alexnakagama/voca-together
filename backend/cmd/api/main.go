@@ -107,13 +107,29 @@ func run(logger *slog.Logger) error {
 	return srv.Shutdown(shutdownCtx)
 }
 
-// newEmailSender returns the email.Sender for cfg. Only the development
-// LogSender exists so far. It logs live tokens, so production refuses to start
-// rather than fall back to it (decision 007).
+// newEmailSender returns the email.Sender for cfg and logs which provider it
+// chose, by name only (never the API key or the sender address):
+//   - production: Resend, always; there is no fallback to LogSender, which
+//     logs live tokens (decision 007);
+//   - development: Resend when RESEND_API_KEY is set, LogSender otherwise;
+//   - test: LogSender, whatever the Resend settings, so tests never send.
 func newEmailSender(cfg config.Config, logger *slog.Logger) (email.Sender, error) {
-	if cfg.IsProduction() {
-		return nil, errors.New("no email sender for production: LogSender logs live tokens and is not allowed")
+	key := cfg.ResendAPIKey.Reveal()
+	useResend := cfg.Env != "test" && (cfg.IsProduction() || key != "")
+	if !useResend {
+		logger.Info("email sender", "provider", "log")
+		return email.NewLogSender(logger), nil
 	}
 
-	return email.NewLogSender(logger), nil
+	// config.Load already requires both in production; check again rather
+	// than rely on it, since the alternative is starting without email.
+	if key == "" {
+		return nil, errors.New("no email sender for production: RESEND_API_KEY is required")
+	}
+	sender, err := email.NewResendSender(key, cfg.EmailFrom) // errors never echo the key
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("email sender", "provider", "resend")
+	return sender, nil
 }

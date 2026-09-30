@@ -39,7 +39,10 @@ var resendErrorName = regexp.MustCompile(`^[a-z_]{1,64}$`)
 // error name: never the API key, the recipient, the bodies, or the provider's
 // free-text message. It doesn't retry: delivery is best effort (decision 018).
 type ResendSender struct {
-	apiKey   string // secret: never log it
+	// apiKey is a secret: never log it. It is a pointer so that fmt's
+	// fallback, which skips Format and prints fields by reflection (%p on a
+	// value), shows an address rather than the key.
+	apiKey   *string
 	from     string
 	endpoint string
 	client   *http.Client
@@ -59,7 +62,7 @@ func NewResendSender(apiKey, from string) (*ResendSender, error) {
 		return nil, errors.New(`email: resend: invalid sender address: want "local@domain" or "Name <local@domain>"`)
 	}
 	return &ResendSender{
-		apiKey:   apiKey,
+		apiKey:   &apiKey,
 		from:     sender,
 		endpoint: resendEndpoint,
 		client:   newResendClient(),
@@ -78,6 +81,14 @@ func newResendClient() *http.Client {
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }
+
+// ValidResendAPIKey reports whether key has the shape NewResendSender
+// accepts, so configuration can be checked before a sender is built.
+func ValidResendAPIKey(key string) bool { return validResendAPIKey(key) }
+
+// CanonicalSender returns from in the canonical form NewResendSender
+// accepts, or false if it would reject it (see canonicalSender).
+func CanonicalSender(from string) (string, bool) { return canonicalSender(from) }
 
 // validResendAPIKey checks the key's shape, not its validity. Printable ASCII
 // without spaces also keeps it safe to place in a header.
@@ -187,7 +198,7 @@ func (s *ResendSender) Send(ctx context.Context, msg Message) error {
 	if err != nil {
 		return fmt.Errorf("email: resend: build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+s.apiKey)
+	req.Header.Set("Authorization", "Bearer "+*s.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", resendUserAgent)
@@ -233,8 +244,24 @@ func resendErrorNameOf(body []byte) string {
 	return e.Name
 }
 
-// String, GoString and LogValue never show the API key. Value receivers, so
-// a copied ResendSender is redacted too.
+// Format, String, GoString and LogValue never show the API key. Value
+// receivers, so a copied ResendSender is redacted too.
+//
+// Format handles every fmt verb: without it, verbs that don't call String
+// (such as %d or %x) print the struct's fields. %q quotes the String form,
+// %#v uses GoString, and every other verb prints String. The one verb fmt
+// never passes to Format, %p on a value, finds only a pointer (see apiKey).
+func (s ResendSender) Format(f fmt.State, verb rune) {
+	switch {
+	case verb == 'q':
+		fmt.Fprintf(f, "%q", s.String())
+	case verb == 'v' && f.Flag('#'):
+		io.WriteString(f, s.GoString())
+	default:
+		io.WriteString(f, s.String())
+	}
+}
+
 func (s ResendSender) String() string {
 	return fmt.Sprintf("email.ResendSender{From: %q, APIKey: [REDACTED]}", s.from)
 }

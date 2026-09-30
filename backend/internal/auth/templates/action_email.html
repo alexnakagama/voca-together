@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>{{.Subject}}</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f4f5f7;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f5f7;">
+<tr>
+<td align="center" style="padding:24px 12px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:480px;background-color:#ffffff;border-radius:8px;">
+<tr>
+<td style="padding:32px 24px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:16px;line-height:24px;color:#1f2933;">
+<p style="margin:0 0 16px 0;font-size:14px;font-weight:bold;color:#52606d;">VocaTogether</p>
+<h1 style="margin:0 0 16px 0;font-size:22px;line-height:30px;color:#1f2933;">{{.Heading}}</h1>
+{{range .Intro}}<p style="margin:0 0 16px 0;">{{.}}</p>
+{{end}}<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:8px 0 24px 0;">
+<tr>
+<td align="center" bgcolor="#2563eb" style="border-radius:6px;background-color:#2563eb;">
+<a href="{{.Link}}" style="display:inline-block;padding:12px 24px;font-size:16px;font-weight:bold;line-height:24px;color:#ffffff;text-decoration:none;border-radius:6px;">{{.Button}}</a>
+</td>
+</tr>
+</table>
+<p style="margin:0 0 16px 0;">{{.Expiry}}</p>
+<p style="margin:0 0 8px 0;font-size:14px;line-height:20px;color:#52606d;">If the button doesn't work, copy this address into your browser:</p>
+<p style="margin:0 0 24px 0;font-size:14px;line-height:20px;color:#52606d;word-break:break-all;">{{.Link}}</p>
+{{range .Outro}}<p style="margin:0 0 16px 0;font-size:14px;line-height:20px;color:#52606d;">{{.}}</p>
+{{end}}</td>
+</tr>
+</table>
+</td>
+</tr>
+</table>
+</body>
+</html>
