@@ -26,6 +26,15 @@ type resendVerificationRequest struct {
 	Email string `json:"email"`
 }
 
+type forgotPasswordRequest struct {
+	Email string `json:"email"`
+}
+
+type resetPasswordRequest struct {
+	Token    string `json:"token"`
+	Password string `json:"password"`
+}
+
 type loginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
@@ -93,6 +102,45 @@ func handleResendVerification(logger *slog.Logger, svc *auth.Service) http.Handl
 			return
 		}
 		writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+	}
+}
+
+// handleForgotPassword always answers 202 for a valid address, whether or
+// not it has an account (no account enumeration). Every response is marked
+// no-store, so all outcomes carry identical headers.
+func handleForgotPassword(logger *slog.Logger, svc *auth.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		var req forgotPasswordRequest
+		if err := decodeJSON(w, r, &req, maxAuthBodyBytes); err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidRequest)
+			return
+		}
+		if err := svc.ForgotPassword(r.Context(), req.Email); err != nil {
+			writeServiceError(w, r, logger, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+	}
+}
+
+// handleResetPassword answers 200 once the new password is committed and all
+// sessions are revoked (decision 017). It does not log the user in. Every
+// unusable token gets the same 422 token:invalid. Every response, errors
+// included, is marked no-store: the request carries a secret and a password.
+func handleResetPassword(logger *slog.Logger, svc *auth.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		var req resetPasswordRequest
+		if err := decodeJSON(w, r, &req, maxAuthBodyBytes); err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidRequest)
+			return
+		}
+		if err := svc.ResetPassword(r.Context(), req.Token, req.Password); err != nil {
+			writeServiceError(w, r, logger, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "password_reset"})
 	}
 }
 

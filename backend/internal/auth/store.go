@@ -11,11 +11,14 @@ import (
 )
 
 // Values of user_tokens.purpose.
-const PurposeEmailVerification = "email_verification"
+const (
+	PurposeEmailVerification = "email_verification"
+	PurposePasswordReset     = "password_reset"
+)
 
 // Lock order: a transaction that changes user_tokens or sessions rows of an existing user
 // must first lock that user's row (SELECT … FOR UPDATE on users). Every token
-// flow (verification, resend, and later password reset) follows it, so two
+// flow (verification, resend, forgot and reset password) follows it, so two
 // flows on one account serialize on the user row instead of deadlocking on
 // user and token rows taken in opposite orders. Registration is exempt: the
 // user row it creates is invisible to others until commit. Login takes the
@@ -173,6 +176,146 @@ func reissueVerificationTokenTx(ctx context.Context, tx pgx.Tx,
 	return true, nil
 }
 
+// issuePasswordResetToken replaces the password reset token of the account
+// with the given email, verified or not (decision 017), and returns its id.
+// It returns issued=false, having changed nothing, if there is no such account.
+func issuePasswordResetToken(ctx context.Context, pool *pgxpool.Pool,
+	email string, tokenHash []byte, ttl time.Duration) (userID string, issued bool, err error) {
+	err = pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+		userID, issued, err = issuePasswordResetTokenTx(ctx, tx, email, tokenHash, ttl)
+		return err
+	})
+	if err != nil {
+		return "", false, fmt.Errorf("auth: issue password reset token: %w", err)
+	}
+	return userID, issued, nil
+}
+
+func issuePasswordResetTokenTx(ctx context.Context, tx pgx.Tx,
+	email string, tokenHash []byte, ttl time.Duration) (string, bool, error) {
+	var userID string
+	err := tx.QueryRow(ctx, `SELECT id FROM users WHERE email = $1 FOR UPDATE`, email).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("lock user: %w", err)
+	}
+	if err := issueToken(ctx, tx, userID, PurposePasswordReset, tokenHash, ttl); err != nil {
+		return "", false, err
+	}
+	return userID, true, nil
+}
+
+// findPasswordResetOwner returns the email of the account whose password
+// reset token has the given hash, if that token is usable now: not used,
+// replaced or expired. It only reads, without locking: resetPasswordTx
+// decides under the user lock. Its purpose is to reject dead tokens before
+// any argon2 work and to learn the email for the password policy.
+func findPasswordResetOwner(ctx context.Context, pool *pgxpool.Pool, tokenHash []byte) (email string, found bool, err error) {
+	err = pool.QueryRow(ctx,
+		`SELECT u.email FROM user_tokens t JOIN users u ON u.id = t.user_id
+		 WHERE t.token_hash = $1 AND t.purpose = $2 AND t.used_at IS NULL AND t.expires_at > now()`,
+		tokenHash, PurposePasswordReset).Scan(&email)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("auth: find password reset owner: %w", err)
+	}
+	return email, true, nil
+}
+
+// passwordReset reports what resetPassword did. userID and email are set only
+// when ok.
+type passwordReset struct {
+	ok              bool
+	userID, email   string
+	sessionsRevoked int64
+}
+
+// resetPassword consumes the password reset token with the given hash and,
+// in the same transaction, replaces its owner's password hash with newHash,
+// revokes all of the owner's sessions and deletes the owner's other unused
+// one-time tokens (decision 017). Completing a reset proves control of the
+// mailbox, so an unverified account becomes verified. It returns ok=false,
+// having changed nothing, if the token is not usable: unknown, wrong purpose,
+// used, replaced or expired.
+//
+// The new password takes effect at commit, together with everything else:
+// no other transaction sees the new hash with live old sessions, or an
+// unused token with the new hash.
+func resetPassword(ctx context.Context, pool *pgxpool.Pool, tokenHash []byte, newHash string) (r passwordReset, err error) {
+	err = pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+		r, err = resetPasswordTx(ctx, tx, tokenHash, newHash)
+		return err
+	})
+	if err != nil {
+		return passwordReset{}, fmt.Errorf("auth: consume password reset token: %w", err)
+	}
+	return r, nil
+}
+
+func resetPasswordTx(ctx context.Context, tx pgx.Tx, tokenHash []byte, newHash string) (passwordReset, error) {
+	// Only takes the user lock (see Lock order); the UPDATE below decides.
+	var userID, email string
+	err := tx.QueryRow(ctx,
+		`SELECT u.id, u.email FROM user_tokens t JOIN users u ON u.id = t.user_id
+		 WHERE t.token_hash = $1 AND t.purpose = $2
+		 FOR UPDATE OF u`,
+		tokenHash, PurposePasswordReset).Scan(&userID, &email)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return passwordReset{}, nil
+	}
+	if err != nil {
+		return passwordReset{}, fmt.Errorf("lock user: %w", err)
+	}
+
+	// Single use (decision 004). The statement sees rows committed while it
+	// waited for the lock above, so a concurrent reset with the same token or
+	// a replacement by forgot-password makes it match nothing.
+	tag, err := tx.Exec(ctx,
+		`UPDATE user_tokens SET used_at = now()
+		 WHERE token_hash = $1 AND purpose = $2 AND user_id = $3
+		   AND used_at IS NULL AND expires_at > now()`,
+		tokenHash, PurposePasswordReset, userID)
+	if err != nil {
+		return passwordReset{}, fmt.Errorf("use token: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return passwordReset{}, nil
+	}
+
+	// A login that verified the old hash re-checks it under FOR SHARE (see
+	// createSession), so it either finished before this lock, and its session
+	// is revoked below, or waits and then sees the new hash.
+	if _, err := tx.Exec(ctx,
+		`UPDATE users SET password_hash = $2, email_verified_at = COALESCE(email_verified_at, now()), updated_at = now()
+		 WHERE id = $1`,
+		userID, newHash); err != nil {
+		return passwordReset{}, fmt.Errorf("update password: %w", err)
+	}
+
+	// A new statement: it sees every session committed before it started,
+	// including one a login committed while this transaction waited for the
+	// user lock. A session locked by a refresh or logout is waited for and
+	// re-checked against its committed version.
+	tag, err = tx.Exec(ctx,
+		`UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`, userID)
+	if err != nil {
+		return passwordReset{}, fmt.Errorf("revoke sessions: %w", err)
+	}
+	revoked := tag.RowsAffected()
+
+	// No other one-time secret (e.g. a pending verification link) outlives
+	// the account's recovery. The consumed token is kept, as used.
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM user_tokens WHERE user_id = $1 AND used_at IS NULL`, userID); err != nil {
+		return passwordReset{}, fmt.Errorf("delete unused tokens: %w", err)
+	}
+	return passwordReset{ok: true, userID: userID, email: email, sessionsRevoked: revoked}, nil
+}
+
 // loginUser is what login needs to know about the account for an email.
 type loginUser struct {
 	id           string
@@ -204,8 +347,8 @@ var errPasswordChanged = errors.New("auth: password changed during login")
 // verified. Otherwise it writes nothing and returns errPasswordChanged.
 //
 // The re-check holds the user row FOR SHARE until commit (see Lock order).
-// A password change (later: reset, which revokes all sessions) holding the
-// row FOR UPDATE makes this wait and then see the new hash, so no session
+// A password reset (which revokes all sessions, see resetPasswordTx) holding
+// the row FOR UPDATE makes this wait and then see the new hash, so no session
 // created with the old password can slip past the revocation; if login gets
 // the lock first, the change waits until the session exists and can revoke
 // it. Concurrent logins share the lock and don't wait for each other.

@@ -230,7 +230,7 @@ func TestCreateSessionRejectsChangedPassword(t *testing.T) {
 	}
 }
 
-// A password change (later: password reset) that holds the user row while
+// A password change (such as a reset) that holds the user row while
 // login is between verifying and inserting must win: once it commits, the
 // login's re-check sees the new hash and creates nothing. Otherwise reset's
 // "revoke all sessions" could miss a session created with the old password.

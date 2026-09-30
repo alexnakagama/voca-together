@@ -17,9 +17,16 @@ func New(logger *slog.Logger, authSvc *auth.Service) http.Handler {
 	mux.HandleFunc("POST /v1/auth/register", handleRegister(logger, authSvc))
 	mux.HandleFunc("POST /v1/auth/verify-email", handleVerifyEmail(logger, authSvc))
 	mux.HandleFunc("POST /v1/auth/resend-verification", handleResendVerification(logger, authSvc))
+	mux.HandleFunc("POST /v1/auth/forgot-password", handleForgotPassword(logger, authSvc))
+	mux.HandleFunc("POST /v1/auth/reset-password", handleResetPassword(logger, authSvc))
 	mux.HandleFunc("POST /v1/auth/login", handleLogin(logger, authSvc))
 	mux.HandleFunc("POST /v1/auth/refresh", handleRefresh(logger, authSvc))
 	mux.HandleFunc("POST /v1/auth/logout", handleLogout(logger, authSvc))
+
+	// Pages opened from emailed links (decision 006). GET only renders; POST
+	// calls the same service as the JSON API.
+	mux.HandleFunc("GET /reset-password", handleResetPasswordPage())
+	mux.HandleFunc("POST /reset-password", handleResetPasswordForm(logger, authSvc))
 
 	// Protected routes: each is wrapped individually, so public routes never
 	// require a token and a route can't become public by accident of order.

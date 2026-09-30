@@ -43,9 +43,10 @@ routing patterns, pgx, goose, x/crypto). Keep dependencies minimal.
 - `cmd/api/main.go` builds all dependencies (config → pool → migrations → services → router) and handles graceful
   shutdown, then `authSvc.Wait()` drains background emails.
 - `internal/server` is the HTTP layer only: routing (`server.go`), JSON decode/encode and error codes
-  (`respond.go`), and the `requireAccessToken` middleware (`authn.go`). Protected routes are wrapped **individually**
-  in `server.New`; handlers read `auth.Identity` from context via `identityFrom` and pass `UserID` explicitly to
-  services, so domain packages never read the request context.
+  (`respond.go`), the `requireAccessToken` middleware (`authn.go`), and the HTML pages that emailed links open
+  (`pages.go`, templates embedded from `pages/`; GET never uses a token, POST calls the same service). Protected
+  routes are wrapped **individually** in `server.New`; handlers read `auth.Identity` from context via
+  `identityFrom` and pass `UserID` explicitly to services, so domain packages never read the request context.
 - `internal/auth` owns the domain: `Service` (business logic, argon2 slot limiter, background email sending),
   `store.go` (SQL), tokens, password policy/hashing, email content. Errors are typed (`errors.go`) and mapped to
   HTTP in `server`.
