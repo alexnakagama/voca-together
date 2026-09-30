@@ -19,6 +19,10 @@ func (s *Service) ForgotPassword(ctx context.Context, emailInput string) error {
 	if err != nil {
 		return validationError(err)
 	}
+	// Unknown addresses consume too: otherwise a 429 would mark real accounts.
+	if err := allowAccount(s.limits.Mail, addr); err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("auth: forgot password: %w", err)
 	}

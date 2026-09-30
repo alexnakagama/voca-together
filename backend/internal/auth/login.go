@@ -39,8 +39,9 @@ type Credentials struct {
 // ErrInvalidCredentials after the same argon2 work (unknown emails verify
 // against a dummy hash), so neither the result nor its timing reveals which
 // addresses have accounts. ErrEmailNotVerified is returned only once the
-// password is correct. Invalid input returns a *ValidationError before any
-// hashing or database access. Credentials are returned only after the
+// password is correct. Invalid input returns a *ValidationError, and a
+// spent per-account limit a *RateLimitedError, before any hashing or
+// database access. Credentials are returned only after the
 // session is committed.
 func (s *Service) Login(ctx context.Context, emailInput, password, userAgent string) (Credentials, error) {
 	addr, emailErr := NormalizeEmail(emailInput)
@@ -49,6 +50,10 @@ func (s *Service) Login(ctx context.Context, emailInput, password, userAgent str
 		passwordErr = ErrPasswordRequired
 	}
 	if err := validationError(emailErr, passwordErr); err != nil {
+		return Credentials{}, err
+	}
+	// Before any database or argon2 work, and for unknown addresses too.
+	if err := allowAccount(s.limits.Login, addr); err != nil {
 		return Credentials{}, err
 	}
 	if err := ctx.Err(); err != nil {

@@ -204,7 +204,7 @@ func TestResetPasswordEndpointInternalErrorIsOpaque(t *testing.T) {
 }
 
 func TestPasswordResetEndpointsArePostOnly(t *testing.T) {
-	handler := New(nil, nil)
+	handler := New(nil, nil, Options{})
 	for _, path := range []string{forgotPath, resetPath} {
 		for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
 			rec := httptest.NewRecorder()

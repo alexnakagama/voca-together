@@ -212,7 +212,7 @@ func TestResendVerificationEndpointInternalErrorIsOpaque(t *testing.T) {
 }
 
 func TestVerificationEndpointsArePostOnly(t *testing.T) {
-	h := New(slog.New(slog.DiscardHandler), nil)
+	h := New(slog.New(slog.DiscardHandler), nil, Options{})
 	for _, path := range []string{verifyPath, resendPath} {
 		for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
 			rec := httptest.NewRecorder()

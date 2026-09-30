@@ -39,7 +39,7 @@ func newTestService(t *testing.T, sender email.Sender) testService {
 	t.Helper()
 	pool := testutil.DB(t)
 	logs := &bytes.Buffer{}
-	svc := NewService(pool, sender, mustParseURL(t, testBaseURL), slog.New(slog.NewTextHandler(logs, nil)))
+	svc := NewService(pool, sender, mustParseURL(t, testBaseURL), slog.New(slog.NewTextHandler(logs, nil)), AccountLimits{})
 	t.Cleanup(svc.Wait)
 	return testService{Service: svc, pool: pool, logs: logs}
 }
@@ -323,7 +323,7 @@ func TestRegisterDatabaseFailure(t *testing.T) {
 // ---- Password hashing limiter ----
 
 func TestHashSlotsBoundConcurrency(t *testing.T) {
-	s := &Service{hashSlots: make(chan struct{}, 2)}
+	s := &Service{hashSlots: make(chan struct{}, 2), hashQueueTimeout: hashQueueTimeout}
 	var mu sync.Mutex
 	running, peak := 0, 0
 	var wg sync.WaitGroup
@@ -351,7 +351,7 @@ func TestHashSlotsBoundConcurrency(t *testing.T) {
 }
 
 func TestHashSlotWaitHonorsContext(t *testing.T) {
-	s := &Service{hashSlots: make(chan struct{}, 1)}
+	s := &Service{hashSlots: make(chan struct{}, 1), hashQueueTimeout: hashQueueTimeout}
 	s.hashSlots <- struct{}{} // the only slot is busy
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -364,7 +364,7 @@ func TestHashSlotWaitHonorsContext(t *testing.T) {
 }
 
 func TestNewServiceSizesHashSlotsToCPUs(t *testing.T) {
-	s := NewService(nil, nil, nil, slog.New(slog.DiscardHandler))
+	s := NewService(nil, nil, nil, slog.New(slog.DiscardHandler), AccountLimits{})
 	if got, want := cap(s.hashSlots), runtime.GOMAXPROCS(0); got != want {
 		t.Errorf("hash slots = %d, want GOMAXPROCS = %d", got, want)
 	}

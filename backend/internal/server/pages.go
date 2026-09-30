@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"vocatogether/backend/internal/auth"
 )
@@ -22,11 +23,13 @@ var resetPasswordPage = template.Must(template.ParseFS(pageFiles, "pages/reset_p
 
 // Page states of resetPasswordPage.
 const (
-	pageForm       = "form"
-	pageDone       = "done"
-	pageInvalid    = "invalid"
-	pageBadRequest = "bad_request"
-	pageError      = "error"
+	pageForm        = "form"
+	pageDone        = "done"
+	pageInvalid     = "invalid"
+	pageBadRequest  = "bad_request"
+	pageRateLimited = "rate_limited"
+	pageUnavailable = "unavailable"
+	pageError       = "error"
 )
 
 type resetPasswordPageData struct {
@@ -102,11 +105,22 @@ func handleResetPasswordForm(logger *slog.Logger, svc *auth.Service) http.Handle
 				}
 			}
 			writePage(w, http.StatusUnprocessableEntity, page)
+		case unavailable(err):
+			logger.WarnContext(r.Context(), "request unavailable", "route", r.Pattern, "err", err)
+			setRetryAfter(w, retryAfterUnavailable)
+			writePage(w, http.StatusServiceUnavailable, resetPasswordPageData{State: pageUnavailable})
 		default:
 			logger.ErrorContext(r.Context(), "request failed", "route", r.Pattern, "err", err)
 			writePage(w, http.StatusInternalServerError, resetPasswordPageData{State: pageError})
 		}
 	}
+}
+
+// writeRateLimitedPage is the reset form's 429, for the per-IP limit it
+// shares with the JSON API. Nothing was done: the link is still usable.
+func writeRateLimitedPage(w http.ResponseWriter, retryAfter time.Duration) {
+	setRetryAfter(w, retryAfter)
+	writePage(w, http.StatusTooManyRequests, resetPasswordPageData{State: pageRateLimited})
 }
 
 func formPage(token string) resetPasswordPageData {

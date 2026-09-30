@@ -20,6 +20,14 @@ const (
 	verificationTokenTTL = 24 * time.Hour
 	// emailSendTimeout bounds each background send, which outlives its request.
 	emailSendTimeout = 10 * time.Second
+	// maxInFlightEmails bounds concurrent background sends (see
+	// sendInBackground): at least 3 emails a second get out even if every
+	// send takes the full timeout.
+	maxInFlightEmails = 32
+	// hashQueueTimeout bounds the wait for an argon2 slot. A request that
+	// waits longer gets ErrOverloaded (503) instead of queueing until its
+	// client gives up.
+	hashQueueTimeout = 5 * time.Second
 )
 
 // Service implements the authentication use cases. It knows nothing about
@@ -29,26 +37,40 @@ type Service struct {
 	sender  email.Sender
 	baseURL *url.URL // public base URL for emailed links
 	logger  *slog.Logger
-	sends   sync.WaitGroup
+	limits  AccountLimits
+
+	sends sync.WaitGroup
+	// emailSlots bounds concurrent background sends (see sendInBackground).
+	emailSlots chan struct{}
 
 	// hashSlots bounds concurrent argon2 work, shared by every flow that
 	// hashes or verifies a password (see withHashSlot).
-	hashSlots chan struct{}
+	hashSlots        chan struct{}
+	hashQueueTimeout time.Duration
 	// dummyHash is verified against when login finds no usable hash, so
 	// unknown emails cost as much as wrong passwords.
 	dummyHash string
+
+	// cleanupBatchSize is how many rows each cleanup statement deletes.
+	cleanupBatchSize int
 }
 
-func NewService(pool *pgxpool.Pool, sender email.Sender, baseURL *url.URL, logger *slog.Logger) *Service {
+// NewService returns the auth service. limits are the per-account rate
+// limits (NewAccountLimits); the zero AccountLimits disables them.
+func NewService(pool *pgxpool.Pool, sender email.Sender, baseURL *url.URL, logger *slog.Logger, limits AccountLimits) *Service {
 	return &Service{
-		pool:    pool,
-		sender:  sender,
-		baseURL: baseURL,
-		logger:  logger,
+		pool:       pool,
+		sender:     sender,
+		baseURL:    baseURL,
+		logger:     logger,
+		limits:     limits,
+		emailSlots: make(chan struct{}, maxInFlightEmails),
 		// argon2 with parallelism 1 is single-threaded CPU work: more
 		// concurrent hashes than CPUs add memory (19 MiB each) but no throughput.
-		hashSlots: make(chan struct{}, runtime.GOMAXPROCS(0)),
-		dummyHash: HashPassword(rand.Text()),
+		hashSlots:        make(chan struct{}, runtime.GOMAXPROCS(0)),
+		hashQueueTimeout: hashQueueTimeout,
+		dummyHash:        HashPassword(rand.Text()),
+		cleanupBatchSize: cleanupBatchSize,
 	}
 }
 
@@ -59,6 +81,9 @@ func NewService(pool *pgxpool.Pool, sender email.Sender, baseURL *url.URL, logge
 func (s *Service) Register(ctx context.Context, emailInput, password string) error {
 	addr, emailErr := NormalizeEmail(emailInput)
 	if err := validationError(emailErr, ValidatePassword(password, addr)); err != nil {
+		return err
+	}
+	if err := allowAccount(s.limits.Mail, addr); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
@@ -117,6 +142,9 @@ func (s *Service) ResendVerification(ctx context.Context, emailInput string) err
 	if err != nil {
 		return validationError(err)
 	}
+	if err := allowAccount(s.limits.Mail, addr); err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("auth: resend verification: %w", err)
 	}
@@ -135,17 +163,22 @@ func (s *Service) ResendVerification(ctx context.Context, emailInput string) err
 // withHashSlot runs f, which does argon2 work, once a hash slot is free.
 // Without this bound, concurrent unauthenticated requests (register, login)
 // could allocate 19 MiB each without limit and exhaust memory. Waiting
-// requests give up when their context ends, e.g. when the client disconnects.
-// Every account state waits in the same queue, so queueing time reveals
-// nothing about accounts.
+// requests give up when their context ends, e.g. when the client disconnects,
+// or with ErrOverloaded after hashQueueTimeout. Every account state waits in
+// the same queue, so queueing time and ErrOverloaded reveal nothing about
+// accounts.
 func (s *Service) withHashSlot(ctx context.Context, f func()) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	timeout := time.NewTimer(s.hashQueueTimeout)
+	defer timeout.Stop()
 	select {
 	case s.hashSlots <- struct{}{}:
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-timeout.C:
+		return ErrOverloaded
 	}
 	defer func() { <-s.hashSlots }()
 	f()
@@ -180,13 +213,27 @@ func (s *Service) verifyPassword(ctx context.Context, encoded, password string) 
 // The send gets its own timeout, detached from the request's cancellation
 // (the request ends before the send does) but keeping its values.
 //
-// A failed send is logged and not retried: the user can ask for a new email.
-// kind names the email type; the message itself (recipient, links) and its
-// body are never logged.
+// Delivery is best effort until a durable outbox exists (decision 018): a 202
+// means the request was accepted, never that an email went out. A failed send
+// is logged and not retried, and when maxInFlightEmails sends are already
+// running the message is dropped and logged, so a slow provider under abuse
+// can't pile up goroutines. Either way the user can ask for a new email, and
+// the response is the same as for a delivered one. kind names the email type;
+// the message itself (recipient, links) and its body are never logged.
+//
+// An outbox would replace this function's body (insert the message in the
+// request's transaction, deliver from a worker); callers need not change.
 func (s *Service) sendInBackground(reqCtx context.Context, kind string, msg email.Message) {
+	select {
+	case s.emailSlots <- struct{}{}:
+	default:
+		s.logger.WarnContext(reqCtx, "auth: email dropped, too many sends in flight", "kind", kind)
+		return
+	}
 	s.sends.Add(1)
 	go func() {
 		defer s.sends.Done()
+		defer func() { <-s.emailSlots }()
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(reqCtx), emailSendTimeout)
 		defer cancel()
 		if err := s.sender.Send(ctx, msg); err != nil {

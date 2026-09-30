@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"time"
 )
 
 // Error responses have the shape
@@ -23,7 +24,14 @@ const (
 
 	codeInvalidRefreshToken = "invalid_refresh_token"
 	codeInvalidAccessToken  = "invalid_access_token"
+
+	codeRateLimited        = "rate_limited"
+	codeServiceUnavailable = "service_unavailable"
 )
+
+// retryAfterUnavailable is the Retry-After of a 503: about one argon2 queue
+// timeout, after which a retry meets a fresh queue.
+const retryAfterUnavailable = 5 * time.Second
 
 type errorResponse struct {
 	Error errorBody `json:"error"`
@@ -47,6 +55,23 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, code string) {
 	writeJSON(w, status, errorResponse{Error: errorBody{Code: code}})
+}
+
+// writeRateLimited answers 429 rate_limited. Nothing was done, so retrying
+// after retryAfter is always safe, including with the same refresh token.
+func writeRateLimited(w http.ResponseWriter, retryAfter time.Duration) {
+	w.Header().Set("Cache-Control", "no-store")
+	setRetryAfter(w, retryAfter)
+	writeError(w, http.StatusTooManyRequests, codeRateLimited)
+}
+
+// writeUnavailable answers 503 service_unavailable: the server is overloaded
+// or the request ran out of time. Unlike a 429, work may have been committed
+// (see requestTimeout).
+func writeUnavailable(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-store")
+	setRetryAfter(w, retryAfterUnavailable)
+	writeError(w, http.StatusServiceUnavailable, codeServiceUnavailable)
 }
 
 // decodeJSON reads exactly one JSON value of at most maxBytes into dst,

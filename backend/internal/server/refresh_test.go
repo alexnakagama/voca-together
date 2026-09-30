@@ -230,7 +230,7 @@ func TestRefreshEndpointInternalErrorIsOpaque(t *testing.T) {
 }
 
 func TestRefreshEndpointIsPostOnly(t *testing.T) {
-	h := New(slog.New(slog.DiscardHandler), nil)
+	h := New(slog.New(slog.DiscardHandler), nil, Options{})
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(method, refreshPath, nil))

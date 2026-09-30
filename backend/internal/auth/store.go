@@ -589,3 +589,45 @@ func findUserByID(ctx context.Context, pool *pgxpool.Pool, userID string) (u Use
 	}
 	return u, true, nil
 }
+
+// Cleanup deletes (see Service.cleanup) take the rows they delete with
+// FOR UPDATE SKIP LOCKED: they never wait for a lock, so they can't be part of
+// a deadlock cycle with the token flows (which lock the user row, then token
+// rows) or with refresh and logout (one session row). A locked row is skipped
+// and deleted by a later run. Deleting a referencing row locks nothing in
+// users.
+
+// deleteDeadSessions deletes up to limit sessions that ended (absolute
+// expiry, sliding refresh expiry or revocation) more than retention ago.
+func deleteDeadSessions(ctx context.Context, pool *pgxpool.Pool, retention time.Duration, limit int) (int64, error) {
+	tag, err := pool.Exec(ctx,
+		`DELETE FROM sessions WHERE id IN (
+		     SELECT id FROM sessions
+		     WHERE expires_at < now() - make_interval(secs => $1)
+		        OR refresh_expires_at < now() - make_interval(secs => $1)
+		        OR revoked_at < now() - make_interval(secs => $1)
+		     LIMIT $2
+		     FOR UPDATE SKIP LOCKED)`,
+		retention.Seconds(), limit)
+	if err != nil {
+		return 0, fmt.Errorf("delete sessions: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// deleteDeadTokens deletes up to limit one-time tokens, used or not, that
+// expired more than retention ago. A used token is never usable again, so
+// its expiry bounds how long it is kept as an audit record.
+func deleteDeadTokens(ctx context.Context, pool *pgxpool.Pool, retention time.Duration, limit int) (int64, error) {
+	tag, err := pool.Exec(ctx,
+		`DELETE FROM user_tokens WHERE id IN (
+		     SELECT id FROM user_tokens
+		     WHERE expires_at < now() - make_interval(secs => $1)
+		     LIMIT $2
+		     FOR UPDATE SKIP LOCKED)`,
+		retention.Seconds(), limit)
+	if err != nil {
+		return 0, fmt.Errorf("delete tokens: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}

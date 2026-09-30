@@ -51,21 +51,39 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	authSvc := auth.NewService(pool, sender, baseURL, logger)
+	authSvc := auth.NewService(pool, sender, baseURL, logger, auth.NewAccountLimits(logger))
 	// Runs after the server has shut down: lets in-flight emails finish.
 	defer authSvc.Wait()
 
 	srv := &http.Server{
-		Addr:              cfg.HTTPAddr,
-		Handler:           server.New(logger, authSvc),
+		Addr: cfg.HTTPAddr,
+		Handler: server.New(logger, authSvc, server.Options{
+			TrustedProxyHops: cfg.TrustedProxyHops,
+			HSTS:             cfg.IsProduction(),
+			IPLimits:         server.NewIPLimits(logger),
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
+		// Auth requests need a few hundred bytes of headers; the default is 1 MiB.
+		MaxHeaderBytes: 32 << 10,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Deletes dead sessions and one-time tokens; stops with ctx, and is
+	// waited for before the pool closes.
+	cleanupDone := make(chan struct{})
+	go func() {
+		defer close(cleanupDone)
+		authSvc.RunCleanup(ctx, time.Minute, time.Hour)
+	}()
+	defer func() {
+		stop() // also on the listen-error path, where no signal ended ctx
+		<-cleanupDone
+	}()
 
 	errCh := make(chan error, 1)
 	go func() {

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -55,9 +56,11 @@ type tokenResponse struct {
 }
 
 // handleRegister always answers 202 for valid input, whether or not the
-// address already has an account (no account enumeration).
+// address already has an account (no account enumeration). 202 means
+// accepted, not that an email was delivered (decision 018).
 func handleRegister(logger *slog.Logger, svc *auth.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		var req registerRequest
 		if err := decodeJSON(w, r, &req, maxAuthBodyBytes); err != nil {
 			writeError(w, http.StatusBadRequest, codeInvalidRequest)
@@ -75,6 +78,7 @@ func handleRegister(logger *slog.Logger, svc *auth.Service) http.HandlerFunc {
 // the user in.
 func handleVerifyEmail(logger *slog.Logger, svc *auth.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		var req verifyEmailRequest
 		if err := decodeJSON(w, r, &req, maxAuthBodyBytes); err != nil {
 			writeError(w, http.StatusBadRequest, codeInvalidRequest)
@@ -92,6 +96,7 @@ func handleVerifyEmail(logger *slog.Logger, svc *auth.Service) http.HandlerFunc 
 // or not it has an account and whatever its state (no account enumeration).
 func handleResendVerification(logger *slog.Logger, svc *auth.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
 		var req resendVerificationRequest
 		if err := decodeJSON(w, r, &req, maxAuthBodyBytes); err != nil {
 			writeError(w, http.StatusBadRequest, codeInvalidRequest)
@@ -236,14 +241,23 @@ func writeTokens(w http.ResponseWriter, c auth.Credentials) {
 }
 
 // writeServiceError maps an auth service error to a response: validation
-// errors to 422 with their fields, login, refresh and access-token outcomes to 401/403, anything else
-// to an opaque 500 whose details go only to the log. Service errors never
-// contain secrets.
+// errors to 422 with their fields, login, refresh and access-token outcomes
+// to 401/403, a spent per-account limit to 429, overload or the request
+// deadline to 503, anything else to an opaque 500 whose details go only to
+// the log. Service errors never contain secrets.
 func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, err error) {
 	var verr *auth.ValidationError
+	var limited *auth.RateLimitedError
 	switch {
 	case errors.As(err, &verr):
 		writeValidationError(w, verr)
+		return
+	case errors.As(err, &limited):
+		writeRateLimited(w, limited.RetryAfter)
+		return
+	case unavailable(err):
+		logger.WarnContext(r.Context(), "request unavailable", "route", r.Pattern, "err", err)
+		writeUnavailable(w)
 		return
 	case errors.Is(err, auth.ErrInvalidCredentials):
 		writeError(w, http.StatusUnauthorized, codeInvalidCredentials)
@@ -262,6 +276,13 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logg
 	}
 	logger.ErrorContext(r.Context(), "request failed", "route", r.Pattern, "err", err)
 	writeError(w, http.StatusInternalServerError, codeInternalError)
+}
+
+// unavailable reports whether err means the server couldn't serve the request
+// in time: the argon2 queue was full, or the request deadline passed
+// (requestDeadline; a client disconnect is Canceled, not DeadlineExceeded).
+func unavailable(err error) bool {
+	return errors.Is(err, auth.ErrOverloaded) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func writeValidationError(w http.ResponseWriter, verr *auth.ValidationError) {

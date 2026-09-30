@@ -35,9 +35,9 @@ func newTestAPI(t *testing.T) testAPI {
 	logs := &bytes.Buffer{}
 	logger := slog.New(slog.NewTextHandler(logs, nil))
 	base, _ := url.Parse("https://api.example.com")
-	svc := auth.NewService(pool, rec, base, logger)
+	svc := auth.NewService(pool, rec, base, logger, auth.AccountLimits{})
 	t.Cleanup(svc.Wait)
-	return testAPI{handler: New(logger, svc), svc: svc, pool: pool, emails: rec, logs: logs}
+	return testAPI{handler: New(logger, svc, Options{}), svc: svc, pool: pool, emails: rec, logs: logs}
 }
 
 func (a testAPI) post(body string) *httptest.ResponseRecorder {
@@ -158,7 +158,7 @@ func TestRegisterInternalErrorIsOpaque(t *testing.T) {
 
 func TestRegisterRejectsOtherMethods(t *testing.T) {
 	rec := httptest.NewRecorder()
-	New(slog.New(slog.DiscardHandler), nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, registerPath, nil))
+	New(slog.New(slog.DiscardHandler), nil, Options{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, registerPath, nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405", rec.Code)
 	}

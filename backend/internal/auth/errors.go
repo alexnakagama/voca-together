@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"strings"
+	"time"
 )
 
 // FieldError is a validation failure on one input field. Field and Code are
@@ -86,3 +87,18 @@ func validationError(errs ...error) error {
 	}
 	return &ValidationError{Fields: fields}
 }
+
+// RateLimitedError means a per-account limit refused the request before any
+// work was done (decision 018). It is returned identically for every address,
+// whether or not it has an account, so it reveals nothing about accounts.
+// RetryAfter is when the next attempt will be allowed.
+type RateLimitedError struct {
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitedError) Error() string { return "auth: rate limited" }
+
+// ErrOverloaded means the request waited hashQueueTimeout for an argon2 slot
+// without getting one. Every flow that hashes shares one queue, so it says
+// nothing about the account either.
+var ErrOverloaded = errors.New("auth: overloaded")

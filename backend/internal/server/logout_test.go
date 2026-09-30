@@ -42,6 +42,9 @@ func requireLoggedOut(t *testing.T, rec *httptest.ResponseRecorder) {
 		t.Errorf("body = %q, want empty", rec.Body)
 	}
 	want := http.Header{"Cache-Control": {"no-store"}}
+	for name, value := range apiSecurityHeaders {
+		want.Set(name, value)
+	}
 	if !reflect.DeepEqual(rec.Header(), want) {
 		t.Errorf("headers = %v, want %v", rec.Header(), want)
 	}
@@ -161,7 +164,7 @@ func TestLogoutEndpointInternalErrorIsOpaque(t *testing.T) {
 }
 
 func TestLogoutEndpointIsPostOnly(t *testing.T) {
-	h := New(slog.New(slog.DiscardHandler), nil)
+	h := New(slog.New(slog.DiscardHandler), nil, Options{})
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(method, logoutPath, nil))

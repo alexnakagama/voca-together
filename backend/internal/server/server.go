@@ -4,33 +4,53 @@ package server
 import (
 	"log/slog"
 	"net/http"
+	"net/netip"
 
 	"vocatogether/backend/internal/auth"
+	"vocatogether/backend/internal/ratelimit"
 )
 
+// Options configures New. The zero value (used by tests) trusts no proxy,
+// sends no HSTS and applies no per-IP limits.
+type Options struct {
+	// TrustedProxyHops is config.Config.TrustedProxyHops (see clientKey).
+	TrustedProxyHops int
+	// HSTS sends Strict-Transport-Security (production).
+	HSTS     bool
+	IPLimits IPLimits
+}
+
 // New returns the API's router. Dependencies are built by the caller (main).
-func New(logger *slog.Logger, authSvc *auth.Service) http.Handler {
+func New(logger *slog.Logger, authSvc *auth.Service, opts Options) http.Handler {
+	lim := opts.IPLimits
+	perIP := func(l *ratelimit.Limiter[netip.Prefix]) func(http.Handler) http.Handler {
+		return limitByIP(l, opts.TrustedProxyHops, writeRateLimited)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	mux.HandleFunc("POST /v1/auth/register", handleRegister(logger, authSvc))
-	mux.HandleFunc("POST /v1/auth/verify-email", handleVerifyEmail(logger, authSvc))
-	mux.HandleFunc("POST /v1/auth/resend-verification", handleResendVerification(logger, authSvc))
-	mux.HandleFunc("POST /v1/auth/forgot-password", handleForgotPassword(logger, authSvc))
-	mux.HandleFunc("POST /v1/auth/reset-password", handleResetPassword(logger, authSvc))
-	mux.HandleFunc("POST /v1/auth/login", handleLogin(logger, authSvc))
-	mux.HandleFunc("POST /v1/auth/refresh", handleRefresh(logger, authSvc))
+	// Public auth routes, each behind its per-IP limit (decision 018).
+	mux.Handle("POST /v1/auth/register", perIP(lim.Register)(handleRegister(logger, authSvc)))
+	mux.Handle("POST /v1/auth/verify-email", perIP(lim.Token)(handleVerifyEmail(logger, authSvc)))
+	mux.Handle("POST /v1/auth/resend-verification", perIP(lim.Email)(handleResendVerification(logger, authSvc)))
+	mux.Handle("POST /v1/auth/forgot-password", perIP(lim.Email)(handleForgotPassword(logger, authSvc)))
+	mux.Handle("POST /v1/auth/reset-password", perIP(lim.Token)(handleResetPassword(logger, authSvc)))
+	mux.Handle("POST /v1/auth/login", perIP(lim.Login)(handleLogin(logger, authSvc)))
+	mux.Handle("POST /v1/auth/refresh", perIP(lim.Refresh)(handleRefresh(logger, authSvc)))
 	mux.HandleFunc("POST /v1/auth/logout", handleLogout(logger, authSvc))
 
 	// Pages opened from emailed links (decision 006). GET only renders; POST
-	// calls the same service as the JSON API.
+	// calls the same service as the JSON API and shares its limit.
 	mux.HandleFunc("GET /reset-password", handleResetPasswordPage())
-	mux.HandleFunc("POST /reset-password", handleResetPasswordForm(logger, authSvc))
+	mux.Handle("POST /reset-password",
+		limitByIP(lim.Token, opts.TrustedProxyHops, writeRateLimitedPage)(handleResetPasswordForm(logger, authSvc)))
 
 	// Protected routes: each is wrapped individually, so public routes never
 	// require a token and a route can't become public by accident of order.
 	authn := requireAccessToken(logger, authSvc)
 	mux.Handle("GET /v1/me", authn(handleMe(logger, authSvc)))
-	return mux
+
+	return securityHeaders(opts.HSTS)(requestDeadline(requestTimeout)(mux))
 }
