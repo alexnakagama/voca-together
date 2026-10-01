@@ -27,7 +27,10 @@ const (
 // logout are also exempt: each locks a single session row and nothing else,
 // so neither can be part of a deadlock cycle (see rotateRefreshToken and
 // revokeSessionByAccessToken). Authentication takes no locks at all: it is
-// a single read (see findSessionByAccessToken).
+// a single read (see findSessionByAccessToken). Google sign-in takes the
+// existing user's row FOR SHARE, like login, before inserting a session; any
+// earlier locks it holds are only on keys it inserted itself (see
+// googleSignInTx).
 
 // createUserWithVerificationToken inserts a user and its email verification
 // token in one transaction, so a user never exists without the token that
@@ -380,9 +383,8 @@ var errPasswordChanged = errors.New("auth: password changed during login")
 // the lock first, the change waits until the session exists and can revoke
 // it. Concurrent logins share the lock and don't wait for each other.
 //
-// All timestamps use one transaction clock (now()), so created_at equals
-// last_used_at and each expiry is an exact offset from it. The refresh-token
-// fields start in the state rotation expects: no previous hash, not revoked.
+// A passwordless account (password_hash NULL) never matches the re-check, so
+// it can't get a session this way whatever passwordHash is.
 func createSession(ctx context.Context, pool *pgxpool.Pool,
 	userID, passwordHash string, accessHash, refreshHash []byte, userAgent *string) (sessionID string, err error) {
 	err = pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
@@ -397,24 +399,45 @@ func createSession(ctx context.Context, pool *pgxpool.Pool,
 			return fmt.Errorf("lock user: %w", err)
 		}
 
-		err = tx.QueryRow(ctx,
-			`INSERT INTO sessions (user_id, access_token_hash, access_expires_at,
-			                       refresh_token_hash, refresh_expires_at, expires_at, user_agent)
-			 VALUES ($1, $2, now() + make_interval(secs => $3),
-			         $4, now() + make_interval(secs => $5), now() + make_interval(secs => $6), $7)
-			 RETURNING id`,
-			userID, accessHash, accessTokenTTL.Seconds(),
-			refreshHash, refreshTokenTTL.Seconds(), sessionMaxLifetime.Seconds(), userAgent).Scan(&sessionID)
-		if err != nil {
-			return fmt.Errorf("insert session: %w", err)
-		}
-		return nil
+		sessionID, err = insertSessionTx(ctx, tx, userID, accessHash, refreshHash, userAgent)
+		return err
 	})
 	if errors.Is(err, errPasswordChanged) {
 		return "", err
 	}
 	if err != nil {
 		return "", fmt.Errorf("auth: create session: %w", err)
+	}
+	return sessionID, nil
+}
+
+// insertSessionTx inserts a new session for the user and returns its id. It
+// is the only way sessions are created: password login (createSession) and
+// Google sign-in (googleSignInTx) share it, so every session starts with the
+// same lifetimes whatever the sign-in method.
+//
+// The caller must already hold the user's row lock, FOR SHARE at least (see
+// Lock order), so the session can't slip past a concurrent password reset's
+// revocation of all sessions.
+//
+// All timestamps use one transaction clock (now()), so created_at equals
+// last_used_at and each expiry is an exact offset from it. The refresh-token
+// fields start in the state rotation expects: no previous hash, not revoked.
+// userAgent must come from normalizeUserAgent (the sessions_user_agent_length
+// CHECK backs it up).
+func insertSessionTx(ctx context.Context, tx pgx.Tx,
+	userID string, accessHash, refreshHash []byte, userAgent *string) (string, error) {
+	var sessionID string
+	err := tx.QueryRow(ctx,
+		`INSERT INTO sessions (user_id, access_token_hash, access_expires_at,
+		                       refresh_token_hash, refresh_expires_at, expires_at, user_agent)
+		 VALUES ($1, $2, now() + make_interval(secs => $3),
+		         $4, now() + make_interval(secs => $5), now() + make_interval(secs => $6), $7)
+		 RETURNING id`,
+		userID, accessHash, accessTokenTTL.Seconds(),
+		refreshHash, refreshTokenTTL.Seconds(), sessionMaxLifetime.Seconds(), userAgent).Scan(&sessionID)
+	if err != nil {
+		return "", fmt.Errorf("insert session: %w", err)
 	}
 	return sessionID, nil
 }
@@ -617,6 +640,258 @@ func findUserByID(ctx context.Context, pool *pgxpool.Pool, userID string) (u Use
 	return u, true, nil
 }
 
+// identityProviderGoogle is user_identities.provider for Google accounts.
+const identityProviderGoogle = "google"
+
+// googleTokenUseSkew is added to a Google ID token's exp to get the
+// expires_at of its google_id_token_uses row. It must be at least the clock
+// skew googleid tolerates on exp (one minute), so the row outlives every
+// moment the verifier still accepts the token: deleting it earlier would let
+// the token be replayed.
+const googleTokenUseSkew = time.Minute
+
+// googleSignInInput is what googleSignIn needs. The service has verified the
+// ID token and decided the email policy; the store applies the decision and
+// nothing else.
+type googleSignInInput struct {
+	tokenHash   []byte    // SHA-256 of the raw ID token
+	tokenExpiry time.Time // the verified exp claim
+	subject     string    // Google sub
+	// eligible says whether email may create a new account. It is used only
+	// when no user has the identity yet; a linked identity signs in whatever
+	// its token's email is now (users.email is never synced).
+	eligible bool
+	email    string // normalized; used only if eligible
+	// The new session's token hashes and normalized user agent.
+	accessHash, refreshHash []byte
+	userAgent               *string
+}
+
+// googleOutcome is what googleSignIn did.
+type googleOutcome int
+
+const (
+	googleSignedIn      googleOutcome = iota // session created for the identity's existing user
+	googleCreated                            // new user, identity and session created
+	googleReplayed                           // the ID token was used before; nothing written
+	googleIneligible                         // unknown identity, eligible=false; only the token use written
+	googleAccountExists                      // unknown identity, email taken; only the token use written
+)
+
+// googleSignInResult reports googleSignIn's outcome. userID is set for
+// googleSignedIn, googleCreated and googleAccountExists (the existing
+// account, for logs); sessionID only when a session was created.
+type googleSignInResult struct {
+	outcome           googleOutcome
+	userID, sessionID string
+}
+
+// errGoogleIdentityRace means another transaction linked the same Google
+// subject to a different new user first. googleSignInTx returns it so the
+// whole transaction rolls back (its user insert included); googleSignIn then
+// retries once.
+var errGoogleIdentityRace = errors.New("auth: google identity created concurrently")
+
+// googleSignIn records the ID token as used and signs in the user linked to
+// the Google subject, creating the user and identity first if none is linked
+// and in.eligible allows it (decision 020). Everything commits together,
+// including the token use for googleIneligible and googleAccountExists: once
+// a verified token reaches the database it is spent, whatever the outcome.
+//
+// If a concurrent first sign-in links the same subject to a different email
+// first (errGoogleIdentityRace), the transaction is rolled back and retried
+// once; the retry finds the identity and signs in to its user. The rollback
+// also removed the token use, so the retry consumes the token again (and
+// reports googleReplayed if a request with the same token won meanwhile). A
+// second race can't happen, since identities are never deleted, so it is
+// returned as an error.
+func googleSignIn(ctx context.Context, pool *pgxpool.Pool, in googleSignInInput) (r googleSignInResult, err error) {
+	for attempt := 1; ; attempt++ {
+		err = pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+			r, err = googleSignInTx(ctx, tx, in)
+			return err
+		})
+		if !errors.Is(err, errGoogleIdentityRace) || attempt == 2 {
+			break
+		}
+	}
+	if err != nil {
+		return googleSignInResult{}, fmt.Errorf("auth: google sign-in: %w", err)
+	}
+	return r, nil
+}
+
+// googleSignInTx runs one attempt of googleSignIn. The order of its steps is
+// what keeps concurrent sign-ins correct and deadlock-free; don't reorder
+// them:
+//
+//  1. Consume the ID token: the first statement, holding no other lock. Two
+//     requests with the same token serialize on its primary key and the
+//     second finds the conflict (googleReplayed).
+//  2. Look up the identity and lock its user FOR SHARE (lock order, as in
+//     login). Found: insert the session (step 6).
+//  3. Not found and not eligible: googleIneligible.
+//  4. Insert the user. ON CONFLICT waits for a concurrent insert of the same
+//     email and then sees its outcome; a conflict re-runs the lookup as a new
+//     statement, which sees a concurrent first sign-in that committed the user
+//     and identity together (then step 6 for its user). Otherwise the email
+//     belongs to another account: googleAccountExists, with that account
+//     left untouched (no automatic linking).
+//  5. Insert the identity. A conflict means a concurrent first sign-in of the
+//     same subject with another email committed first: errGoogleIdentityRace.
+//  6. Insert the session. The users_auth_method_required trigger checks the
+//     new user at commit.
+//
+// Each attempt inserts at most one row per unique key (token hash, email,
+// subject), always in that order, and only waits for a transaction inserting
+// the same key. Such a transaction inserted its own earlier keys before this
+// one could wait on it and never waits back on this one's, so the waits
+// can't form a cycle. Session hashes are random and never conflict. The
+// FOR SHARE in step 2 waits only for a transaction holding the user row FOR
+// UPDATE (reset, verification), which never touches the Google tables.
+// PostgreSQL's unique constraints are the only arbiter: no extra locks.
+func googleSignInTx(ctx context.Context, tx pgx.Tx, in googleSignInInput) (googleSignInResult, error) {
+	consumed, err := consumeGoogleIDTokenTx(ctx, tx, in.tokenHash, in.tokenExpiry)
+	if err != nil {
+		return googleSignInResult{}, err
+	}
+	if !consumed {
+		return googleSignInResult{outcome: googleReplayed}, nil
+	}
+
+	r := googleSignInResult{outcome: googleSignedIn}
+	var found bool
+	r.userID, found, err = lockUserByGoogleSubjectTx(ctx, tx, in.subject)
+	if err != nil {
+		return googleSignInResult{}, err
+	}
+	if !found {
+		if !in.eligible {
+			return googleSignInResult{outcome: googleIneligible}, nil
+		}
+		var created bool
+		r.userID, created, err = insertGoogleUserTx(ctx, tx, in.email)
+		if err != nil {
+			return googleSignInResult{}, err
+		}
+		if created {
+			r.outcome = googleCreated
+			inserted, err := insertGoogleIdentityTx(ctx, tx, r.userID, in.subject)
+			if err != nil {
+				return googleSignInResult{}, err
+			}
+			if !inserted {
+				return googleSignInResult{}, errGoogleIdentityRace
+			}
+		} else {
+			// The email is taken. If its user got this identity concurrently,
+			// this is a plain sign-in; otherwise it is someone else's account.
+			r.userID, found, err = lockUserByGoogleSubjectTx(ctx, tx, in.subject)
+			if err != nil {
+				return googleSignInResult{}, err
+			}
+			if !found {
+				existing, err := findUserIDByEmailTx(ctx, tx, in.email)
+				if err != nil {
+					return googleSignInResult{}, err
+				}
+				return googleSignInResult{outcome: googleAccountExists, userID: existing}, nil
+			}
+		}
+	}
+
+	r.sessionID, err = insertSessionTx(ctx, tx, r.userID, in.accessHash, in.refreshHash, in.userAgent)
+	if err != nil {
+		return googleSignInResult{}, err
+	}
+	return r, nil
+}
+
+// consumeGoogleIDTokenTx records the ID token with the given hash as used,
+// and reports false, having written nothing, if it was already. Only the
+// hash is stored. The row expires googleTokenUseSkew after the token, once
+// the verifier rejects the token anyway, and cleanup then deletes it.
+func consumeGoogleIDTokenTx(ctx context.Context, tx pgx.Tx, tokenHash []byte, tokenExpiry time.Time) (bool, error) {
+	var one int
+	err := tx.QueryRow(ctx,
+		`INSERT INTO google_id_token_uses (token_hash, expires_at) VALUES ($1, $2)
+		 ON CONFLICT ON CONSTRAINT google_id_token_uses_pkey DO NOTHING
+		 RETURNING 1`,
+		tokenHash, tokenExpiry.Add(googleTokenUseSkew)).Scan(&one)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("consume google id token: %w", err)
+	}
+	return true, nil
+}
+
+// lockUserByGoogleSubjectTx returns the user linked to the Google subject
+// and locks that user's row FOR SHARE (see Lock order).
+func lockUserByGoogleSubjectTx(ctx context.Context, tx pgx.Tx, subject string) (userID string, found bool, err error) {
+	err = tx.QueryRow(ctx,
+		`SELECT u.id FROM user_identities i JOIN users u ON u.id = i.user_id
+		 WHERE i.provider = $1 AND i.subject = $2
+		 FOR SHARE OF u`,
+		identityProviderGoogle, subject).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("find google identity: %w", err)
+	}
+	return userID, true, nil
+}
+
+// insertGoogleUserTx inserts a passwordless user whose email counts as
+// verified (by Google, decision 020) and returns its id. If the address
+// already has an account it writes nothing and returns created=false. ON
+// CONFLICT keeps the error, and the address it would contain, out of the way,
+// as in createUserWithVerificationToken. The users_auth_method_required
+// trigger requires an identity for the user by commit.
+func insertGoogleUserTx(ctx context.Context, tx pgx.Tx, email string) (userID string, created bool, err error) {
+	err = tx.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, email_verified_at) VALUES ($1, NULL, now())
+		 ON CONFLICT ON CONSTRAINT users_email_key DO NOTHING
+		 RETURNING id`,
+		email).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("insert user: %w", err)
+	}
+	return userID, true, nil
+}
+
+// insertGoogleIdentityTx links the Google subject to the user. It returns
+// inserted=false, having written nothing, if the subject is already linked
+// (to anyone). A second Google identity for the same user violates
+// user_identities_user_provider_key and is returned as an error: no flow
+// links an existing user yet.
+func insertGoogleIdentityTx(ctx context.Context, tx pgx.Tx, userID, subject string) (inserted bool, err error) {
+	tag, err := tx.Exec(ctx,
+		`INSERT INTO user_identities (user_id, provider, subject) VALUES ($1, $2, $3)
+		 ON CONFLICT ON CONSTRAINT user_identities_provider_subject_key DO NOTHING`,
+		userID, identityProviderGoogle, subject)
+	if err != nil {
+		return false, fmt.Errorf("insert identity: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// findUserIDByEmailTx returns the id of the account with the email, without
+// locking it: googleAccountExists only reports it, and nothing is written.
+func findUserIDByEmailTx(ctx context.Context, tx pgx.Tx, email string) (string, error) {
+	var userID string
+	err := tx.QueryRow(ctx, `SELECT id FROM users WHERE email = $1`, email).Scan(&userID)
+	if err != nil {
+		return "", fmt.Errorf("find user: %w", err)
+	}
+	return userID, nil
+}
+
 // Cleanup deletes (see Service.cleanup) take the rows they delete with
 // FOR UPDATE SKIP LOCKED: they never wait for a lock, so they can't be part of
 // a deadlock cycle with the token flows (which lock the user row, then token
@@ -655,6 +930,25 @@ func deleteDeadTokens(ctx context.Context, pool *pgxpool.Pool, retention time.Du
 		retention.Seconds(), limit)
 	if err != nil {
 		return 0, fmt.Errorf("delete tokens: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// deleteExpiredGoogleTokenUses deletes up to limit Google ID token uses whose
+// expires_at has passed. They need no retention: past expires_at the
+// verifier rejects the token itself (see googleTokenUseSkew), so the row no
+// longer prevents anything. Like the other deletes, it never waits for a lock
+// (SKIP LOCKED).
+func deleteExpiredGoogleTokenUses(ctx context.Context, pool *pgxpool.Pool, limit int) (int64, error) {
+	tag, err := pool.Exec(ctx,
+		`DELETE FROM google_id_token_uses WHERE token_hash IN (
+		     SELECT token_hash FROM google_id_token_uses
+		     WHERE expires_at < now()
+		     LIMIT $1
+		     FOR UPDATE SKIP LOCKED)`,
+		limit)
+	if err != nil {
+		return 0, fmt.Errorf("delete google id token uses: %w", err)
 	}
 	return tag.RowsAffected(), nil
 }

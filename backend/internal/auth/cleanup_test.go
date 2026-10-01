@@ -1,8 +1,11 @@
 package auth
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -80,7 +83,7 @@ func TestCleanupDeletesOnlyRowsPastRetention(t *testing.T) {
 	usedOld := insertToken(t, s.pool, userID, PurposePasswordReset, old, true)
 	expiredRecent := insertToken(t, s.pool, userID, PurposeEmailVerification, recent, true)
 
-	sessions, tokens, err := s.cleanup(context.Background())
+	sessions, tokens, _, err := s.cleanup(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +116,7 @@ func TestCleanupDeletesOnlyRowsPastRetention(t *testing.T) {
 	}
 
 	// Idempotent.
-	if sessions, tokens, err := s.cleanup(context.Background()); err != nil || sessions != 0 || tokens != 0 {
+	if sessions, tokens, _, err := s.cleanup(context.Background()); err != nil || sessions != 0 || tokens != 0 {
 		t.Errorf("second run: sessions = %d, tokens = %d, err = %v", sessions, tokens, err)
 	}
 }
@@ -126,7 +129,7 @@ func TestCleanupWorksInBatches(t *testing.T) {
 		insertSession(t, s.pool, userID, old, old, nil)
 	}
 	s.cleanupBatchSize = 2
-	sessions, _, err := s.cleanup(context.Background())
+	sessions, _, _, err := s.cleanup(context.Background())
 	if err != nil || sessions != 5 {
 		t.Fatalf("sessions = %d, err = %v; want 5 over several batches", sessions, err)
 	}
@@ -156,7 +159,7 @@ func TestCleanupSkipsLockedRows(t *testing.T) {
 
 	runCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	sessions, tokens, err := s.cleanup(runCtx)
+	sessions, tokens, _, err := s.cleanup(runCtx)
 	if err != nil {
 		t.Fatalf("cleanup blocked or failed: %v", err)
 	}
@@ -167,27 +170,53 @@ func TestCleanupSkipsLockedRows(t *testing.T) {
 	if err := tx.Rollback(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if sessions, tokens, err := s.cleanup(ctx); err != nil || sessions != 1 || tokens != 1 {
+	if sessions, tokens, _, err := s.cleanup(ctx); err != nil || sessions != 1 || tokens != 1 {
 		t.Errorf("after unlock: sessions = %d, tokens = %d, err = %v; want 1 and 1", sessions, tokens, err)
 	}
 }
 
-func TestRunCleanupRunsPeriodicallyAndStops(t *testing.T) {
-	s := newTestService(t, &email.Recorder{})
-	userID := seedAccount(t, s.pool, "ana@example.com", "hash", true)
-	insertSession(t, s.pool, userID, -31*day, -31*day, nil)
+// lockedBuffer is a log destination a test may read while the service is
+// still writing to it.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// runCleanupUntilLogged runs RunCleanup in the background (first run after
+// 1 ms, then every interval) until it has logged a completed run, then stops
+// it and returns its log. It must wait for the log line, not for rows to
+// disappear: a run whose context ends midway returns without logging (by
+// design, at shutdown), so stopping as soon as the first table was clean
+// raced with the rest of the run.
+func runCleanupUntilLogged(t *testing.T, s testService, interval time.Duration) string {
+	t.Helper()
+	logs := &lockedBuffer{}
+	s.logger = slog.New(slog.NewTextHandler(logs, nil))
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan struct{})
 	go func() {
-		s.RunCleanup(ctx, time.Millisecond, 10*time.Millisecond)
+		s.RunCleanup(ctx, time.Millisecond, interval)
 		close(done)
 	}()
 
 	deadline := time.Now().Add(5 * time.Second)
-	for countRows(t, s.pool, `SELECT count(*) FROM sessions`) != 0 {
+	for !strings.Contains(logs.String(), `msg="auth: cleanup" `) {
 		if time.Now().After(deadline) {
-			t.Fatal("cleanup did not run")
+			t.Fatalf("cleanup did not complete a run:\n%s", logs.String())
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -197,12 +226,52 @@ func TestRunCleanupRunsPeriodicallyAndStops(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("RunCleanup did not stop when its context ended")
 	}
+	return logs.String()
+}
 
-	logs := s.logs.String()
-	if !strings.Contains(logs, "auth: cleanup") || !strings.Contains(logs, "sessions_deleted=1") {
+func TestRunCleanupRunsPeriodicallyAndStops(t *testing.T) {
+	s := newTestService(t, &email.Recorder{})
+	userID := seedAccount(t, s.pool, "ana@example.com", "hash", true)
+	insertSession(t, s.pool, userID, -31*day, -31*day, nil)
+
+	logs := runCleanupUntilLogged(t, s, 10*time.Millisecond)
+	if n := countRows(t, s.pool, `SELECT count(*) FROM sessions`); n != 0 {
+		t.Errorf("sessions = %d after a logged run, want 0", n)
+	}
+	if !strings.Contains(logs, "sessions_deleted=1") {
 		t.Errorf("cleanup not logged with counts:\n%s", logs)
 	}
 	if strings.Contains(logs, "ana@example.com") {
 		t.Errorf("cleanup log contains an email:\n%s", logs)
+	}
+}
+
+// Regression: the run is logged even when its later statements are slow.
+// The test used to stop RunCleanup as soon as the sessions were gone; when
+// the remaining deletes took longer than its 5 ms poll (a loaded machine,
+// the race detector), the run was cancelled midway and logged nothing. Here
+// the last delete always takes 50 ms, which reproduced that every time.
+func TestRunCleanupLogsSlowRun(t *testing.T) {
+	s := newTestService(t, &email.Recorder{})
+	ctx := context.Background()
+	userID := seedAccount(t, s.pool, "ana@example.com", "hash", true)
+	insertSession(t, s.pool, userID, -31*day, -31*day, nil)
+	if _, err := s.pool.Exec(ctx, `
+		CREATE FUNCTION test_slow_delete() RETURNS trigger LANGUAGE plpgsql
+		AS $$ BEGIN PERFORM pg_sleep(0.05); RETURN NULL; END $$;
+		CREATE TRIGGER test_slow_delete BEFORE DELETE ON google_id_token_uses
+		FOR EACH STATEMENT EXECUTE FUNCTION test_slow_delete()`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := s.pool.Exec(ctx, `DROP TRIGGER test_slow_delete ON google_id_token_uses;
+			DROP FUNCTION test_slow_delete()`); err != nil {
+			t.Errorf("remove trigger: %v", err)
+		}
+	})
+
+	logs := runCleanupUntilLogged(t, s, time.Hour)
+	if !strings.Contains(logs, "sessions_deleted=1") || !strings.Contains(logs, "google_token_uses_deleted=0") {
+		t.Errorf("slow run not logged with counts:\n%s", logs)
 	}
 }

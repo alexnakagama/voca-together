@@ -544,3 +544,38 @@ and a wrong password. `email_not_verified` (403) is returned only after the pass
   with Google, plus "Forgot password" for a forgotten password. It still carries no link.
 - **Logs:** `auth: password reset requested for passwordless account` (`user_id`); email kind
   `passwordless_account`. Never logged: the email address.
+- **Stage 3: Google sign-in store** (`googleSignIn` in `store.go`; no service, endpoint or config yet). One READ
+  COMMITTED transaction, in this order:
+  1. **Single use of the ID token:** the first statement is
+     `INSERT INTO google_id_token_uses … ON CONFLICT DO NOTHING RETURNING`, storing only SHA-256(raw token) and
+     `exp + 1 min` (`googleTokenUseSkew`, at least the verifier's clock skew, so the row outlives every moment the
+     verifier still accepts the token). A conflict is `googleReplayed`: nothing else is written and no session is
+     created. Two requests with the same token serialize on the primary key. The token use commits with every outcome
+     that follows (sign-in, ineligible, account exists): once a verified token reaches the database it is spent. A
+     rollback (DB error) removes it, so a retry after a 500 isn't refused as a replay.
+  2. **Resolve `(google, sub)`** and lock the user row `FOR SHARE` (017 lock order, like login). Found → session. The
+     token's current email is ignored and `users.email` is never synced.
+  3. Unknown identity: the store applies the `eligible` flag decided by the service (`googleIneligible`). It holds no
+     email policy of its own.
+  4. **Insert the user** (`password_hash` NULL, `email_verified_at = now()`) `ON CONFLICT ON CONSTRAINT
+     users_email_key DO NOTHING`. On conflict the lookup runs again as a new statement: a concurrent first sign-in of
+     the same subject committed user and identity together, so it is found (then a plain sign-in). Otherwise
+     `googleAccountExists`, returning the existing user's id for logs. Nothing is linked and the account is untouched.
+  5. **Insert the identity** `ON CONFLICT (provider, subject) DO NOTHING`. A conflict means the same subject raced with
+     another email and lost: `errGoogleIdentityRace` rolls everything back (the loser's user too) and `googleSignIn`
+     **retries the whole transaction once**. The retry consumes the token again (the rollback removed it) and finds
+     the identity. A second race can't happen while identities are never deleted, so it is returned as an error.
+     *Deviation from the plan:* the retry lives in the store wrapper, not in the service, so the SQL that causes the
+     race and its handling stay together and are tested against PostgreSQL directly.
+  6. **`insertSessionTx`**, extracted unchanged from `createSession`: the only session INSERT (same lifetimes on the
+     DB clock, same user-agent handling). The caller must hold the user row lock. The auth-method trigger checks
+     the new user at commit.
+- **No deadlocks:** each attempt inserts at most one row per unique key (token hash, email, subject), always in that
+  order, and only waits for a transaction inserting the same key. That transaction inserted its earlier keys before
+  this one could wait on it and never waits back on this one's. The `FOR SHARE` waits only for `FOR UPDATE` holders
+  (reset, verification), which never touch the Google tables. PostgreSQL's unique constraints are the only arbiter;
+  no advisory locks or extra mechanism.
+- **Cleanup:** `RunCleanup` also deletes `google_id_token_uses` rows past `expires_at` (no 30-day retention: past
+  it the verifier rejects the token itself), in batches with `FOR UPDATE SKIP LOCKED`, logged as
+  `google_token_uses_deleted`. This assumes the API servers' and the database's clocks are in sync (NTP), which the
+  verifier's exp and iat checks already require.
