@@ -29,7 +29,8 @@ TEST_DATABASE_URL=postgres://voca:voca@localhost:5432/voca_test?sslmode=disable 
 - DB-backed tests use `testutil.DB(t)`, which migrates and TRUNCATEs a single shared database. They **skip**
   silently when `TEST_DATABASE_URL` is unset, so a "passing" run without it proves little. Never use `t.Parallel`
   in them and always keep `-p 1`.
-- `testutil.DB` truncates `users, user_tokens, sessions`; add new tables there when adding migrations.
+- `testutil.DB` truncates `users, user_tokens, sessions, user_identities, google_id_token_uses`; add new tables there
+  when adding migrations.
 
 Config (env): `DATABASE_URL` (required, secret, never log it), `ENV` (`development`|`test`|`production`),
 `HTTP_ADDR` (default `:8080`), `APP_BASE_URL` (used in emailed links; https and a public host required in production),
@@ -39,17 +40,19 @@ production; only valid if the server is reachable solely through those proxies, 
 `Name <local@domain>` on a Resend-verified domain). Email sender by `ENV` (decision 019): production always uses Resend
 and refuses to start without both variables; development uses `LogSender` unless `RESEND_API_KEY` is set (then
 `EMAIL_FROM` is required too); test always uses `LogSender` and ignores both.
-`GOOGLE_CLIENT_ID` (public, the Web OAuth client ID that Google ID tokens must name as `aud`; decision 020 stage 6):
-required in production (startup fails without it), optional in development (unset disables Google sign-in), ignored
-in test. No Google client secret exists in this backend.
+`GOOGLE_CLIENT_ID` (public, the Web OAuth client ID that Google ID tokens must name as `aud`; never an Android client
+ID; decision 020 stage 6): required in production (startup fails without it), optional in development (unset
+disables Google sign-in), ignored in test. No Google client secret, API key, service account or Firebase exists in this
+backend.
 
 ## Architecture
 
 Modular monolith: one Go service, one PostgreSQL database, stdlib only where possible (`net/http` Go 1.22+
-routing patterns, pgx, goose, x/crypto). Keep dependencies minimal.
+routing patterns, pgx, goose, x/crypto, x/text). Keep dependencies minimal.
 
-- `cmd/api/main.go` builds all dependencies (config → email sender (`newEmailSender`) → pool → migrations → rate
-  limiters → services → router), runs the hourly retention cleanup (`authSvc.RunCleanup`), and handles graceful
+- `cmd/api/main.go` builds all dependencies (config → email sender (`newEmailSender`) → Google verifier
+  (`newGoogleVerifier`, before the DB so bad config exits at once) → pool → migrations → rate limiters → services →
+  router), runs the hourly retention cleanup (`authSvc.RunCleanup`), and handles graceful
   shutdown, then `authSvc.Wait()` drains background emails.
 - `internal/server` is the HTTP layer only: routing (`server.go`, `Options`), JSON decode/encode and error codes
   (`respond.go`), the `requireAccessToken` middleware (`authn.go`), per-IP limits and client IP (`limits.go`,
@@ -58,10 +61,15 @@ routing patterns, pgx, goose, x/crypto). Keep dependencies minimal.
   POST calls the same service). Protected routes are wrapped **individually** in `server.New`; handlers read
   `auth.Identity` from context via `identityFrom` and pass `UserID` explicitly to services, so domain packages never
   read the request context.
+- `internal/config` reads the environment into `Config` (validation per `ENV`; secrets held as `config.Secret`).
+  Only `main` uses it; `auth` and `server` read no configuration.
 - `internal/auth` owns the domain: `Service` (business logic, argon2 slot limiter with a queue timeout, bounded
-  best-effort background email sending), per-account limits (`limits.go`), retention cleanup (`cleanup.go`),
-  `store.go` (SQL), tokens, password policy/hashing, email content (text, plus HTML from `templates/` for link
-  emails). Errors are typed (`errors.go`) and mapped to HTTP in `server`.
+  best-effort background email sending), Google sign-in (`google.go`), per-account limits (`limits.go`), retention
+  cleanup (`cleanup.go`), `store.go` (SQL), tokens, password policy/hashing, email content (text, plus HTML from
+  `templates/` for link emails). Errors are typed (`errors.go`) and mapped to HTTP in `server`.
+- `internal/googleid` verifies Google ID tokens locally (stdlib RS256 + Google's key set, `Verifier` interface,
+  `Fake` for tests) and knows nothing about users, the DB or HTTP routes. Dependency direction is `auth → googleid`;
+  `server` never imports it, and only `main` constructs the verifier (`nil` = disabled, outside production only).
 - `internal/email` handles delivery only (`Sender` interface; `ResendSender` for production, stdlib HTTP client, no
   retries, sanitized errors; `LogSender` for dev/test; `Recorder` for unit tests). Dependency direction is
   `auth → email`, never the reverse. Resend click/open tracking must stay disabled (links carry tokens).
@@ -75,11 +83,13 @@ routing patterns, pgx, goose, x/crypto). Keep dependencies minimal.
   fields. Malformed JSON / unknown fields / trailing data / oversized body → 400 `invalid_request`. Anything else →
   opaque 500 `internal_error`, details only in logs.
 - Auth endpoints and protected routes send `Cache-Control: no-store` on every response, errors included.
-- Rate limits → 429 `rate_limited` with `Retry-After` (nothing was done; retry is safe). Argon2 queue timeout or the
-  10 s request deadline → 503 `service_unavailable` with `Retry-After` (work may have committed; see 018 for which
-  endpoints are safely retriable).
+- Rate limits → 429 `rate_limited` with `Retry-After` (nothing was done; retry is safe). Argon2 queue timeout, Google
+  keys unavailable, or the 10 s request deadline → 503 `service_unavailable` with `Retry-After` (work may have
+  committed; see 018 for which endpoints are safely retriable, 020 for Google).
 - New public routes that do real work get a per-IP limit in `server.New`; per-account checks run after validation and
-  before any DB/argon2 work, keyed by the normalized address whether or not the account exists.
+  before any DB/argon2 work, keyed by the normalized address whether or not the account exists. Google sign-in is the
+  exception: it shares `ip_login`, and its `account_login` key is `google:` + the verified `sub` (known only after
+  verification, still before the DB).
 
 ## Decisions log — read before changing auth
 
@@ -95,10 +105,31 @@ design decision, append a new entry there in the same style. Key invariants:
 - Uniform errors for all unusable tokens (one code per token kind); malformed tokens are rejected before any DB access.
 - Passwords: argon2id (PHC format, rehash on login), NFKC-normalized before hashing/verifying/policy checks — never
   change the normalization form without a migration path. Emails: trimmed, lowercased, printable ASCII only.
-- One-time tokens are consumed with a single conditional `UPDATE … RETURNING`. Lock order: transactions that touch an
-  existing user's `user_tokens` lock the `users` row `FOR UPDATE` first; session-only operations lock a single
-  session row.
+- One-time tokens (`user_tokens`) are consumed with a single conditional `UPDATE … RETURNING`. Lock order:
+  transactions that touch an existing user's `user_tokens` lock the `users` row `FOR UPDATE` first; session-only
+  operations lock a single session row.
 - 202 means accepted, not delivered: email is best effort (bounded in-flight sends, excess dropped, no retries) until an
   outbox exists.
-- Never log emails, passwords, tokens, token hashes, user agents, IPs, or request bodies. `auth.Token` redacts itself in
-  fmt, slog and JSON.
+- Never log emails, passwords, tokens, token hashes, user agents, IPs, or request bodies. Google ID tokens, `sub`,
+  and the client ID count too. `auth.Token`, `googleid.Claims` and `config.Secret` redact themselves in fmt, slog and
+  JSON.
+
+### Google sign-in (`POST /v1/auth/google`; decision 020, stage 7 summarizes the contract)
+
+- Google establishes identity only. The Google ID token travels only in that request's body and is never an API
+  credential; the response is an ordinary vt session, exactly as login returns it. Only `vt_at_`/`vt_rt_` tokens
+  authenticate anything else.
+- Verification is local and its security boundary is the **exact** `aud` match against `GOOGLE_CLIENT_ID` (the Web
+  client ID). `azp` and nonce are deliberately unchecked. That rests on our deployment assumptions (020 Stage 6
+  preconditions), not on a Google guarantee; see 020 Stage 2 before changing the Google Cloud project or adding a
+  web client.
+- Each verified ID token is accepted at most once: the first write of the sign-in transaction inserts its hash into
+  `google_id_token_uses`, and once that commits the token is spent (200, 403 or 409). After 500/503 or no response
+  clients sign in with a **new** ID token; replaying the old one is 401 `invalid_google_token`.
+- Accounts are found by `(google, sub)`; the token's email is never synced. A new identity creates a passwordless
+  account only if Google says its email is verified (no Gmail/Workspace-only restriction; don't add one). An address
+  that already has an account gets 409 `account_exists`: nothing is linked automatically, and that account may have
+  no password. Its 409 is the one deliberate enumeration exception (020).
+- Passwordless accounts (`password_hash` NULL) get no reset token (forgot sends a no-link notice) and the uniform 401
+  on password login. A deferred trigger requires every user to keep a password or an identity; flows that remove one
+  must lock the user row `FOR UPDATE`.
