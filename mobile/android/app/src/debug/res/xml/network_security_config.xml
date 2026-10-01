@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only (src/debug). Allows plain HTTP to the emulator's alias for the host machine (10.0.2.2) and
+     blocks it for every other host, but only for platform network stacks (WebView, HttpURLConnection, and
+     cronet_http/ok_http if adopted). Dart's own sockets (dart:io HttpClient, package:http's default client) ignore
+     this file: Flutter doesn't pass it to the Dart VM. For Dart traffic, the only cleartext control is
+     lib/config.dart, which requires an https API_BASE_URL in release builds. Release builds have no network security
+     config, so Android's default applies to platform stacks. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

@@ -4,8 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-VocaTogether: a language-exchange app. Right now the repo holds only the Go backend (`backend/`, module
-`vocatogether/backend`). A Flutter client is planned; `docs/decisions.md` already specifies client contracts for it.
+VocaTogether: a language-exchange app. The repo holds the Go backend (`backend/`, module `vocatogether/backend`) and
+the Flutter Android client (`mobile/`, package `vocatogether`, applicationId and namespace `com.vocatogether.app`).
+The client is at roadmap stage 1 (project and app shell only); `docs/decisions.md` specifies its contracts with the
+backend.
 
 ## Commands
 
@@ -31,6 +33,27 @@ TEST_DATABASE_URL=postgres://voca:voca@localhost:5432/voca_test?sslmode=disable 
   in them and always keep `-p 1`.
 - `testutil.DB` truncates `users, user_tokens, sessions, user_identities, google_id_token_uses`; add new tables there
   when adding migrations.
+
+Mobile (Flutter, Android only):
+
+```sh
+make mobile-analyze   # flutter analyze (FLUTTER=/path/to/flutter if it isn't on PATH)
+make mobile-test      # flutter test
+# from mobile/:
+flutter run --dart-define-from-file=config/dev.json   # emulator → backend from `make run` at http://10.0.2.2:8080
+flutter build apk --debug --dart-define-from-file=config/dev.json
+```
+
+- Build-time config comes only from `--dart-define-from-file` (`mobile/config/<env>.json`); `lib/config.dart`
+  validates it at startup and throws if it's missing or invalid. Every value is compiled into the APK and is
+  therefore public: never put a secret there. `API_BASE_URL` is an http(s) origin with no path, query, fragment or
+  credentials. Release builds require https.
+- Dart's own sockets (`dart:io` `HttpClient`, `package:http`'s default client on Android) ignore Android's Network
+  Security Configuration: Flutter doesn't pass it to the Dart VM. The https requirement on `API_BASE_URL` in
+  release builds (`lib/config.dart`) is the only cleartext control for Dart traffic, so every API request must be
+  built from that base URL. The debug-only `android/app/src/debug/res/xml/network_security_config.xml` (cleartext
+  only to `10.0.2.2`) governs only platform stacks: WebView, and `cronet_http`/`ok_http` if adopted.
+  `INTERNET` is declared in the main manifest because Flutter's template grants it only in debug and profile builds.
 
 Config (env): `DATABASE_URL` (required, secret, never log it), `ENV` (`development`|`test`|`production`),
 `HTTP_ADDR` (default `:8080`), `APP_BASE_URL` (used in emailed links; https and a public host required in production),
