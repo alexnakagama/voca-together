@@ -95,7 +95,7 @@ func TestNewEmailSender(t *testing.T) {
 func TestNewEmailSenderFromEnvironment(t *testing.T) {
 	base := map[string]string{"DATABASE_URL": "postgres://u:p@localhost:5432/voca"}
 	prod := map[string]string{"ENV": "production", "APP_BASE_URL": "https://api.example.com",
-		"TRUSTED_PROXY_HOPS": "1"}
+		"TRUSTED_PROXY_HOPS": "1", "GOOGLE_CLIENT_ID": testClientID}
 	resend := map[string]string{"RESEND_API_KEY": testKey, "EMAIL_FROM": testFrom}
 	for _, tc := range []struct {
 		name string

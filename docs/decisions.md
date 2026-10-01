@@ -635,4 +635,47 @@ and a wrong password. `email_not_verified` (403) is returned only after the pass
     spent, and a retry with it gets `invalid_google_token`. The client contract is: **after a 503 or 500, retry with
     a new ID token** (Google's SDKs mint one silently). The retry finds the account by subject. The orphaned
     session expires. A Google-keys 503 spent nothing, but clients can't tell 503s apart, so the same rule applies.
-  - Until `GOOGLE_CLIENT_ID` is configured (stage 6), the verifier is `nil` and every request gets the 401.
+  - Until `GOOGLE_CLIENT_ID` is configured (stage 6), the verifier is `nil` and every request gets the 401. (Superseded by
+    stage 6.)
+- **Stage 6: configuration and wiring** (`config.loadGoogle`, `newGoogleVerifier` in `main`). No migration.
+  - **One credential: `GOOGLE_CLIENT_ID`**, the **Web application** OAuth client ID, which the Android app passes as
+    `serverClientId` and Google puts in `aud`. The verifier checks ID tokens locally against Google's public key set,
+    so nothing exchanges a code or calls Google as the app. **Not required, on purpose:** a client secret
+    (`GOCSPX-…`), an API key, a service account, and the Android client IDs (the backend never sees them: `azp` isn't
+    checked, C4). The client ID is public, a plain string, not a `config.Secret`.
+  - **Format check (`googleid.ValidClientID`), structural only.** Google documents an example
+    (`1234567890-abc123def456.apps.googleusercontent.com`) but no grammar, and older IDs have no dash, so the prefix is
+    not constrained. It requires 1–255 bytes of printable ASCII without spaces, ending in exactly
+    `.apps.googleusercontent.com` after a non-empty prefix. Nothing is trimmed or case-folded. This catches
+    misconfiguration (empty, a pasted client secret, stray whitespace). It is not the security boundary: that is
+    `Verify`'s exact `aud` match, and a well-formed wrong ID still fails closed (every sign-in 401,
+    `wrong_audience`). Syntax can't tell a Web client ID from an Android one, so using the Web ID is a deployment
+    requirement. Errors name the variable and never echo the value, since a secret or token could have been
+    pasted there.
+  - **By environment** (the 019 pattern):
+    | `ENV` | `GOOGLE_CLIENT_ID` | Google sign-in |
+    |---|---|---|
+    | `production` | required, valid | enabled; **startup fails** if missing or invalid |
+    | `development` | optional, validated when set | enabled when set; unset → disabled (`nil` verifier: 401, `not_configured`) |
+    | `test` | ignored, even if set or invalid | disabled, so a test binary never reaches Google |
+
+    Disabled happens only when the variable is absent outside production. A missing configuration is a startup
+    error, never a runtime `ErrGoogleUnavailable`.
+  - **Composition:** `config.Load` validates, then `main` builds the verifier with `newGoogleVerifier(cfg, logger,
+    googleid.Options{})` (Google's key set, the hardened client, the real clock). That happens right after the email
+    sender and **before the database connects**, so a configuration failure exits at once. `main` re-checks
+    presence and format, as `newEmailSender` does, so production never falls back to disabled. Disabled is an
+    untyped `nil` (a typed nil pointer would look configured). The verifier is passed once, to `auth.NewService`;
+    `server` still imports no `googleid`, and `auth` reads no configuration. Tests inject `googleid.Fake` or a local
+    TLS key server. Startup logs `google sign-in` with `status` `enabled` or `disabled`, never the client ID.
+  - **No startup prefetch** of Google's keys: it would make the API's availability depend on Google's at boot.
+    Keys are fetched on the first sign-in. An outage stays a runtime 503 (Stage 5), and the stale grace covers
+    later outages. The verifier owns no goroutine but one in-flight fetch (at most 5 s), so shutdown has nothing to
+    close.
+  - **JWKS hardening:** response headers are capped at 16 KiB (`MaxResponseHeaderBytes`; net/http's default is
+    1 MiB), on the default transport and on a clone of an injected `*http.Transport`. Everything else was already in
+    place: body ≤ 64 KiB, ≤ 16 keys, 5 s timeout, no redirects, no cookies, Cache-Control max-age clamped to
+    [5 min, 24 h], at most one fetch a minute (unknown kids included), 6 h stale grace only while refresh fails.
+    Outbound proxies follow the standard `HTTPS_PROXY` variables.
+  - **Deployment preconditions** (from C4): the GCP project holds only VocaTogether's clients, and the Web client has
+    no authorized JavaScript origins or redirect URIs. Its client secret is never downloaded, used or deployed.

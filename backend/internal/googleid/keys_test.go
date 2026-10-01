@@ -550,3 +550,35 @@ func TestConcurrentVerificationDuringRotation(t *testing.T) {
 		t.Errorf("fetches = %d, want at most 11", c)
 	}
 }
+
+// Response headers are bounded like the body: a server sending more than
+// maxResponseHeaderBytes fails the fetch, and nothing is cached.
+func TestFetchRejectsOversizedHeaders(t *testing.T) {
+	f := newFixture(t)
+	f.ks.setHeader("X-Padding", strings.Repeat("a", maxResponseHeaderBytes+1))
+	_, err := f.v.Verify(context.Background(), f.valid())
+	requireUnavailable(t, err, failTransport)
+
+	// Headers under the cap are fine, once the throttle allows a new fetch.
+	f.ks.setHeader("X-Padding", strings.Repeat("a", maxResponseHeaderBytes/2))
+	f.clock.Advance(minRefetchInterval)
+	if _, err := f.v.Verify(context.Background(), f.valid()); err != nil {
+		t.Fatalf("verification after a normal response failed: %v", err)
+	}
+}
+
+// The injected client's transport is copied before the header cap is set.
+func TestInjectedTransportIsNotModified(t *testing.T) {
+	transport := &http.Transport{}
+	base := &http.Client{Transport: transport}
+	c := newHTTPClient(base)
+	if transport.MaxResponseHeaderBytes != 0 {
+		t.Error("the injected transport was modified")
+	}
+	if got := c.Transport.(*http.Transport).MaxResponseHeaderBytes; got != maxResponseHeaderBytes {
+		t.Errorf("MaxResponseHeaderBytes = %d, want %d", got, maxResponseHeaderBytes)
+	}
+	if got := newHTTPClient(nil).Transport.(*http.Transport).MaxResponseHeaderBytes; got != maxResponseHeaderBytes {
+		t.Errorf("default MaxResponseHeaderBytes = %d, want %d", got, maxResponseHeaderBytes)
+	}
+}

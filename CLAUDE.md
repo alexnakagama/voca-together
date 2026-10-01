@@ -39,6 +39,9 @@ production; only valid if the server is reachable solely through those proxies, 
 `Name <local@domain>` on a Resend-verified domain). Email sender by `ENV` (decision 019): production always uses Resend
 and refuses to start without both variables; development uses `LogSender` unless `RESEND_API_KEY` is set (then
 `EMAIL_FROM` is required too); test always uses `LogSender` and ignores both.
+`GOOGLE_CLIENT_ID` (public, the Web OAuth client ID that Google ID tokens must name as `aud`; decision 020 stage 6):
+required in production (startup fails without it), optional in development (unset disables Google sign-in), ignored
+in test. No Google client secret exists in this backend.
 
 ## Architecture
 

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"vocatogether/backend/internal/email"
+	"vocatogether/backend/internal/googleid"
 )
 
 // maxTrustedProxyHops is a sanity bound: real deployments have one or two.
@@ -35,6 +36,11 @@ type Config struct {
 	// ("local@domain" or "Name <local@domain>").
 	ResendAPIKey Secret
 	EmailFrom    string
+	// GoogleClientID is the Web OAuth client ID that Google ID tokens must
+	// name as their audience (decision 020). It is public, not a Secret.
+	// Empty means Google sign-in is disabled, which only development and
+	// test allow; test always leaves it empty.
+	GoogleClientID string
 }
 
 // Secret is a string that is redacted whenever it is formatted, logged or
@@ -128,6 +134,9 @@ func Load(getenv func(string) string) (Config, error) {
 	if err := loadEmail(&cfg, getenv); err != nil {
 		return Config{}, err
 	}
+	if err := loadGoogle(&cfg, getenv); err != nil {
+		return Config{}, err
+	}
 
 	return cfg, nil
 }
@@ -168,6 +177,33 @@ func loadEmail(cfg *Config, getenv func(string) string) error {
 	}
 
 	cfg.ResendAPIKey, cfg.EmailFrom = NewSecret(key), canonical
+	return nil
+}
+
+// loadGoogle reads GOOGLE_CLIENT_ID for cfg.Env:
+//   - production: required, so Google sign-in is never silently disabled;
+//   - development: optional (unset disables Google sign-in), validated if set;
+//   - test: ignored, even if set or invalid, so tests never reach Google.
+//
+// Only the shape is checked (googleid.ValidClientID); nothing is trimmed,
+// since the token's aud must match exactly. Errors never echo the value: a
+// client secret or token pasted into the variable must not reach the logs.
+func loadGoogle(cfg *Config, getenv func(string) string) error {
+	if cfg.Env == "test" {
+		return nil
+	}
+	id := getenv("GOOGLE_CLIENT_ID")
+	if id == "" {
+		if cfg.IsProduction() {
+			return errors.New("GOOGLE_CLIENT_ID is required in production")
+		}
+		return nil
+	}
+	if !googleid.ValidClientID(id) {
+		return errors.New("GOOGLE_CLIENT_ID is invalid: want the Web OAuth client ID, " +
+			"ending in .apps.googleusercontent.com (not a client secret)")
+	}
+	cfg.GoogleClientID = id
 	return nil
 }
 

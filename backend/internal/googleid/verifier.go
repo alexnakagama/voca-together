@@ -26,6 +26,19 @@ const (
 	maxAudienceBytes = 255
 )
 
+// clientIDSuffix ends every Google OAuth client ID.
+const clientIDSuffix = ".apps.googleusercontent.com"
+
+// ValidClientID reports whether s is shaped like a Google OAuth client ID:
+// at most maxAudienceBytes of printable ASCII without spaces, ending in
+// exactly ".apps.googleusercontent.com" after a non-empty prefix. Google
+// documents no grammar for the prefix (only examples), so nothing more is
+// assumed about it. This catches misconfiguration (an empty value, a client
+// secret, stray whitespace); the security check is Verify's exact aud match.
+func ValidClientID(s string) bool {
+	return printableASCII(s, maxAudienceBytes) && len(s) > len(clientIDSuffix) && strings.HasSuffix(s, clientIDSuffix)
+}
+
 // googleIssuers are the two spellings Google documents for iss.
 var googleIssuers = map[string]bool{"https://accounts.google.com": true, "accounts.google.com": true}
 

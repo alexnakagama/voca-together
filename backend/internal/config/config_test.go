@@ -5,13 +5,15 @@ import "testing"
 const testDBURL = "postgres://u:p@localhost:5432/voca"
 
 // env returns a getenv with DATABASE_URL set, overridden/extended by m. In
-// production it also sets a valid RESEND_API_KEY and EMAIL_FROM unless m
-// names them (even as ""), so tests of other settings don't fail on email.
+// production it also sets a valid RESEND_API_KEY, EMAIL_FROM and
+// GOOGLE_CLIENT_ID unless m names them (even as ""), so tests of other
+// settings don't fail on email or Google.
 func env(m map[string]string) func(string) string {
 	vars := map[string]string{"DATABASE_URL": testDBURL}
 	if m["ENV"] == "production" {
 		vars["RESEND_API_KEY"] = testResendKey
 		vars["EMAIL_FROM"] = testEmailFrom
+		vars["GOOGLE_CLIENT_ID"] = testGoogleClientID
 	}
 	for k, v := range m {
 		vars[k] = v

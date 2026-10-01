@@ -15,6 +15,7 @@ import (
 	"vocatogether/backend/internal/config"
 	"vocatogether/backend/internal/db"
 	"vocatogether/backend/internal/email"
+	"vocatogether/backend/internal/googleid"
 	"vocatogether/backend/internal/server"
 )
 
@@ -35,6 +36,11 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// Production defaults: Google's key set, the hardened client, the real clock.
+	google, err := newGoogleVerifier(cfg, logger, googleid.Options{})
+	if err != nil {
+		return err
+	}
 	baseURL, err := url.Parse(cfg.AppBaseURL) // already validated by config.Load
 	if err != nil {
 		return err
@@ -51,9 +57,7 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	// No Google verifier yet (nil: Google sign-in disabled, fails closed);
-	// it needs GOOGLE_CLIENT_ID configuration first.
-	authSvc := auth.NewService(pool, sender, baseURL, logger, auth.NewAccountLimits(logger), nil)
+	authSvc := auth.NewService(pool, sender, baseURL, logger, auth.NewAccountLimits(logger), google)
 	// Runs after the server has shut down: lets in-flight emails finish.
 	defer authSvc.Wait()
 
@@ -134,4 +138,40 @@ func newEmailSender(cfg config.Config, logger *slog.Logger) (email.Sender, error
 	}
 	logger.Info("email sender", "provider", "resend")
 	return sender, nil
+}
+
+// newGoogleVerifier returns the Google ID-token verifier for cfg and logs
+// whether Google sign-in is enabled (never the client ID):
+//   - production: a verifier for GOOGLE_CLIENT_ID, always; there is no
+//     fallback to disabled;
+//   - development: a verifier when GOOGLE_CLIENT_ID is set, nil otherwise
+//     (disabled: every Google sign-in is rejected as not configured);
+//   - test: nil, whatever the setting, so a test binary never reaches Google.
+//
+// Disabled is an untyped nil: a nil *googleid.TokenVerifier in the interface
+// would look configured to auth.Service. opts is googleid.Options{} in run;
+// tests point it at a local key server. Construction does no network work:
+// keys are fetched on first use, so startup doesn't depend on Google.
+func newGoogleVerifier(cfg config.Config, logger *slog.Logger, opts googleid.Options) (googleid.Verifier, error) {
+	id := cfg.GoogleClientID
+	if cfg.Env == "test" || (id == "" && !cfg.IsProduction()) {
+		logger.Info("google sign-in", "status", "disabled")
+		return nil, nil
+	}
+
+	// config.Load already checks both; check again rather than rely on it,
+	// since the alternative is production without Google sign-in or with an
+	// audience nothing can match. Errors never echo the value.
+	if id == "" {
+		return nil, errors.New("no Google verifier for production: GOOGLE_CLIENT_ID is required")
+	}
+	if !googleid.ValidClientID(id) {
+		return nil, errors.New("no Google verifier: GOOGLE_CLIENT_ID is invalid")
+	}
+	verifier, err := googleid.NewTokenVerifier([]string{id}, opts) // errors never echo the audience
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("google sign-in", "status", "enabled")
+	return verifier, nil
 }

@@ -27,6 +27,9 @@ const (
 	maxJWKSBytes = 64 << 10
 	// maxJWKSKeys caps the entries of a key set (Google publishes 2 or 3).
 	maxJWKSKeys = 16
+	// maxResponseHeaderBytes caps the key-set response headers (Google's are
+	// under 2 KiB; net/http's default is 1 MiB).
+	maxResponseHeaderBytes = 16 << 10
 
 	// A fetched set is fresh for the response's Cache-Control max-age,
 	// clamped to [minCacheLifetime, maxCacheLifetime]; defaultCacheLifetime
@@ -350,16 +353,29 @@ func cacheLifetime(headers []string) time.Duration {
 // newHTTPClient returns a copy of base (or of a default client) hardened for
 // key fetches: redirects are never followed (a 3xx fails the fetch, so a
 // redirect can't send us to another host), no cookie jar, and a timeout of
-// at most fetchTimeout. Proxy settings are the transport's, which for the
-// default client means the standard environment variables.
+// at most fetchTimeout. An *http.Transport (base's, or a clone of the default
+// one with fetchTimeout handshake and header timeouts when base has none) is
+// cloned and its response headers capped at maxResponseHeaderBytes; any other
+// RoundTripper is used as is. Proxy settings are the transport's, which for
+// the default means the standard environment variables.
 func newHTTPClient(base *http.Client) *http.Client {
 	var c http.Client
 	if base != nil {
 		c = *base
-	} else {
-		transport := http.DefaultTransport.(*http.Transport).Clone()
+	}
+	var transport *http.Transport
+	switch t := c.Transport.(type) {
+	case nil:
+		transport = http.DefaultTransport.(*http.Transport).Clone()
 		transport.TLSHandshakeTimeout = fetchTimeout
 		transport.ResponseHeaderTimeout = fetchTimeout
+	case *http.Transport:
+		transport = t.Clone()
+	}
+	if transport != nil {
+		if transport.MaxResponseHeaderBytes <= 0 || transport.MaxResponseHeaderBytes > maxResponseHeaderBytes {
+			transport.MaxResponseHeaderBytes = maxResponseHeaderBytes
+		}
 		c.Transport = transport
 	}
 	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }

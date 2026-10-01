@@ -40,8 +40,9 @@ type Service struct {
 	logger  *slog.Logger
 	limits  AccountLimits
 	// google verifies Google ID tokens. nil means Google sign-in isn't
-	// configured: every attempt gets ErrInvalidGoogleToken. A typed nil
-	// pointer is not nil here, so callers must pass an untyped nil.
+	// configured: every attempt gets ErrInvalidGoogleToken. Only development
+	// and test run without it; main never passes nil in production. A typed
+	// nil pointer is not nil here, so callers must pass an untyped nil.
 	google googleid.Verifier
 
 	sends sync.WaitGroup
@@ -62,7 +63,8 @@ type Service struct {
 
 // NewService returns the auth service. limits are the per-account rate
 // limits (NewAccountLimits); the zero AccountLimits disables them. google
-// verifies Google ID tokens; nil disables Google sign-in.
+// verifies Google ID tokens; nil disables Google sign-in (development and
+// test only).
 func NewService(pool *pgxpool.Pool, sender email.Sender, baseURL *url.URL, logger *slog.Logger,
 	limits AccountLimits, google googleid.Verifier) *Service {
 	return &Service{

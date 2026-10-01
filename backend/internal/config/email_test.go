@@ -128,9 +128,13 @@ func TestInvalidResendAPIKeyValues(t *testing.T) {
 }
 
 func TestSecretIsRedacted(t *testing.T) {
-	cfg, err := Load(env(map[string]string{"RESEND_API_KEY": testResendKey, "EMAIL_FROM": testEmailFrom}))
+	cfg, err := Load(env(map[string]string{"RESEND_API_KEY": testResendKey, "EMAIL_FROM": testEmailFrom,
+		"GOOGLE_CLIENT_ID": testGoogleClientID}))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if cfg.GoogleClientID != testGoogleClientID {
+		t.Fatalf("GoogleClientID = %q", cfg.GoogleClientID)
 	}
 	// The formats are variables so vet doesn't reject the deliberately wrong
 	// ones: %p on a value skips Format and prints fields by reflection.
