@@ -176,46 +176,64 @@ func reissueVerificationTokenTx(ctx context.Context, tx pgx.Tx,
 	return true, nil
 }
 
+// resetRequest is what issuePasswordResetToken did.
+type resetRequest int
+
+const (
+	resetNoAccount    resetRequest = iota // no account has the address; nothing written
+	resetIssued                           // a new reset token replaced any previous one
+	resetPasswordless                     // the account has no password (decision 020); nothing written
+)
+
 // issuePasswordResetToken replaces the password reset token of the account
 // with the given email, verified or not (decision 017), and returns its id.
-// It returns issued=false, having changed nothing, if there is no such account.
+// An account without a password (created with Google) gets no token: it
+// can't be recovered through its mailbox (decision 020). Only resetIssued
+// writes anything; userID is set unless resetNoAccount.
 func issuePasswordResetToken(ctx context.Context, pool *pgxpool.Pool,
-	email string, tokenHash []byte, ttl time.Duration) (userID string, issued bool, err error) {
+	email string, tokenHash []byte, ttl time.Duration) (userID string, r resetRequest, err error) {
 	err = pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
-		userID, issued, err = issuePasswordResetTokenTx(ctx, tx, email, tokenHash, ttl)
+		userID, r, err = issuePasswordResetTokenTx(ctx, tx, email, tokenHash, ttl)
 		return err
 	})
 	if err != nil {
-		return "", false, fmt.Errorf("auth: issue password reset token: %w", err)
+		return "", resetNoAccount, fmt.Errorf("auth: issue password reset token: %w", err)
 	}
-	return userID, issued, nil
+	return userID, r, nil
 }
 
 func issuePasswordResetTokenTx(ctx context.Context, tx pgx.Tx,
-	email string, tokenHash []byte, ttl time.Duration) (string, bool, error) {
+	email string, tokenHash []byte, ttl time.Duration) (string, resetRequest, error) {
 	var userID string
-	err := tx.QueryRow(ctx, `SELECT id FROM users WHERE email = $1 FOR UPDATE`, email).Scan(&userID)
+	var passwordless bool
+	err := tx.QueryRow(ctx,
+		`SELECT id, password_hash IS NULL FROM users WHERE email = $1 FOR UPDATE`, email).Scan(&userID, &passwordless)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", false, nil
+		return "", resetNoAccount, nil
 	}
 	if err != nil {
-		return "", false, fmt.Errorf("lock user: %w", err)
+		return "", resetNoAccount, fmt.Errorf("lock user: %w", err)
+	}
+	if passwordless {
+		return userID, resetPasswordless, nil
 	}
 	if err := issueToken(ctx, tx, userID, PurposePasswordReset, tokenHash, ttl); err != nil {
-		return "", false, err
+		return "", resetNoAccount, err
 	}
-	return userID, true, nil
+	return userID, resetIssued, nil
 }
 
 // findPasswordResetOwner returns the email of the account whose password
 // reset token has the given hash, if that token is usable now: not used,
-// replaced or expired. It only reads, without locking: resetPasswordTx
-// decides under the user lock. Its purpose is to reject dead tokens before
-// any argon2 work and to learn the email for the password policy.
+// replaced or expired, and owned by an account with a password. It only
+// reads, without locking: resetPasswordTx decides under the user lock. Its
+// purpose is to reject dead tokens before any argon2 work and to learn the
+// email for the password policy.
 func findPasswordResetOwner(ctx context.Context, pool *pgxpool.Pool, tokenHash []byte) (email string, found bool, err error) {
 	err = pool.QueryRow(ctx,
 		`SELECT u.email FROM user_tokens t JOIN users u ON u.id = t.user_id
-		 WHERE t.token_hash = $1 AND t.purpose = $2 AND t.used_at IS NULL AND t.expires_at > now()`,
+		 WHERE t.token_hash = $1 AND t.purpose = $2 AND t.used_at IS NULL AND t.expires_at > now()
+		   AND u.password_hash IS NOT NULL`,
 		tokenHash, PurposePasswordReset).Scan(&email)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, nil
@@ -240,7 +258,9 @@ type passwordReset struct {
 // one-time tokens (decision 017). Completing a reset proves control of the
 // mailbox, so an unverified account becomes verified. It returns ok=false,
 // having changed nothing, if the token is not usable: unknown, wrong purpose,
-// used, replaced or expired.
+// used, replaced or expired, or owned by an account without a password,
+// which never gets a reset token (decision 020) and so must not gain a
+// password through one.
 //
 // The new password takes effect at commit, together with everything else:
 // no other transaction sees the new hash with live old sessions, or an
@@ -259,16 +279,20 @@ func resetPassword(ctx context.Context, pool *pgxpool.Pool, tokenHash []byte, ne
 func resetPasswordTx(ctx context.Context, tx pgx.Tx, tokenHash []byte, newHash string) (passwordReset, error) {
 	// Only takes the user lock (see Lock order); the UPDATE below decides.
 	var userID, email string
+	var passwordless bool
 	err := tx.QueryRow(ctx,
-		`SELECT u.id, u.email FROM user_tokens t JOIN users u ON u.id = t.user_id
+		`SELECT u.id, u.email, u.password_hash IS NULL FROM user_tokens t JOIN users u ON u.id = t.user_id
 		 WHERE t.token_hash = $1 AND t.purpose = $2
 		 FOR UPDATE OF u`,
-		tokenHash, PurposePasswordReset).Scan(&userID, &email)
+		tokenHash, PurposePasswordReset).Scan(&userID, &email, &passwordless)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return passwordReset{}, nil
 	}
 	if err != nil {
 		return passwordReset{}, fmt.Errorf("lock user: %w", err)
+	}
+	if passwordless {
+		return passwordReset{}, nil
 	}
 
 	// Single use (decision 004). The statement sees rows committed while it
@@ -317,6 +341,9 @@ func resetPasswordTx(ctx context.Context, tx pgx.Tx, tokenHash []byte, newHash s
 }
 
 // loginUser is what login needs to know about the account for an email.
+// passwordHash is empty for an account without a password (created with
+// Google, decision 020); the users_password_hash_not_empty CHECK keeps a
+// stored hash from being empty, so the two can't be confused.
 type loginUser struct {
 	id           string
 	passwordHash string
@@ -327,7 +354,7 @@ type loginUser struct {
 // locking: createSession re-checks the password hash under a lock.
 func findUserByEmail(ctx context.Context, pool *pgxpool.Pool, email string) (u loginUser, found bool, err error) {
 	err = pool.QueryRow(ctx,
-		`SELECT id, password_hash, email_verified_at IS NOT NULL FROM users WHERE email = $1`,
+		`SELECT id, COALESCE(password_hash, ''), email_verified_at IS NOT NULL FROM users WHERE email = $1`,
 		email).Scan(&u.id, &u.passwordHash, &u.verified)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return loginUser{}, false, nil

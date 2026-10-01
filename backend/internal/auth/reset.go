@@ -10,10 +10,12 @@ import (
 const passwordResetTokenTTL = 30 * time.Minute
 
 // ForgotPassword emails a password reset link if the address belongs to an
-// account, verified or not, which invalidates any previous reset link. For
-// unknown addresses it does nothing. Both return nil, so the result doesn't
-// reveal which addresses have accounts; only an invalid address returns a
-// *ValidationError. No argon2 work is done in either case.
+// account, verified or not, which invalidates any previous reset link. An
+// account without a password (created with Google) gets no link: it can't be
+// recovered through its mailbox, so its owner is told to use Google instead
+// (decision 020). For unknown addresses it does nothing. All return nil, so
+// the result doesn't reveal which addresses have accounts; only an invalid
+// address returns a *ValidationError. No argon2 work is done in any case.
 func (s *Service) ForgotPassword(ctx context.Context, emailInput string) error {
 	addr, err := NormalizeEmail(emailInput)
 	if err != nil {
@@ -28,17 +30,21 @@ func (s *Service) ForgotPassword(ctx context.Context, emailInput string) error {
 	}
 
 	token := NewToken("")
-	userID, issued, err := issuePasswordResetToken(ctx, s.pool, addr, token.Hash, passwordResetTokenTTL)
+	userID, r, err := issuePasswordResetToken(ctx, s.pool, addr, token.Hash, passwordResetTokenTTL)
 	if err != nil {
 		return fmt.Errorf("auth: forgot password: %w", err)
 	}
-	if !issued {
+	switch r {
+	case resetNoAccount:
 		// No ids and no address: an unknown address isn't linked to anything.
 		s.logger.InfoContext(ctx, "auth: password reset request had no effect")
-		return nil
+	case resetPasswordless:
+		s.logger.InfoContext(ctx, "auth: password reset requested for passwordless account", "user_id", userID)
+		s.sendInBackground(ctx, "passwordless_account", passwordlessAccountEmail(addr))
+	case resetIssued:
+		s.logger.InfoContext(ctx, "auth: password reset requested", "user_id", userID)
+		s.sendInBackground(ctx, "password_reset", passwordResetEmail(s.baseURL, addr, token.Raw, passwordResetTokenTTL))
 	}
-	s.logger.InfoContext(ctx, "auth: password reset requested", "user_id", userID)
-	s.sendInBackground(ctx, "password_reset", passwordResetEmail(s.baseURL, addr, token.Raw, passwordResetTokenTTL))
 	return nil
 }
 
@@ -48,8 +54,9 @@ func (s *Service) ForgotPassword(ctx context.Context, emailInput string) error {
 // working, and deletes the owner's other unused one-time tokens. It does not
 // log the user in. The owner is emailed that the password changed.
 //
-// Every unusable token (malformed, unknown, expired, used, replaced, or for
-// another purpose) gets the same *ValidationError as VerifyEmail, and a
+// Every unusable token (malformed, unknown, expired, used, replaced, for
+// another purpose, or of an account without a password) gets the same
+// *ValidationError as VerifyEmail, and a
 // password that fails the policy gets its own; neither consumes the token.
 // Malformed tokens and policy failures that don't need the account are
 // rejected before any database access, and argon2 runs only once the token

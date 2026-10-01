@@ -40,7 +40,7 @@ func loadUser(t *testing.T, pool *pgxpool.Pool, addr string) userRow {
 	t.Helper()
 	var u userRow
 	err := pool.QueryRow(context.Background(),
-		`SELECT email_verified_at, updated_at, password_hash FROM users WHERE email = $1`, addr).
+		`SELECT email_verified_at, updated_at, COALESCE(password_hash, '') FROM users WHERE email = $1`, addr).
 		Scan(&u.verifiedAt, &u.updatedAt, &u.passwordHash)
 	if err != nil {
 		t.Fatal(err)

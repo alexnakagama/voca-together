@@ -135,8 +135,9 @@ func TestTokenEmailLinksRespectBaseURL(t *testing.T) {
 
 func TestNotificationEmailsContainNoLinkOrToken(t *testing.T) {
 	tests := map[string]email.Message{
-		"account exists":   accountExistsEmail(testRecipient),
-		"password changed": passwordChangedEmail(testRecipient),
+		"account exists":       accountExistsEmail(testRecipient),
+		"password changed":     passwordChangedEmail(testRecipient),
+		"passwordless account": passwordlessAccountEmail(testRecipient),
 	}
 	for name, msg := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -160,6 +161,7 @@ func TestAuthEmailsHaveDistinctSubjects(t *testing.T) {
 		passwordResetEmail(base, testRecipient, "tok", time.Hour).Subject,
 		accountExistsEmail(testRecipient).Subject,
 		passwordChangedEmail(testRecipient).Subject,
+		passwordlessAccountEmail(testRecipient).Subject,
 	}
 	seen := map[string]bool{}
 	for _, s := range subjects {
@@ -339,12 +341,31 @@ func TestActionEmailTemplateEscapesLink(t *testing.T) {
 
 func TestNotificationEmailsAreTextOnly(t *testing.T) {
 	for name, msg := range map[string]email.Message{
-		"account exists":   accountExistsEmail(testRecipient),
-		"password changed": passwordChangedEmail(testRecipient),
+		"account exists":       accountExistsEmail(testRecipient),
+		"password changed":     passwordChangedEmail(testRecipient),
+		"passwordless account": passwordlessAccountEmail(testRecipient),
 	} {
 		if msg.HTML != "" {
 			t.Errorf("%s: has an HTML body", name)
 		}
+	}
+}
+
+// An account may have been created with Google, so the account-exists email
+// can't send everyone to "Forgot password" (decision 020).
+func TestAccountExistsEmailMentionsGoogle(t *testing.T) {
+	if text := accountExistsEmail(testRecipient).Text; !strings.Contains(text, `"Continue with Google"`) {
+		t.Errorf("account-exists email doesn't mention Google sign-in: %q", text)
+	}
+}
+
+func TestPasswordlessAccountEmailOffersNoReset(t *testing.T) {
+	text := passwordlessAccountEmail(testRecipient).Text
+	if !strings.Contains(text, `"Continue with Google"`) {
+		t.Errorf("passwordless email doesn't point to Google sign-in: %q", text)
+	}
+	if strings.Contains(text, "Forgot password") {
+		t.Errorf("passwordless email points to a reset that can't work: %q", text)
 	}
 }
 

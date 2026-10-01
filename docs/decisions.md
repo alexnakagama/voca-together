@@ -509,3 +509,38 @@ and a wrong password. `email_not_verified` (403) is returned only after the pass
 - **Deferred:** durable outbox (with retries and an `Idempotency-Key` per message); bounce and complaint handling
   (webhooks, suppression); provider-specific rate limiting (our sends are bounded only by 018's in-flight cap and
   per-account limits); HTML versions of the notification emails (account exists, password changed).
+
+## 020: Passwordless accounts for Google sign-in (M1 step 13, stage 1)
+- Groundwork for "Continue with Google". Google sign-in itself (token verification, `POST /v1/auth/google`) comes in
+  later stages and will extend this entry. Google only establishes identity; sessions stay the vt sessions of 002.
+- **Migration 00003:** `users.password_hash` may be NULL for accounts created with Google
+  (`users_password_hash_not_empty` forbids `''`, so an empty string never stands in for "no password").
+  `user_identities` (`provider` IN ('google'), `subject` = Google `sub`, 1–255 bytes) is unique per
+  `(provider, subject)` (one owner per identity) and per `(user_id, provider)` (one Google identity per user), and is
+  deleted with its user. `google_id_token_uses` (SHA-256 of an accepted ID token, `expires_at`) is created for the
+  later single-use check; nothing writes to it yet.
+- **Invariant: every user has at least one authentication method**, a password or an identity. A deferred constraint
+  trigger (`users_auth_method_required`, checked at COMMIT) enforces it on user insert, `password_hash` updates, and
+  identity delete or move. It raises 23514, and deleting the whole user is allowed. A passwordless user and its
+  identity must therefore be inserted in one transaction. Under READ COMMITTED the check can't see other
+  transactions' uncommitted changes, so any future flow that removes a method must lock the user row `FOR UPDATE`
+  (lock order, 017). Rolling 00003 back fails while passwordless users exist, rather than deleting them.
+- **Password login** of a passwordless account returns the same 401 `invalid_credentials` as a wrong password, after
+  the same argon2 work: the dummy hash stands in for the missing one (013, 005). The log reason is `no_password` (with
+  `user_id`), deliberately more specific than the response, so support can see why. Clients can't tell it apart.
+- **No mailbox recovery for passwordless accounts.** `email_verified=true` from Google proves only that Google once
+  verified the address. A third-party mailbox (not Gmail or Workspace) can later belong to someone else while the
+  Google account stays with its original owner. If reset worked, the new mailbox owner could set a password and share
+  or take over the account. So:
+  - forgot-password answers the usual neutral 202 and spends `account_mail`, as always, but **creates no reset
+    token**. It sends only a no-link notice ("Your VocaTogether account signs in with Google").
+  - reset-password also refuses a passwordless owner as defense in depth: the unlocked lookup filters it out before
+    any argon2 work, and the reset transaction refuses it under the user lock. It gets the uniform `token:invalid`,
+    and nothing is consumed or written.
+  - This differs from 017's "mailbox wins" rule for unverified password accounts, which is unchanged. Accepted
+    costs: a user who loses their Google account needs support, and a former owner of a third-party address can
+    keep it occupied. Availability was traded for the account's confidentiality.
+- **Account-exists email** (011) now names both ways in: password, or "Continue with Google" for accounts created
+  with Google, plus "Forgot password" for a forgotten password. It still carries no link.
+- **Logs:** `auth: password reset requested for passwordless account` (`user_id`); email kind
+  `passwordless_account`. Never logged: the email address.

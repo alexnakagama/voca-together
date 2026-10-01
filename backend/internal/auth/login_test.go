@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"vocatogether/backend/internal/email"
@@ -94,6 +95,28 @@ func seedAccount(t *testing.T, pool *pgxpool.Pool, addr, passwordHash string, ve
 	var id string
 	if err := pool.QueryRow(context.Background(), `SELECT id FROM users WHERE email = $1`, addr).Scan(&id); err != nil {
 		t.Fatal(err)
+	}
+	return id
+}
+
+// seedGoogleAccount creates a verified account without a password, linked to
+// a Google identity, as Google sign-in does (decision 020), and returns its id.
+func seedGoogleAccount(t *testing.T, pool *pgxpool.Pool, addr, subject string) string {
+	t.Helper()
+	ctx := context.Background()
+	var id string
+	err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx,
+			`INSERT INTO users (email, password_hash, email_verified_at) VALUES ($1, NULL, now()) RETURNING id`,
+			addr).Scan(&id); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx,
+			`INSERT INTO user_identities (user_id, provider, subject) VALUES ($1, 'google', $2)`, id, subject)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("seed google account: %v", err)
 	}
 	return id
 }
@@ -180,6 +203,11 @@ func TestFindUserByEmail(t *testing.T) {
 	u, found, err = findUserByEmail(ctx, pool, "bob@example.com")
 	if err != nil || !found || u != (loginUser{id: unverifiedID, passwordHash: "hash-b", verified: false}) {
 		t.Errorf("unverified: %+v found=%v err=%v", u, found, err)
+	}
+	googleID := seedGoogleAccount(t, pool, "gina@example.com", "1001")
+	u, found, err = findUserByEmail(ctx, pool, "gina@example.com")
+	if err != nil || !found || u != (loginUser{id: googleID, passwordHash: "", verified: true}) {
+		t.Errorf("passwordless: %+v found=%v err=%v", u, found, err)
 	}
 	if _, found, err = findUserByEmail(ctx, pool, "nobody@example.com"); err != nil || found {
 		t.Errorf("unknown: found=%v err=%v", found, err)
@@ -485,6 +513,25 @@ func TestLoginRejectsUnknownEmail(t *testing.T) {
 	}
 }
 
+// An account created with Google has no password: any password gets the
+// same answer as a wrong one, after the same argon2 work (dummy hash).
+func TestLoginPasswordlessAccount(t *testing.T) {
+	f := newLoginFixture(t)
+	googleID := seedGoogleAccount(t, f.pool, "gina@example.com", "1001")
+
+	_, passwordless := f.Login(context.Background(), "gina@example.com", testPassword, testUserAgent)
+	_, wrong := f.Login(context.Background(), "ana@example.com", "wrong-password-123", testUserAgent)
+	if passwordless != wrong || passwordless != ErrInvalidCredentials {
+		t.Fatalf("passwordless = %v, wrong = %v; want the identical ErrInvalidCredentials", passwordless, wrong)
+	}
+	requireNoSessions(t, f.pool)
+	requireLoginLogsClean(t, f.testService)
+	if logs := f.logs.String(); !strings.Contains(logs, "reason=no_password") || !strings.Contains(logs, googleID) ||
+		strings.Contains(logs, "gina@example.com") {
+		t.Errorf("passwordless failure logged wrongly: %s", logs)
+	}
+}
+
 // Unknown email and wrong password return the very same error value, so no
 // caller can tell them apart.
 func TestLoginUnknownEmailAndWrongPasswordAreIdentical(t *testing.T) {
@@ -567,10 +614,11 @@ func TestLoginAlwaysDoesPasswordWork(t *testing.T) {
 	s := newTestService(t, &email.Recorder{})
 	seedAccount(t, s.pool, "ana@example.com", HashPassword(testPassword), true)
 	seedAccount(t, s.pool, "bad@example.com", "not-a-phc-hash", true)
+	seedGoogleAccount(t, s.pool, "gina@example.com", "1001")
 	s.hashSlots = make(chan struct{}, 1)
 	s.hashSlots <- struct{}{}
 
-	for _, addr := range []string{"ana@example.com", "nobody@example.com", "bad@example.com"} {
+	for _, addr := range []string{"ana@example.com", "nobody@example.com", "bad@example.com", "gina@example.com"} {
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		_, err := s.Login(ctx, addr, "wrong-password-123", "")
 		cancel()

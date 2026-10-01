@@ -125,8 +125,28 @@ func accountExistsEmail(to string) email.Message {
 		Text: `Someone, hopefully you, tried to create a VocaTogether account with this
 email address, but an account already exists.
 
-If it was you, open the app and log in. If you don't remember your password,
-use "Forgot password" on the login screen.
+If it was you, open the app and log in: with your password, or with
+"Continue with Google" if you signed up with Google. If you don't remember
+your password, use "Forgot password" on the login screen.
+
+If it wasn't you, you can ignore this email. Your account has not changed.
+`,
+	}
+}
+
+// passwordlessAccountEmail answers a password reset request for an account
+// created with Google, which has no password and can't be recovered through
+// its mailbox (decision 020). It carries no link: the account is entered
+// only with its Google identity.
+func passwordlessAccountEmail(to string) email.Message {
+	return email.Message{
+		To:      to,
+		Subject: "Your VocaTogether account signs in with Google",
+		Text: `Someone, hopefully you, asked to reset the password of the VocaTogether
+account for this email address.
+
+This account has no password: it signs in with Google. Open the app and use
+"Continue with Google" with the Google account you signed up with.
 
 If it wasn't you, you can ignore this email. Your account has not changed.
 `,

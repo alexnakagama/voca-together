@@ -35,10 +35,11 @@ type Credentials struct {
 // Login checks an email and password and, for a verified account, creates a
 // new session (one per login/device) and returns its credentials.
 //
-// Unknown email, wrong password and an unusable stored hash all return
-// ErrInvalidCredentials after the same argon2 work (unknown emails verify
-// against a dummy hash), so neither the result nor its timing reveals which
-// addresses have accounts. ErrEmailNotVerified is returned only once the
+// Unknown email, wrong password, an unusable stored hash and an account
+// without a password (created with Google) all return ErrInvalidCredentials
+// after the same argon2 work (the dummy hash stands in for a missing one), so
+// neither the result nor its timing reveals which addresses have accounts or
+// how they sign in. ErrEmailNotVerified is returned only once the
 // password is correct. Invalid input returns a *ValidationError, and a
 // spent per-account limit a *RateLimitedError, before any hashing or
 // database access. Credentials are returned only after the
@@ -64,8 +65,9 @@ func (s *Service) Login(ctx context.Context, emailInput, password, userAgent str
 	if err != nil {
 		return Credentials{}, fmt.Errorf("auth: login: %w", err)
 	}
+	hasPassword := found && u.passwordHash != ""
 	stored := s.dummyHash
-	if found {
+	if hasPassword {
 		stored = u.passwordHash
 	}
 	ok, needsRehash, err := s.verifyPassword(ctx, stored, password)
@@ -77,6 +79,10 @@ func (s *Service) Login(ctx context.Context, emailInput, password, userAgent str
 	}
 	if err != nil {
 		return Credentials{}, fmt.Errorf("auth: login: %w", err)
+	}
+	if found && !hasPassword {
+		s.logLoginFailed(ctx, "no_password", u.id)
+		return Credentials{}, ErrInvalidCredentials
 	}
 	if !found || !ok {
 		s.logLoginFailed(ctx, "invalid_credentials", u.id)

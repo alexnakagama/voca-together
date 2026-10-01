@@ -44,13 +44,14 @@ func newTestService(t *testing.T, sender email.Sender) testService {
 	return testService{Service: svc, pool: pool, logs: logs}
 }
 
-// dumpTables returns every row of users, user_tokens and sessions as text,
-// to check that no secret appears anywhere in them.
+// dumpTables returns every row of every auth table as text, to check that no
+// secret appears anywhere in them.
 func dumpTables(t *testing.T, pool *pgxpool.Pool) string {
 	t.Helper()
 	rows, err := pool.Query(context.Background(),
 		`SELECT u::text FROM users u UNION ALL SELECT t::text FROM user_tokens t
-		 UNION ALL SELECT s::text FROM sessions s`)
+		 UNION ALL SELECT s::text FROM sessions s UNION ALL SELECT i::text FROM user_identities i
+		 UNION ALL SELECT g::text FROM google_id_token_uses g`)
 	if err != nil {
 		t.Fatal(err)
 	}

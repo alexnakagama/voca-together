@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"vocatogether/backend/internal/email"
+	"vocatogether/backend/internal/ratelimit"
 )
 
 const newTestPassword = "violet-harbor-82-comet"
@@ -23,8 +25,8 @@ const newTestPassword = "violet-harbor-82-comet"
 func seedResetToken(t *testing.T, pool *pgxpool.Pool, addr string) Token {
 	t.Helper()
 	tok := NewToken("")
-	if _, issued, err := issuePasswordResetToken(context.Background(), pool, addr, tok.Hash, passwordResetTokenTTL); err != nil || !issued {
-		t.Fatalf("seed reset token: issued=%v err=%v", issued, err)
+	if _, r, err := issuePasswordResetToken(context.Background(), pool, addr, tok.Hash, passwordResetTokenTTL); err != nil || r != resetIssued {
+		t.Fatalf("seed reset token: r=%v err=%v", r, err)
 	}
 	return tok
 }
@@ -217,6 +219,51 @@ func TestForgotPasswordUnknownEmail(t *testing.T) {
 		t.Errorf("log lacks the no-effect line: %s", s.logs)
 	}
 	requireNoSecrets(t, "log", s.logs.String(), []string{"nobody@example.com"})
+}
+
+// An account created with Google has no password and can't be recovered
+// through the mailbox (decision 020): a third-party address may have changed
+// owner since Google verified it. Its owner is told to use Google instead.
+func TestForgotPasswordPasswordlessAccount(t *testing.T) {
+	rec := &email.Recorder{}
+	s := newTestService(t, rec)
+	userID := seedGoogleAccount(t, s.pool, "gina@example.com", "1001")
+
+	if err := s.ForgotPassword(context.Background(), " Gina@Example.com "); err != nil {
+		t.Fatal(err)
+	}
+	s.Wait()
+	if msgs := rec.Messages(); len(msgs) != 1 || msgs[0] != passwordlessAccountEmail("gina@example.com") {
+		t.Fatalf("emails = %v, want only the passwordless-account notice", msgs)
+	}
+	if n := countRows(t, s.pool, `SELECT count(*) FROM user_tokens`); n != 0 {
+		t.Errorf("tokens = %d, want 0", n)
+	}
+	if logs := s.logs.String(); !strings.Contains(logs, "auth: password reset requested for passwordless account") ||
+		!strings.Contains(logs, userID) {
+		t.Errorf("log lacks the passwordless request with user_id: %s", logs)
+	}
+	requireNoSecrets(t, "log", s.logs.String(), []string{"gina@example.com"})
+}
+
+// The notice spends the per-account mail limit like any other email.
+func TestForgotPasswordPasswordlessAccountIsRateLimited(t *testing.T) {
+	rec := &email.Recorder{}
+	s := newTestService(t, rec)
+	s.limits.Mail = ratelimit.New[[32]byte]("account_mail", 1, time.Hour, 10, slog.New(slog.DiscardHandler))
+	seedGoogleAccount(t, s.pool, "gina@example.com", "1001")
+
+	if err := s.ForgotPassword(context.Background(), "gina@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	var limited *RateLimitedError
+	if err := s.ForgotPassword(context.Background(), "gina@example.com"); !errors.As(err, &limited) {
+		t.Fatalf("second request: err = %v, want *RateLimitedError", err)
+	}
+	s.Wait()
+	if n := len(rec.Messages()); n != 1 {
+		t.Errorf("sent %d emails, want 1", n)
+	}
 }
 
 func TestForgotPasswordInvalidEmailWithoutDatabase(t *testing.T) {
@@ -462,6 +509,39 @@ func TestResetPasswordVerifiesUnverifiedAccount(t *testing.T) {
 	requireTokenInvalid(t, s.VerifyEmail(context.Background(), verification.Raw))
 	if _, err := s.Login(context.Background(), "ana@example.com", newTestPassword, ""); err != nil {
 		t.Errorf("login after reset: %v", err)
+	}
+}
+
+// Forgot-password never issues a reset token to a passwordless account; if
+// one existed anyway, it still couldn't set a password (decision 020). It is
+// rejected before any argon2 work, and the store refuses it on its own too.
+func TestResetPasswordRefusesPasswordlessAccount(t *testing.T) {
+	rec := &email.Recorder{}
+	s := newTestService(t, rec)
+	userID := seedGoogleAccount(t, s.pool, "gina@example.com", "1001")
+	tok := NewToken("")
+	if _, err := s.pool.Exec(context.Background(),
+		`INSERT INTO user_tokens (user_id, purpose, token_hash, expires_at) VALUES ($1, $2, $3, now() + interval '30 minutes')`,
+		userID, PurposePasswordReset, tok.Hash); err != nil {
+		t.Fatal(err)
+	}
+
+	saturateHashSlots(s)
+	requireTokenInvalid(t, s.ResetPassword(context.Background(), tok.Raw, newTestPassword))
+
+	r, err := resetPassword(context.Background(), s.pool, tok.Hash, HashPassword(newTestPassword))
+	if err != nil || r.ok {
+		t.Fatalf("store reset of a passwordless account: %+v err=%v; want not ok", r, err)
+	}
+	if tokenUsed(t, s.pool, tok) {
+		t.Error("token consumed")
+	}
+	if h := loadUser(t, s.pool, "gina@example.com").passwordHash; h != "" {
+		t.Error("a password was set on a passwordless account")
+	}
+	s.Wait()
+	if n := len(rec.Messages()); n != 0 {
+		t.Errorf("sent %d emails, want 0", n)
 	}
 }
 
@@ -880,8 +960,8 @@ func TestResetPasswordOfTokenReplacedConcurrently(t *testing.T) {
 
 	replacement := NewToken("")
 	tx := beginTx(t, f.pool)
-	if _, issued, err := issuePasswordResetTokenTx(ctx, tx, "ana@example.com", replacement.Hash, passwordResetTokenTTL); err != nil || !issued {
-		t.Fatalf("issue: %v, %v", issued, err)
+	if _, r, err := issuePasswordResetTokenTx(ctx, tx, "ana@example.com", replacement.Hash, passwordResetTokenTTL); err != nil || r != resetIssued {
+		t.Fatalf("issue: %v, %v", r, err)
 	}
 	done := make(chan error, 1)
 	go func() { done <- f.ResetPassword(ctx, f.token.Raw, newTestPassword) }()

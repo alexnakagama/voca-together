@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -237,4 +238,135 @@ func TestSessionsExpiriesWithinAbsoluteLifetime(t *testing.T) {
 	}
 	requirePgError(t, insert(hash(3), hash(4), "91 days", "30 days"), checkViolation, "sessions_expiry_order")
 	requirePgError(t, insert(hash(5), hash(6), "15 minutes", "91 days"), checkViolation, "sessions_expiry_order")
+}
+
+const foreignKeyViolation = "23503"
+
+// insertGoogleUser creates a passwordless user and its Google identity in one
+// transaction, the only way such a user can be committed (decision 020).
+func insertGoogleUser(t *testing.T, pool *pgxpool.Pool, email, subject string) string {
+	t.Helper()
+	ctx := context.Background()
+	var id string
+	err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx,
+			`INSERT INTO users (email, password_hash, email_verified_at) VALUES ($1, NULL, now()) RETURNING id`,
+			email).Scan(&id); err != nil {
+			return err
+		}
+		return insertIdentity(ctx, tx, id, "google", subject)
+	})
+	if err != nil {
+		t.Fatalf("insert google user: %v", err)
+	}
+	return id
+}
+
+type execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+func insertIdentity(ctx context.Context, db execer, userID, provider, subject string) error {
+	_, err := db.Exec(ctx,
+		`INSERT INTO user_identities (user_id, provider, subject) VALUES ($1, $2, $3)`, userID, provider, subject)
+	return err
+}
+
+func TestUsersPasswordHashMayBeNullButNotEmpty(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	id := insertGoogleUser(t, pool, "ana@example.com", "1001")
+
+	var hash *string
+	if err := pool.QueryRow(ctx, `SELECT password_hash FROM users WHERE id = $1`, id).Scan(&hash); err != nil {
+		t.Fatal(err)
+	}
+	if hash != nil {
+		t.Errorf("password_hash = %q, want NULL", *hash)
+	}
+
+	_, err := pool.Exec(ctx, `INSERT INTO users (email, password_hash) VALUES ('ben@example.com', '')`)
+	requirePgError(t, err, checkViolation, "users_password_hash_not_empty")
+}
+
+// Every user needs a password or an identity; the check runs at commit, so a
+// user and its identity can be inserted in either order within a transaction.
+func TestUsersRequireAnAuthenticationMethod(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+
+	_, err := pool.Exec(ctx, `INSERT INTO users (email, password_hash) VALUES ('ana@example.com', NULL)`)
+	requirePgError(t, err, checkViolation, "users_auth_method_required")
+
+	google := insertGoogleUser(t, pool, "google@example.com", "1001")
+	password := mustInsertUser(t, pool, "pw@example.com")
+
+	// Removing the only method fails, whichever table it is removed from.
+	_, err = pool.Exec(ctx, `DELETE FROM user_identities WHERE user_id = $1`, google)
+	requirePgError(t, err, checkViolation, "users_auth_method_required")
+	_, err = pool.Exec(ctx, `UPDATE users SET password_hash = NULL WHERE id = $1`, password)
+	requirePgError(t, err, checkViolation, "users_auth_method_required")
+	_, err = pool.Exec(ctx, `UPDATE user_identities SET user_id = $2 WHERE user_id = $1`, google, password)
+	requirePgError(t, err, checkViolation, "users_auth_method_required")
+
+	// With a second method, either one can go.
+	if err := insertIdentity(ctx, pool, password, "google", "1002"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE users SET password_hash = NULL WHERE id = $1`, password); err != nil {
+		t.Errorf("removing the password of a user with an identity: %v", err)
+	}
+
+	// Deleting the user takes its identities with it; that is allowed.
+	if _, err := pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, google); err != nil {
+		t.Errorf("deleting a passwordless user: %v", err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM user_identities WHERE user_id = $1`, google); n != 0 {
+		t.Errorf("identities of a deleted user = %d, want 0", n)
+	}
+}
+
+func TestUserIdentitiesConstraints(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	ana := insertGoogleUser(t, pool, "ana@example.com", "1001")
+	ben := mustInsertUser(t, pool, "ben@example.com")
+
+	// One identity has one owner.
+	requirePgError(t, insertIdentity(ctx, pool, ben, "google", "1001"), uniqueViolation, "user_identities_provider_subject_key")
+	// One Google identity per user.
+	requirePgError(t, insertIdentity(ctx, pool, ana, "google", "1002"), uniqueViolation, "user_identities_user_provider_key")
+
+	requirePgError(t, insertIdentity(ctx, pool, ben, "facebook", "1003"), checkViolation, "user_identities_provider_check")
+	requirePgError(t, insertIdentity(ctx, pool, ben, "google", ""), checkViolation, "user_identities_subject_length")
+	requirePgError(t, insertIdentity(ctx, pool, ben, "google", strings.Repeat("1", 256)), checkViolation, "user_identities_subject_length")
+	if err := insertIdentity(ctx, pool, ben, "google", strings.Repeat("1", 255)); err != nil {
+		t.Errorf("255-byte subject rejected: %v", err)
+	}
+	requirePgError(t, insertIdentity(ctx, pool, "00000000-0000-0000-0000-000000000000", "google", "1004"),
+		foreignKeyViolation, "user_identities_user_id_fkey")
+}
+
+func TestGoogleIDTokenUsesConstraints(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	insert := func(h []byte) error {
+		_, err := pool.Exec(ctx,
+			`INSERT INTO google_id_token_uses (token_hash, expires_at) VALUES ($1, now() + interval '1 hour')`, h)
+		return err
+	}
+	if err := insert(hash(1)); err != nil {
+		t.Fatal(err)
+	}
+	requirePgError(t, insert(hash(1)), uniqueViolation, "google_id_token_uses_pkey")
+	requirePgError(t, insert([]byte("short")), checkViolation, "google_id_token_uses_token_hash_length")
+}
+
+func countRows(t *testing.T, pool *pgxpool.Pool, query string, args ...any) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(context.Background(), query, args...).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
