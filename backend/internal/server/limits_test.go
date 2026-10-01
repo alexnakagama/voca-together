@@ -67,6 +67,7 @@ func TestIPLimitedRoutes(t *testing.T) {
 		limiter           func(*IPLimits) **ratelimit.Limiter[netip.Prefix]
 	}{
 		{loginPath, json, func(l *IPLimits) **ratelimit.Limiter[netip.Prefix] { return &l.Login }},
+		{googlePath, json, func(l *IPLimits) **ratelimit.Limiter[netip.Prefix] { return &l.Login }},
 		{registerPath, json, func(l *IPLimits) **ratelimit.Limiter[netip.Prefix] { return &l.Register }},
 		{resendPath, json, func(l *IPLimits) **ratelimit.Limiter[netip.Prefix] { return &l.Email }},
 		{forgotPath, json, func(l *IPLimits) **ratelimit.Limiter[netip.Prefix] { return &l.Email }},
@@ -91,6 +92,13 @@ func TestIPLimitedRoutes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Password login and Google sign-in share one sign-in bucket per IP.
+func TestLoginAndGoogleShareIPBucket(t *testing.T) {
+	h := New(slog.New(slog.DiscardHandler), nil, Options{IPLimits: IPLimits{Login: tightLimiter()}})
+	sendFrom(h, "198.51.100.1", http.MethodPost, loginPath, "application/json", "{")
+	requireRateLimitedResponse(t, sendFrom(h, "198.51.100.1", http.MethodPost, googlePath, "application/json", "{"))
 }
 
 func TestResendAndForgotShareIPBucket(t *testing.T) {
@@ -241,6 +249,7 @@ func TestOverloadAndDeadlineMapTo503(t *testing.T) {
 	for _, err := range []error{
 		fmt.Errorf("auth: login: %w", auth.ErrOverloaded),
 		fmt.Errorf("auth: login: %w", context.DeadlineExceeded),
+		auth.ErrGoogleUnavailable,
 	} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, loginPath, nil)

@@ -25,12 +25,17 @@ const (
 	codeInvalidRefreshToken = "invalid_refresh_token"
 	codeInvalidAccessToken  = "invalid_access_token"
 
+	codeInvalidGoogleToken  = "invalid_google_token"
+	codeGoogleEmailUnusable = "google_email_unusable"
+	codeAccountExists       = "account_exists"
+
 	codeRateLimited        = "rate_limited"
 	codeServiceUnavailable = "service_unavailable"
 )
 
 // retryAfterUnavailable is the Retry-After of a 503: about one argon2 queue
-// timeout, after which a retry meets a fresh queue.
+// timeout, after which a retry meets a fresh queue (or Google's keys may be
+// fetchable again).
 const retryAfterUnavailable = 5 * time.Second
 
 type errorResponse struct {

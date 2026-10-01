@@ -20,7 +20,10 @@ import (
 // retry creates another session; the orphaned one expires), refresh (the
 // rotated tokens are lost, and retrying with the old token is reuse: the
 // session is revoked and the client logs in again, as after any lost refresh
-// response, decision 014), and logout (idempotent).
+// response, decision 014), google (the ID token may be spent, so a retry with
+// it gets invalid_google_token; the client retries with a new ID token, which
+// finds the account and creates another session; the orphaned one expires),
+// and logout (idempotent).
 const requestTimeout = 10 * time.Second
 
 // requestDeadline gives each request's context a deadline of d.

@@ -358,7 +358,7 @@ and a wrong password. `email_not_verified` (403) is returned only after the pass
 - **Per IP** (checked before the body is read, so junk costs a token too):
   | Bucket | Routes | Burst | Refill |
   |---|---|---|---|
-  | `ip_login` | login | 20 | 1 / 3 s |
+  | `ip_login` | login + google (shared, 020) | 20 | 1 / 3 s |
   | `ip_register` | register | 10 | 1 / min |
   | `ip_email` | resend-verification + forgot-password (shared) | 5 | 1 / 2 min |
   | `ip_token` | verify-email + reset-password JSON + reset form POST (shared) | 10 | 1 / 6 s |
@@ -609,3 +609,30 @@ and a wrong password. `email_not_verified` (403) is returned only after the pass
     `email_missing`, `email_unverified`, `email_invalid`, or `account_exists` with the existing `user_id`);
   - `auth: google keys unavailable` (Warn, fixed fetch `reason`).
   - Never logged: the ID token, its hash, the subject, the email or the user agent.
+- **Stage 5: `POST /v1/auth/google`** (`handleGoogleSignIn` in `server/auth.go`). A thin handler shaped like refresh:
+  `Cache-Control: no-store`, then `decodeJSON` (8 KiB `maxAuthBodyBytes`, which holds any token the verifier's
+  4096-byte cap accepts), then one `SignInWithGoogle(r.Context(), id_token, r.UserAgent())` call (no retry; the
+  service normalizes the user agent). The router builds no Google infrastructure and imports no `googleid`.
+  - Request `{"id_token":"…"}`. **Only the body carries the token.** `Authorization`, the query string and other
+    headers are ignored. Malformed, unknown-field, trailing or oversized bodies → 400 `invalid_request`. A missing,
+    null or empty `id_token` → 422 `id_token:required`. Neither reaches the verifier.
+  - 200 returns the login/refresh token response (`writeTokens`).
+  - Errors:
+    | Service error | Response |
+    |---|---|
+    | `ErrInvalidGoogleToken` (rejected, replayed, not configured) | 401 `invalid_google_token` |
+    | `ErrGoogleEmailUnusable` | 403 `google_email_unusable` |
+    | `ErrAccountExists` | 409 `account_exists` |
+    | `ErrGoogleUnavailable` | 503 `service_unavailable`, `Retry-After: 5` |
+
+    Shared mappings are unchanged: 429, deadline 503, `Canceled`/other 500. The 401 has **no `WWW-Authenticate`**:
+    the ID token is a credential in the body, like login's (013), not an HTTP authentication scheme. The server
+    adds no distinctions the service collapsed. Replay and every verifier reason stay one 401.
+  - **Per IP:** shares `ip_login` with password login. Both are sign-in attempts (Stage 4 likewise reuses
+    `account_login`), and a separate bucket would double what one source gets. The IP check runs before the body is
+    read, and the per-subject check runs before the database. A 429 therefore never spends the ID token.
+  - **503 or 500 after commit:** the deadline can fire after `googleSignIn` committed (018). The ID token is then
+    spent, and a retry with it gets `invalid_google_token`. The client contract is: **after a 503 or 500, retry with
+    a new ID token** (Google's SDKs mint one silently). The retry finds the account by subject. The orphaned
+    session expires. A Google-keys 503 spent nothing, but clients can't tell 503s apart, so the same rule applies.
+  - Until `GOOGLE_CLIENT_ID` is configured (stage 6), the verifier is `nil` and every request gets the 401.

@@ -38,6 +38,7 @@ func New(logger *slog.Logger, authSvc *auth.Service, opts Options) http.Handler 
 	mux.Handle("POST /v1/auth/forgot-password", perIP(lim.Email)(handleForgotPassword(logger, authSvc)))
 	mux.Handle("POST /v1/auth/reset-password", perIP(lim.Token)(handleResetPassword(logger, authSvc)))
 	mux.Handle("POST /v1/auth/login", perIP(lim.Login)(handleLogin(logger, authSvc)))
+	mux.Handle("POST /v1/auth/google", perIP(lim.Login)(handleGoogleSignIn(logger, authSvc)))
 	mux.Handle("POST /v1/auth/refresh", perIP(lim.Refresh)(handleRefresh(logger, authSvc)))
 	mux.HandleFunc("POST /v1/auth/logout", handleLogout(logger, authSvc))
 

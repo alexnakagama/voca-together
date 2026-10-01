@@ -57,7 +57,7 @@ func TestHSTSOnlyWhenEnabled(t *testing.T) {
 // including the ones that carry no credentials.
 func TestAuthEndpointsAreNoStore(t *testing.T) {
 	h := New(slog.New(slog.DiscardHandler), nil, Options{})
-	for _, path := range []string{registerPath, verifyPath, resendPath, forgotPath, resetPath, loginPath, refreshPath} {
+	for _, path := range []string{registerPath, verifyPath, resendPath, forgotPath, resetPath, loginPath, refreshPath, googlePath} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, nil)) // 400
 		if got := rec.Header().Get("Cache-Control"); got != "no-store" {

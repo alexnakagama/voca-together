@@ -18,7 +18,7 @@ const maxTrackedIPs = 100_000
 // (decision 018). A nil limiter allows everything, so the zero value
 // disables limiting (tests).
 type IPLimits struct {
-	Login    *ratelimit.Limiter[netip.Prefix] // login
+	Login    *ratelimit.Limiter[netip.Prefix] // login, google (one sign-in bucket)
 	Register *ratelimit.Limiter[netip.Prefix] // register
 	Email    *ratelimit.Limiter[netip.Prefix] // resend-verification, forgot-password
 	Token    *ratelimit.Limiter[netip.Prefix] // verify-email, reset-password (JSON and form)

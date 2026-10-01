@@ -45,6 +45,10 @@ type refreshRequest struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
+type googleSignInRequest struct {
+	IDToken string `json:"id_token"`
+}
+
 // tokenResponse is the body of a successful login or refresh. It follows the
 // OAuth 2.0 token response shape (RFC 6749 5.1). expires_in is relative
 // seconds, so client clock skew doesn't matter.
@@ -196,6 +200,36 @@ func handleRefresh(logger *slog.Logger, svc *auth.Service) http.HandlerFunc {
 	}
 }
 
+// handleGoogleSignIn answers 200 with new session credentials for the
+// account of a Google ID token, created first if needed (decision 020); the
+// body is the same as login's. Every unusable token (rejected, replayed, or
+// Google sign-in not configured) gets the same 401 invalid_google_token, so
+// clients can't tell them apart. 403 google_email_unusable and 409
+// account_exists come only after the token verified. The 401 carries no
+// WWW-Authenticate: as for login, the token is a credential in the body, not
+// an HTTP authentication scheme.
+//
+// Only the body carries the ID token; the Authorization header and the query
+// string are ignored. Every response is marked no-store, as for login. A 503
+// or 500 may come after the token was spent, so clients retry with a new ID
+// token (requestTimeout).
+func handleGoogleSignIn(logger *slog.Logger, svc *auth.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		var req googleSignInRequest
+		if err := decodeJSON(w, r, &req, maxAuthBodyBytes); err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidRequest)
+			return
+		}
+		res, err := svc.SignInWithGoogle(r.Context(), req.IDToken, r.UserAgent())
+		if err != nil {
+			writeServiceError(w, r, logger, err)
+			return
+		}
+		writeTokens(w, res)
+	}
+}
+
 // handleLogout revokes the session of the request's Bearer access token and
 // answers 204 (decision 015). Any well-formed access token gets the same 204,
 // whether its session was revoked now, already revoked, expired, or unknown,
@@ -241,10 +275,11 @@ func writeTokens(w http.ResponseWriter, c auth.Credentials) {
 }
 
 // writeServiceError maps an auth service error to a response: validation
-// errors to 422 with their fields, login, refresh and access-token outcomes
-// to 401/403, a spent per-account limit to 429, overload or the request
-// deadline to 503, anything else to an opaque 500 whose details go only to
-// the log. Service errors never contain secrets.
+// errors to 422 with their fields, login, refresh, access-token and Google
+// sign-in outcomes to 401/403/409, a spent per-account limit to 429, overload,
+// unavailable Google keys or the request deadline to 503, anything else to an
+// opaque 500 whose details go only to the log. Service errors never contain
+// secrets.
 func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, err error) {
 	var verr *auth.ValidationError
 	var limited *auth.RateLimitedError
@@ -273,16 +308,28 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logg
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		writeError(w, http.StatusUnauthorized, codeInvalidAccessToken)
 		return
+	case errors.Is(err, auth.ErrInvalidGoogleToken):
+		// A credential in the body, like login's: no WWW-Authenticate.
+		writeError(w, http.StatusUnauthorized, codeInvalidGoogleToken)
+		return
+	case errors.Is(err, auth.ErrGoogleEmailUnusable):
+		writeError(w, http.StatusForbidden, codeGoogleEmailUnusable)
+		return
+	case errors.Is(err, auth.ErrAccountExists):
+		writeError(w, http.StatusConflict, codeAccountExists)
+		return
 	}
 	logger.ErrorContext(r.Context(), "request failed", "route", r.Pattern, "err", err)
 	writeError(w, http.StatusInternalServerError, codeInternalError)
 }
 
 // unavailable reports whether err means the server couldn't serve the request
-// in time: the argon2 queue was full, or the request deadline passed
-// (requestDeadline; a client disconnect is Canceled, not DeadlineExceeded).
+// in time: the argon2 queue was full, Google's signing keys couldn't be
+// fetched, or the request deadline passed (requestDeadline; a client
+// disconnect is Canceled, not DeadlineExceeded).
 func unavailable(err error) bool {
-	return errors.Is(err, auth.ErrOverloaded) || errors.Is(err, context.DeadlineExceeded)
+	return errors.Is(err, auth.ErrOverloaded) || errors.Is(err, auth.ErrGoogleUnavailable) ||
+		errors.Is(err, context.DeadlineExceeded)
 }
 
 func writeValidationError(w http.ResponseWriter, verr *auth.ValidationError) {
