@@ -28,7 +28,7 @@ func dbFreeService(t *testing.T) (*Service, *bytes.Buffer) {
 	t.Helper()
 	logs := &bytes.Buffer{}
 	logger := slog.New(slog.NewTextHandler(logs, nil))
-	return NewService(nil, nil, nil, logger, NewAccountLimits(logger)), logs
+	return NewService(nil, nil, nil, logger, NewAccountLimits(logger), nil), logs
 }
 
 func drain(l *ratelimit.Limiter[[32]byte], addr string, n int) {
@@ -296,7 +296,7 @@ func TestBackgroundSendsAreBoundedAndExcessIsDropped(t *testing.T) {
 		mu.Unlock()
 		return nil
 	})
-	s := NewService(nil, sender, nil, slog.New(slog.NewTextHandler(logs, nil)), AccountLimits{})
+	s := NewService(nil, sender, nil, slog.New(slog.NewTextHandler(logs, nil)), AccountLimits{}, nil)
 	msg := email.Message{To: "ana@example.com", Subject: "s", Text: "t"}
 
 	for range maxInFlightEmails + 3 {

@@ -14,13 +14,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"vocatogether/backend/internal/email"
+	"vocatogether/backend/internal/googleid"
 	"vocatogether/backend/internal/testutil"
 )
 
 // ---- Store ----
 
 // googleAttempt is one Google sign-in as the service will pass it to the
-// store: a verified ID token (only its hash and exp reach the store) and the
+// store: a verified ID token (only its hash and acceptedUntil reach the store) and the
 // new session's tokens.
 type googleAttempt struct {
 	googleSignInInput
@@ -29,20 +30,21 @@ type googleAttempt struct {
 }
 
 // newGoogleAttempt returns an eligible attempt with a fresh ID token that
-// expires in an hour (whole seconds, like a real exp claim).
+// the verifier accepts for another hour (whole seconds, like a real exp
+// claim plus the skew).
 func newGoogleAttempt(subject, addr string) googleAttempt {
 	raw := "eyJhbGciOiJSUzI1NiJ9.test-payload." + NewToken("").Raw
 	access, refresh := NewToken(AccessTokenPrefix), NewToken(RefreshTokenPrefix)
 	return googleAttempt{
 		googleSignInInput: googleSignInInput{
-			tokenHash:   HashToken(raw),
-			tokenExpiry: time.Unix(time.Now().Add(time.Hour).Unix(), 0),
-			subject:     subject,
-			eligible:    true,
-			email:       addr,
-			accessHash:  access.Hash,
-			refreshHash: refresh.Hash,
-			userAgent:   ptr(testUserAgent),
+			tokenHash:     HashToken(raw),
+			acceptedUntil: time.Unix(time.Now().Add(time.Hour).Unix(), 0),
+			subject:       subject,
+			eligible:      true,
+			email:         addr,
+			accessHash:    access.Hash,
+			refreshHash:   refresh.Hash,
+			userAgent:     ptr(testUserAgent),
 		},
 		rawIDToken: raw,
 		access:     access,
@@ -265,14 +267,15 @@ func TestGoogleSignInCreatesAccount(t *testing.T) {
 	}
 	requireFreshSession(t, sessions[0], r.userID, a.access, a.refresh, a.userAgent)
 
-	// Only the SHA-256 of the ID token is kept, expiring a minute after it.
+	// Only the SHA-256 of the ID token is kept, expiring when the verifier
+	// stops accepting the token.
 	var storedExpiry time.Time
 	if err := pool.QueryRow(ctx, `SELECT expires_at FROM google_id_token_uses WHERE token_hash = $1`, HashToken(a.rawIDToken)).
 		Scan(&storedExpiry); err != nil {
 		t.Fatal(err)
 	}
-	if want := a.tokenExpiry.Add(time.Minute); !storedExpiry.Equal(want) {
-		t.Errorf("token use expires_at = %v, want exp + 1 min = %v", storedExpiry, want)
+	if !storedExpiry.Equal(a.acceptedUntil) {
+		t.Errorf("token use expires_at = %v, want acceptedUntil = %v", storedExpiry, a.acceptedUntil)
 	}
 	requireNoSecrets(t, "database", dumpTables(t, pool), []string{a.rawIDToken, "test-payload", a.access.Raw, a.refresh.Raw})
 }
@@ -922,7 +925,7 @@ func TestCleanupKeepsGoogleTokenUseUntilExpiry(t *testing.T) {
 	s := newTestService(t, &email.Recorder{})
 	ctx := context.Background()
 	a := newGoogleAttempt("1001", "gina@example.com")
-	a.tokenExpiry = time.Now().Add(-30 * time.Second) // within the skew: still accepted by the verifier
+	a.acceptedUntil = time.Now().Add(30 * time.Second) // exp has passed, but the verifier still accepts it
 	r, err := googleSignIn(ctx, s.pool, a.googleSignInInput)
 	requireGoogleOutcome(t, r, err, googleCreated)
 
@@ -976,5 +979,396 @@ func TestRunCleanupLogsGoogleTokenUses(t *testing.T) {
 	}
 	if !strings.Contains(logs, "google_token_uses_deleted=1") {
 		t.Errorf("cleanup log lacks the token use count:\n%s", logs)
+	}
+}
+
+// ---- SignInWithGoogle ----
+
+// Google subjects are 21-digit strings; these are long enough that they
+// can't appear by chance in a logged UUID.
+const (
+	testGoogleSubject  = "109876543210987654321"
+	otherGoogleSubject = "123456789012345678901"
+)
+
+// verifierFunc adapts a function to googleid.Verifier, for tests that need a
+// hook inside Verify.
+type verifierFunc func(ctx context.Context, raw string) (googleid.Claims, error)
+
+func (f verifierFunc) Verify(ctx context.Context, raw string) (googleid.Claims, error) {
+	return f(ctx, raw)
+}
+
+// googleFixture is a service whose Google verifier is a Fake: tokens issued
+// with issue verify to their claims, any other token is rejected.
+type googleFixture struct {
+	testService
+	tokens map[string]googleid.Claims
+}
+
+func newGoogleFixture(t *testing.T) googleFixture {
+	t.Helper()
+	s := newTestService(t, &email.Recorder{})
+	tokens := map[string]googleid.Claims{}
+	s.google = googleid.Fake{Tokens: tokens}
+	return googleFixture{testService: s, tokens: tokens}
+}
+
+// googleAcceptedUntil is an acceptance window like a fresh token's (whole
+// seconds, as the verifier derives it from exp).
+func googleAcceptedUntil() time.Time { return time.Unix(time.Now().Add(time.Hour).Unix(), 0) }
+
+// fakeIDToken returns a new raw stand-in for an ID token.
+func fakeIDToken() string { return "eyJhbGciOiJSUzI1NiJ9.service-test." + NewToken("").Raw }
+
+// issue returns a new raw ID token that verifies to the given claims.
+func (f googleFixture) issue(subject, addr string, verified bool) string {
+	raw := fakeIDToken()
+	f.tokens[raw] = googleid.NewClaims(subject, addr, verified, "", googleAcceptedUntil())
+	return raw
+}
+
+// requireGoogleLogsClean checks the service log for every secret Google
+// sign-in handles: ID tokens and their hashes, subjects, emails, the user
+// agent, and the issued session tokens.
+func requireGoogleLogsClean(t *testing.T, s testService, idTokens []string, emails []string, creds ...Credentials) {
+	t.Helper()
+	s.Wait()
+	secrets := append([]string{testGoogleSubject, otherGoogleSubject, testUserAgent, "service-test"}, emails...)
+	for _, raw := range idTokens {
+		secrets = append(secrets, tokenSecrets(raw)...)
+	}
+	for _, c := range creds {
+		secrets = append(secrets, tokenSecrets(c.AccessToken.Raw)...)
+		secrets = append(secrets, tokenSecrets(c.RefreshToken.Raw)...)
+	}
+	requireNoSecrets(t, "log", s.logs.String(), secrets)
+}
+
+func requireNoCredentials(t *testing.T, creds Credentials) {
+	t.Helper()
+	if creds.AccessToken.Raw != "" || creds.RefreshToken.Raw != "" || creds.ExpiresIn != 0 {
+		t.Error("credentials returned on failure")
+	}
+}
+
+func requireLogged(t *testing.T, s testService, want ...string) {
+	t.Helper()
+	s.Wait()
+	for _, w := range want {
+		if !strings.Contains(s.logs.String(), w) {
+			t.Errorf("log lacks %q:\n%s", w, s.logs.String())
+		}
+	}
+}
+
+// A new identity with any verified email creates a passwordless account
+// under the normalized address and returns an ordinary vt session.
+func TestSignInWithGoogleCreatesAccount(t *testing.T) {
+	f := newGoogleFixture(t)
+	ctx := context.Background()
+	raw := f.issue(testGoogleSubject, "  Gina@Outlook.COM", true)
+
+	creds, err := f.SignInWithGoogle(ctx, raw, testUserAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(creds.AccessToken.Raw, AccessTokenPrefix) || !strings.HasPrefix(creds.RefreshToken.Raw, RefreshTokenPrefix) ||
+		creds.ExpiresIn != accessTokenTTL {
+		t.Fatalf("credentials: expires_in %v, prefixes wrong", creds.ExpiresIn)
+	}
+	userID := userIDByEmail(t, f.pool, "gina@outlook.com")
+	id, err := f.Authenticate(ctx, creds.AccessToken.Raw)
+	if err != nil || id.UserID != userID {
+		t.Fatalf("Authenticate = %+v, %v; want user %s", id, err, userID)
+	}
+	sessions := loadSessions(t, f.pool)
+	requireFreshSession(t, sessions[0], userID, creds.AccessToken, creds.RefreshToken, ptr(testUserAgent))
+	requireGoogleTables(t, f.pool, googleTables{users: 1, identities: 1, sessions: 1, tokenUses: 1})
+
+	requireLogged(t, f.testService, `msg="auth: google sign-in succeeded"`, "user_id="+userID,
+		"session_id="+sessions[0].id, "new_account=true")
+	requireGoogleLogsClean(t, f.testService, []string{raw}, []string{"gina@outlook.com", "Gina@Outlook.COM"}, creds)
+}
+
+// A linked identity signs in to its user by subject alone, whatever its
+// token's email now says; users.email is never synced.
+func TestSignInWithGoogleExistingIdentity(t *testing.T) {
+	f := newGoogleFixture(t)
+	userID := seedGoogleAccount(t, f.pool, "gina@outlook.com", testGoogleSubject)
+	before := usersAndIdentities(t, f.pool)
+	cases := []struct {
+		name     string
+		email    string
+		verified bool
+	}{
+		{"same email", "gina@outlook.com", true},
+		{"email no longer verified", "gina@outlook.com", false},
+		{"email changed", "gina.new@example.com", true},
+		{"email unusable", "gína@example.com", true},
+		{"email missing", "", false},
+	}
+	var raws []string
+	for _, c := range cases {
+		raw := f.issue(testGoogleSubject, c.email, c.verified)
+		raws = append(raws, raw)
+		creds, err := f.SignInWithGoogle(context.Background(), raw, testUserAgent)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if id, err := f.Authenticate(context.Background(), creds.AccessToken.Raw); err != nil || id.UserID != userID {
+			t.Fatalf("%s: Authenticate = %+v, %v", c.name, id, err)
+		}
+	}
+	if after := usersAndIdentities(t, f.pool); after != before {
+		t.Errorf("account changed:\n%s\nwant\n%s", after, before)
+	}
+	requireGoogleTables(t, f.pool, googleTables{users: 1, identities: 1, sessions: len(cases), tokenUses: len(cases)})
+	requireLogged(t, f.testService, "new_account=false")
+	if strings.Contains(f.logs.String(), "new_account=true") {
+		t.Error("an existing identity was logged as a new account")
+	}
+	requireGoogleLogsClean(t, f.testService, raws, []string{"gina@outlook.com", "gina.new@example.com", "gína@example.com"})
+}
+
+// A new identity whose email can't create an account gets
+// ErrGoogleEmailUnusable; only the token use is written.
+func TestSignInWithGoogleIneligibleEmail(t *testing.T) {
+	for _, c := range []struct {
+		name, email string
+		verified    bool
+		reason      string
+	}{
+		{"missing", "", true, "email_missing"},
+		{"missing and unverified", "", false, "email_missing"},
+		{"unverified", "gina@outlook.com", false, "email_unverified"},
+		{"non-ASCII", "gína@example.com", true, "email_invalid"},
+		{"display name", "Gina <gina@outlook.com>", true, "email_invalid"},
+		{"IP domain", "gina@1.2.3.4", true, "email_invalid"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newGoogleFixture(t)
+			raw := f.issue(testGoogleSubject, c.email, c.verified)
+
+			creds, err := f.SignInWithGoogle(context.Background(), raw, testUserAgent)
+			requireErrorIs(t, err, ErrGoogleEmailUnusable)
+			requireNoCredentials(t, creds)
+			requireGoogleTables(t, f.pool, googleTables{tokenUses: 1})
+			requireLogged(t, f.testService, `msg="auth: google sign-in failed"`, "reason="+c.reason)
+			requireGoogleLogsClean(t, f.testService, []string{raw}, []string{"gina@outlook.com", "gína@example.com"})
+		})
+	}
+}
+
+// An unverified email is refused before the collision check, so it can't be
+// used to learn whether the address has an account.
+func TestSignInWithGoogleUnverifiedEmailRevealsNoAccount(t *testing.T) {
+	f := newGoogleFixture(t)
+	seedAccount(t, f.pool, "ana@example.com", HashPassword(testPassword), true)
+	_, err := f.SignInWithGoogle(context.Background(), f.issue(testGoogleSubject, "ana@example.com", false), testUserAgent)
+	requireErrorIs(t, err, ErrGoogleEmailUnusable)
+}
+
+// A new identity whose email belongs to an account, verified or not, gets
+// ErrAccountExists; the account is left exactly as it was (no linking).
+func TestSignInWithGoogleExistingAccount(t *testing.T) {
+	for _, verified := range []bool{true, false} {
+		t.Run(fmt.Sprintf("verified=%v", verified), func(t *testing.T) {
+			f := newGoogleFixture(t)
+			userID := seedAccount(t, f.pool, "ana@example.com", HashPassword(testPassword), verified)
+			before := usersAndIdentities(t, f.pool)
+			raw := f.issue(testGoogleSubject, "Ana@Example.com", true)
+
+			creds, err := f.SignInWithGoogle(context.Background(), raw, testUserAgent)
+			requireErrorIs(t, err, ErrAccountExists)
+			requireNoCredentials(t, creds)
+			if after := usersAndIdentities(t, f.pool); after != before {
+				t.Errorf("account changed:\n%s\nwant\n%s", after, before)
+			}
+			requireGoogleTables(t, f.pool, googleTables{users: 1, tokenUses: 1})
+			requireLogged(t, f.testService, "reason=account_exists", "user_id="+userID)
+			requireGoogleLogsClean(t, f.testService, []string{raw}, []string{"ana@example.com", "Ana@Example.com"})
+		})
+	}
+}
+
+// A token is accepted once: a replay gets the same error as an invalid
+// token and creates nothing.
+func TestSignInWithGoogleReplay(t *testing.T) {
+	f := newGoogleFixture(t)
+	raw := f.issue(testGoogleSubject, "gina@outlook.com", true)
+	first, err := f.SignInWithGoogle(context.Background(), raw, testUserAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	creds, err := f.SignInWithGoogle(context.Background(), raw, testUserAgent)
+	requireErrorIs(t, err, ErrInvalidGoogleToken)
+	requireNoCredentials(t, creds)
+	requireGoogleTables(t, f.pool, googleTables{users: 1, identities: 1, sessions: 1, tokenUses: 1})
+	requireLogged(t, f.testService, "reason=replayed")
+	requireGoogleLogsClean(t, f.testService, []string{raw}, []string{"gina@outlook.com"}, first)
+}
+
+// Verifier outcomes are decided before any database work (the service has
+// no pool: touching it would panic). Every rejection is ErrInvalidGoogleToken
+// with its fixed reason in the log; unavailable keys are ErrGoogleUnavailable.
+func TestSignInWithGoogleVerifierFailures(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		verifier googleid.Verifier
+		want     error
+		logged   string
+	}{
+		{"unknown token", googleid.Fake{}, ErrInvalidGoogleToken, "reason=bad_signature"},
+		{"expired", googleid.Fake{Err: &googleid.InvalidTokenError{Reason: googleid.ReasonExpired}},
+			ErrInvalidGoogleToken, "reason=expired"},
+		{"wrong audience", googleid.Fake{Err: &googleid.InvalidTokenError{Reason: googleid.ReasonWrongAudience}},
+			ErrInvalidGoogleToken, "reason=wrong_audience"},
+		{"bare ErrInvalidToken", googleid.Fake{Err: googleid.ErrInvalidToken}, ErrInvalidGoogleToken, "reason=invalid_token"},
+		{"not configured", nil, ErrInvalidGoogleToken, "reason=not_configured"},
+		{"keys unavailable", googleid.Fake{Err: &googleid.UnavailableError{Reason: "transport"}},
+			ErrGoogleUnavailable, `msg="auth: google keys unavailable" reason=transport`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, logs := dbFreeService(t)
+			s.google = c.verifier
+			raw := fakeIDToken()
+
+			creds, err := s.SignInWithGoogle(context.Background(), raw, testUserAgent)
+			requireErrorIs(t, err, c.want)
+			requireNoCredentials(t, creds)
+			if !strings.Contains(logs.String(), c.logged) {
+				t.Errorf("log lacks %q:\n%s", c.logged, logs.String())
+			}
+			requireNoSecrets(t, "log", logs.String(), tokenSecrets(raw))
+			requireNoSecrets(t, "error", err.Error(), tokenSecrets(raw))
+		})
+	}
+}
+
+// An empty token is invalid input, refused before the verifier runs.
+func TestSignInWithGoogleRequiresToken(t *testing.T) {
+	s, _ := dbFreeService(t)
+	s.google = verifierFunc(func(context.Context, string) (googleid.Claims, error) {
+		t.Error("verifier called for an empty token")
+		return googleid.Claims{}, nil
+	})
+	_, err := s.SignInWithGoogle(context.Background(), "", testUserAgent)
+	requireFieldErrors(t, err, ErrIDTokenRequired)
+}
+
+// The token use is remembered exactly as long as the verifier would accept
+// the token: the store gets the verifier's AcceptedUntil unchanged.
+func TestSignInWithGoogleStoresAcceptedUntil(t *testing.T) {
+	f := newGoogleFixture(t)
+	until := time.Unix(time.Now().Add(42*time.Minute).Unix(), 0)
+	raw := fakeIDToken()
+	f.tokens[raw] = googleid.NewClaims(testGoogleSubject, "gina@outlook.com", true, "", until)
+
+	if _, err := f.SignInWithGoogle(context.Background(), raw, testUserAgent); err != nil {
+		t.Fatal(err)
+	}
+	var stored time.Time
+	if err := f.pool.QueryRow(context.Background(),
+		`SELECT expires_at FROM google_id_token_uses WHERE token_hash = $1`, HashToken(raw)).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if !stored.Equal(until) {
+		t.Errorf("expires_at = %v, want AcceptedUntil %v", stored, until)
+	}
+}
+
+// Claims without an acceptance window would make the replay record expire
+// at once, so they are refused as an internal error before any database
+// work.
+func TestSignInWithGoogleRefusesClaimsWithoutAcceptedUntil(t *testing.T) {
+	s, _ := dbFreeService(t)
+	raw := fakeIDToken()
+	s.google = googleid.Fake{Tokens: map[string]googleid.Claims{
+		raw: googleid.NewClaims(testGoogleSubject, "gina@outlook.com", true, "", time.Time{}),
+	}}
+	creds, err := s.SignInWithGoogle(context.Background(), raw, testUserAgent)
+	requireInternal(t, err)
+	for _, sentinel := range []error{ErrInvalidGoogleToken, ErrGoogleEmailUnusable, ErrAccountExists, ErrGoogleUnavailable} {
+		if errors.Is(err, sentinel) {
+			t.Errorf("err = %v, want an internal error", err)
+		}
+	}
+	requireNoCredentials(t, creds)
+}
+
+// A cancelled request stops before the database, whether it was cancelled
+// before verification or during it (the service has no pool: touching it
+// would panic).
+func TestSignInWithGoogleHonorsCancelledContext(t *testing.T) {
+	t.Run("before", func(t *testing.T) {
+		s, _ := dbFreeService(t)
+		raw := fakeIDToken()
+		s.google = googleid.Fake{Tokens: map[string]googleid.Claims{
+			raw: googleid.NewClaims(testGoogleSubject, "gina@outlook.com", true, "", googleAcceptedUntil()),
+		}}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := s.SignInWithGoogle(ctx, raw, testUserAgent)
+		requireErrorIs(t, err, context.Canceled)
+	})
+	t.Run("during verification", func(t *testing.T) {
+		s, _ := dbFreeService(t)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		s.google = verifierFunc(func(context.Context, string) (googleid.Claims, error) {
+			cancel()
+			return googleid.NewClaims(testGoogleSubject, "gina@outlook.com", true, "", googleAcceptedUntil()), nil
+		})
+		_, err := s.SignInWithGoogle(ctx, fakeIDToken(), testUserAgent)
+		requireErrorIs(t, err, context.Canceled)
+	})
+}
+
+// A database failure is an internal error that leaks nothing, returns no
+// credentials and leaves nothing behind.
+func TestSignInWithGoogleDatabaseFailure(t *testing.T) {
+	f := newGoogleFixture(t)
+	injectFailure(t, f.pool, "BEFORE INSERT ON sessions")
+	raw := f.issue(testGoogleSubject, "gina@outlook.com", true)
+
+	creds, err := f.SignInWithGoogle(context.Background(), raw, testUserAgent)
+	requireInternal(t, err)
+	for _, sentinel := range []error{ErrInvalidGoogleToken, ErrGoogleEmailUnusable, ErrAccountExists, ErrGoogleUnavailable} {
+		if errors.Is(err, sentinel) {
+			t.Errorf("err = %v, want an internal error", err)
+		}
+	}
+	requireNoCredentials(t, creds)
+	requireGoogleTables(t, f.pool, googleTables{})
+	requireNoSecrets(t, "error", err.Error(),
+		append(tokenSecrets(raw), testGoogleSubject, "gina@outlook.com", "service-test"))
+	requireGoogleLogsClean(t, f.testService, []string{raw}, []string{"gina@outlook.com"})
+}
+
+// The per-account login limit applies per Google subject, after
+// verification and before the database: a limited attempt writes nothing
+// (so the same token can be retried), and neither other subjects nor the
+// email login bucket of the same address are affected.
+func TestSignInWithGoogleRateLimitedPerSubject(t *testing.T) {
+	f := newGoogleFixture(t)
+	f.testService = withAccountLimits(f.testService)
+	ctx := context.Background()
+	for i := range loginBurst {
+		if _, err := f.SignInWithGoogle(ctx, f.issue(testGoogleSubject, "gina@outlook.com", true), testUserAgent); err != nil {
+			t.Fatalf("sign-in %d: %v", i+1, err)
+		}
+	}
+	before := countGoogleTables(t, f.pool)
+
+	_, err := f.SignInWithGoogle(ctx, f.issue(testGoogleSubject, "gina@outlook.com", true), testUserAgent)
+	requireRateLimited(t, err, loginEvery)
+	requireGoogleTables(t, f.pool, before)
+
+	// Another subject, with the email login bucket of its address spent.
+	drain(f.limits.Login, "ana@example.com", loginBurst)
+	if _, err := f.SignInWithGoogle(ctx, f.issue(otherGoogleSubject, "ana@example.com", true), testUserAgent); err != nil {
+		t.Fatalf("other subject: %v", err)
 	}
 }

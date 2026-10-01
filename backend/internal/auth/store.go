@@ -643,20 +643,15 @@ func findUserByID(ctx context.Context, pool *pgxpool.Pool, userID string) (u Use
 // identityProviderGoogle is user_identities.provider for Google accounts.
 const identityProviderGoogle = "google"
 
-// googleTokenUseSkew is added to a Google ID token's exp to get the
-// expires_at of its google_id_token_uses row. It must be at least the clock
-// skew googleid tolerates on exp (one minute), so the row outlives every
-// moment the verifier still accepts the token: deleting it earlier would let
-// the token be replayed.
-const googleTokenUseSkew = time.Minute
-
 // googleSignInInput is what googleSignIn needs. The service has verified the
 // ID token and decided the email policy; the store applies the decision and
 // nothing else.
 type googleSignInInput struct {
-	tokenHash   []byte    // SHA-256 of the raw ID token
-	tokenExpiry time.Time // the verified exp claim
-	subject     string    // Google sub
+	tokenHash []byte // SHA-256 of the raw ID token
+	// acceptedUntil is the verifier's Claims.AcceptedUntil: until then the
+	// token would verify again, so its use must be remembered that long.
+	acceptedUntil time.Time
+	subject       string // Google sub
 	// eligible says whether email may create a new account. It is used only
 	// when no user has the identity yet; a linked identity signs in whatever
 	// its token's email is now (users.email is never synced).
@@ -751,7 +746,7 @@ func googleSignIn(ctx context.Context, pool *pgxpool.Pool, in googleSignInInput)
 // UPDATE (reset, verification), which never touches the Google tables.
 // PostgreSQL's unique constraints are the only arbiter: no extra locks.
 func googleSignInTx(ctx context.Context, tx pgx.Tx, in googleSignInInput) (googleSignInResult, error) {
-	consumed, err := consumeGoogleIDTokenTx(ctx, tx, in.tokenHash, in.tokenExpiry)
+	consumed, err := consumeGoogleIDTokenTx(ctx, tx, in.tokenHash, in.acceptedUntil)
 	if err != nil {
 		return googleSignInResult{}, err
 	}
@@ -809,15 +804,15 @@ func googleSignInTx(ctx context.Context, tx pgx.Tx, in googleSignInInput) (googl
 
 // consumeGoogleIDTokenTx records the ID token with the given hash as used,
 // and reports false, having written nothing, if it was already. Only the
-// hash is stored. The row expires googleTokenUseSkew after the token, once
-// the verifier rejects the token anyway, and cleanup then deletes it.
-func consumeGoogleIDTokenTx(ctx context.Context, tx pgx.Tx, tokenHash []byte, tokenExpiry time.Time) (bool, error) {
+// hash is stored. The row expires at acceptedUntil, when the verifier starts
+// rejecting the token anyway, and cleanup then deletes it.
+func consumeGoogleIDTokenTx(ctx context.Context, tx pgx.Tx, tokenHash []byte, acceptedUntil time.Time) (bool, error) {
 	var one int
 	err := tx.QueryRow(ctx,
 		`INSERT INTO google_id_token_uses (token_hash, expires_at) VALUES ($1, $2)
 		 ON CONFLICT ON CONSTRAINT google_id_token_uses_pkey DO NOTHING
 		 RETURNING 1`,
-		tokenHash, tokenExpiry.Add(googleTokenUseSkew)).Scan(&one)
+		tokenHash, acceptedUntil).Scan(&one)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -936,7 +931,7 @@ func deleteDeadTokens(ctx context.Context, pool *pgxpool.Pool, retention time.Du
 
 // deleteExpiredGoogleTokenUses deletes up to limit Google ID token uses whose
 // expires_at has passed. They need no retention: past expires_at the
-// verifier rejects the token itself (see googleTokenUseSkew), so the row no
+// verifier rejects the token itself (see googleSignInInput.acceptedUntil), so the row no
 // longer prevents anything. Like the other deletes, it never waits for a lock
 // (SKIP LOCKED).
 func deleteExpiredGoogleTokenUses(ctx context.Context, pool *pgxpool.Pool, limit int) (int64, error) {

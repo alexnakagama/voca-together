@@ -39,7 +39,7 @@ func newTestService(t *testing.T, sender email.Sender) testService {
 	t.Helper()
 	pool := testutil.DB(t)
 	logs := &bytes.Buffer{}
-	svc := NewService(pool, sender, mustParseURL(t, testBaseURL), slog.New(slog.NewTextHandler(logs, nil)), AccountLimits{})
+	svc := NewService(pool, sender, mustParseURL(t, testBaseURL), slog.New(slog.NewTextHandler(logs, nil)), AccountLimits{}, nil)
 	t.Cleanup(svc.Wait)
 	return testService{Service: svc, pool: pool, logs: logs}
 }
@@ -365,7 +365,7 @@ func TestHashSlotWaitHonorsContext(t *testing.T) {
 }
 
 func TestNewServiceSizesHashSlotsToCPUs(t *testing.T) {
-	s := NewService(nil, nil, nil, slog.New(slog.DiscardHandler), AccountLimits{})
+	s := NewService(nil, nil, nil, slog.New(slog.DiscardHandler), AccountLimits{}, nil)
 	if got, want := cap(s.hashSlots), runtime.GOMAXPROCS(0); got != want {
 		t.Errorf("hash slots = %d, want GOMAXPROCS = %d", got, want)
 	}

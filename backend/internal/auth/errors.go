@@ -28,6 +28,8 @@ var (
 	// ErrRefreshTokenRequired is the only field error refresh returns; every
 	// unusable non-empty token is ErrInvalidRefreshToken instead.
 	ErrRefreshTokenRequired = &FieldError{Field: "refresh_token", Code: "required"}
+	// ErrIDTokenRequired is the only field error Google sign-in returns.
+	ErrIDTokenRequired = &FieldError{Field: "id_token", Code: "required"}
 )
 
 // Login outcomes other than success and invalid input.
@@ -52,6 +54,28 @@ var ErrInvalidRefreshToken = errors.New("auth: invalid refresh token")
 // is unknown, rotated out, revoked or expired, so protected endpoints can't
 // tell those apart either.
 var ErrInvalidAccessToken = errors.New("auth: invalid access token")
+
+// Google sign-in outcomes other than success, invalid input and the shared
+// rate-limit and context errors (decision 020).
+var (
+	// ErrInvalidGoogleToken covers every ID token that can't be used:
+	// rejected by the verifier for any reason, already used (replayed), or
+	// Google sign-in not configured. One error for all keeps the response from
+	// revealing which.
+	ErrInvalidGoogleToken = errors.New("auth: invalid google token")
+	// ErrGoogleEmailUnusable means the token is valid and its identity is not
+	// linked to any account, but its email can't create one: missing, not
+	// verified by Google, or rejected by NormalizeEmail. The token is spent.
+	ErrGoogleEmailUnusable = errors.New("auth: google email unusable")
+	// ErrAccountExists means the token is valid and its identity is not
+	// linked, but its email already belongs to an account. Nothing is linked
+	// automatically; the token is spent.
+	ErrAccountExists = errors.New("auth: account exists")
+	// ErrGoogleUnavailable means Google's signing keys couldn't be obtained,
+	// so nothing about the token was decided and nothing was written: a retry
+	// with the same token is safe.
+	ErrGoogleUnavailable = errors.New("auth: google unavailable")
+)
 
 // ValidationError reports every invalid field of a request at once, so
 // clients can show all problems together. Its message names fields and codes

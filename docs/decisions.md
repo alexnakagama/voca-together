@@ -548,8 +548,9 @@ and a wrong password. `email_not_verified` (403) is returned only after the pass
   COMMITTED transaction, in this order:
   1. **Single use of the ID token:** the first statement is
      `INSERT INTO google_id_token_uses … ON CONFLICT DO NOTHING RETURNING`, storing only SHA-256(raw token) and
-     `exp + 1 min` (`googleTokenUseSkew`, at least the verifier's clock skew, so the row outlives every moment the
-     verifier still accepts the token). A conflict is `googleReplayed`: nothing else is written and no session is
+     the verifier's `Claims.AcceptedUntil()` (exp plus its clock skew, the instant from which `Verify` rejects the
+     token) as `expires_at`, so the row lasts exactly as long as the token would verify and auth holds no copy of
+     the skew. A conflict is `googleReplayed`: nothing else is written and no session is
      created. Two requests with the same token serialize on the primary key. The token use commits with every outcome
      that follows (sign-in, ineligible, account exists): once a verified token reaches the database it is spent. A
      rollback (DB error) removes it, so a retry after a 500 isn't refused as a replay.
@@ -579,3 +580,32 @@ and a wrong password. `email_not_verified` (403) is returned only after the pass
   it the verifier rejects the token itself), in batches with `FOR UPDATE SKIP LOCKED`, logged as
   `google_token_uses_deleted`. This assumes the API servers' and the database's clocks are in sync (NTP), which the
   verifier's exp and iat checks already require.
+- **Stage 4: `Service.SignInWithGoogle(ctx, rawIDToken, userAgent)`** (`google.go`; no endpoint or config yet).
+  `NewService` takes a `googleid.Verifier`; `nil` means not configured (`main` passes `nil` until
+  `GOOGLE_CLIENT_ID` exists), and the router never builds Google infrastructure. In this order:
+  1. Empty token → `*ValidationError` (`id_token:required`). No verifier → `ErrInvalidGoogleToken`.
+  2. **Verify.** Any rejection → `ErrInvalidGoogleToken`, logged with the verifier's fixed reason. Keys
+     unavailable → `ErrGoogleUnavailable` (nothing decided, nothing written: a retry with the same token is
+     safe). Context errors are wrapped unchanged. Only verified claims are used from here on. Claims without
+     `AcceptedUntil` are an internal error, since a zero expiry would let cleanup reopen replay at once.
+  3. **Per-subject limit:** `account_login` keyed `"google:"+sub` (never collides with an email key), after
+     verification (sub is unknown before) and before the database. A 429 writes nothing.
+  4. **Email policy (service only):** a new account needs an email that is present, `email_verified`, and passes
+     `NormalizeEmail`. This yields an `eligible` flag and the normalized address. It never fails early: a linked
+     identity signs in whatever its email, which only the store can tell.
+  5. Fresh vt tokens (hashes only to the store), then one `googleSignIn` call. The service has **no transaction,
+     lock or retry** of its own, so there are no new lock orders and no double side effects. An unknown commit
+     outcome is a 500 whose raw session tokens were discarded. The ID token may be spent, so the client retries
+     with a new one.
+  6. Outcomes:
+     - signed in or created → `Credentials` exactly as `Login` returns them;
+     - replayed → `ErrInvalidGoogleToken` (indistinguishable from an invalid token);
+     - ineligible → `ErrGoogleEmailUnusable`;
+     - email taken → `ErrAccountExists`.
+     An unverified email is refused before the collision check, so it can't probe for accounts.
+- **Logs:**
+  - `auth: google sign-in succeeded` (`user_id`, `session_id`, `new_account`);
+  - `auth: google sign-in failed` (`reason`: a verifier reason, `invalid_token`, `not_configured`, `replayed`,
+    `email_missing`, `email_unverified`, `email_invalid`, or `account_exists` with the existing `user_id`);
+  - `auth: google keys unavailable` (Warn, fixed fetch `reason`).
+  - Never logged: the ID token, its hash, the subject, the email or the user agent.

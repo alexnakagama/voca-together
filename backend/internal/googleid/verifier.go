@@ -212,9 +212,11 @@ func (v *TokenVerifier) claims(p map[string]json.RawMessage) (Claims, error) {
 		}
 	}
 	// Timestamps are at most year 9999, so these never overflow. A token is
-	// valid until exp + clockSkew, exclusive.
+	// valid until exp + clockSkew, exclusive; the same instant is returned
+	// as AcceptedUntil, so the two can't disagree.
 	now := v.now()
-	if !now.Before(time.Unix(exp, 0).Add(clockSkew)) {
+	acceptedUntil := time.Unix(exp, 0).Add(clockSkew)
+	if !now.Before(acceptedUntil) {
 		return Claims{}, invalid(ReasonExpired)
 	}
 	notAfter := now.Add(clockSkew)
@@ -245,5 +247,5 @@ func (v *TokenVerifier) claims(p map[string]json.RawMessage) (Claims, error) {
 			return Claims{}, invalid(ReasonBadClaims)
 		}
 	}
-	return NewClaims(sub, email, emailVerified, hd), nil
+	return NewClaims(sub, email, emailVerified, hd, acceptedUntil), nil
 }

@@ -10,9 +10,14 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
-func secretClaims() Claims { return NewClaims(testSubject, testEmail, true, testHD) }
+var testAcceptedUntil = time.Unix(1_790_003_650, 0)
+
+func secretClaims() Claims {
+	return NewClaims(testSubject, testEmail, true, testHD, testAcceptedUntil)
+}
 
 // Claims never show their values, through any formatting path.
 func TestClaimsAreRedacted(t *testing.T) {
@@ -55,14 +60,15 @@ func TestClaimsAreRedacted(t *testing.T) {
 	}
 
 	// The values are still there for the code that reads them.
-	if c.Subject() != testSubject || c.Email() != testEmail || !c.EmailVerified() || c.HostedDomain() != testHD {
+	if c.Subject() != testSubject || c.Email() != testEmail || !c.EmailVerified() || c.HostedDomain() != testHD ||
+		!c.AcceptedUntil().Equal(testAcceptedUntil) {
 		t.Error("accessors don't return the values")
 	}
 }
 
 func TestZeroClaims(t *testing.T) {
 	var c Claims
-	if c.Subject() != "" || c.Email() != "" || c.EmailVerified() || c.HostedDomain() != "" {
+	if c.Subject() != "" || c.Email() != "" || c.EmailVerified() || c.HostedDomain() != "" || !c.AcceptedUntil().IsZero() {
 		t.Error("zero Claims not empty")
 	}
 }

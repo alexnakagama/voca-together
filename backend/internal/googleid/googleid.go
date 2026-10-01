@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 )
 
 // Verifier verifies a raw Google ID token and returns its claims. Errors are
@@ -44,7 +45,11 @@ type Verifier interface {
 // Claims are the verified claims of a Google ID token that the auth layer
 // uses. Subject is Google's stable account id ("sub"); Email, EmailVerified
 // and HostedDomain are as Google asserted them, without normalization or
-// policy, and are empty or false when absent.
+// policy, and are empty or false when absent. AcceptedUntil is when the
+// verifier stops accepting the token (exp plus the clock skew it tolerates):
+// Verify succeeds for it only while now is before AcceptedUntil, so a caller
+// that must remember the token (replay protection) knows how long without
+// knowing the skew.
 //
 // Claims hold personal data, so they never print: every fmt verb, slog,
 // JSON and text marshalling show [REDACTED]. The values sit behind a pointer
@@ -59,12 +64,16 @@ type claimValues struct {
 	email         string
 	emailVerified bool
 	hostedDomain  string
+	acceptedUntil time.Time
 }
 
 // NewClaims returns Claims holding the given values. Verify builds them from
 // a verified token; tests use it to configure a Fake.
-func NewClaims(subject, email string, emailVerified bool, hostedDomain string) Claims {
-	return Claims{v: &claimValues{subject: subject, email: email, emailVerified: emailVerified, hostedDomain: hostedDomain}}
+func NewClaims(subject, email string, emailVerified bool, hostedDomain string, acceptedUntil time.Time) Claims {
+	return Claims{v: &claimValues{
+		subject: subject, email: email, emailVerified: emailVerified,
+		hostedDomain: hostedDomain, acceptedUntil: acceptedUntil,
+	}}
 }
 
 func (c Claims) Subject() string {
@@ -90,6 +99,13 @@ func (c Claims) HostedDomain() string {
 		return ""
 	}
 	return c.v.hostedDomain
+}
+
+func (c Claims) AcceptedUntil() time.Time {
+	if c.v == nil {
+		return time.Time{}
+	}
+	return c.v.acceptedUntil
 }
 
 const redacted = "[REDACTED]"

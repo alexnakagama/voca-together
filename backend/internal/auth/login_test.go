@@ -632,7 +632,7 @@ func TestLoginAlwaysDoesPasswordWork(t *testing.T) {
 // A malformed stored hash is rejected by parsing before any argon2 work; the
 // service must still spend the time of a real verification.
 func TestVerifyPasswordMalformedHashCostsAFullVerification(t *testing.T) {
-	s := NewService(nil, nil, nil, slog.New(slog.DiscardHandler), AccountLimits{})
+	s := NewService(nil, nil, nil, slog.New(slog.DiscardHandler), AccountLimits{}, nil)
 	timeIt := func(f func()) time.Duration {
 		best := time.Duration(1<<63 - 1)
 		for range 3 {

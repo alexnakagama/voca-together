@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"vocatogether/backend/internal/email"
+	"vocatogether/backend/internal/googleid"
 )
 
 const (
@@ -38,6 +39,10 @@ type Service struct {
 	baseURL *url.URL // public base URL for emailed links
 	logger  *slog.Logger
 	limits  AccountLimits
+	// google verifies Google ID tokens. nil means Google sign-in isn't
+	// configured: every attempt gets ErrInvalidGoogleToken. A typed nil
+	// pointer is not nil here, so callers must pass an untyped nil.
+	google googleid.Verifier
 
 	sends sync.WaitGroup
 	// emailSlots bounds concurrent background sends (see sendInBackground).
@@ -56,14 +61,17 @@ type Service struct {
 }
 
 // NewService returns the auth service. limits are the per-account rate
-// limits (NewAccountLimits); the zero AccountLimits disables them.
-func NewService(pool *pgxpool.Pool, sender email.Sender, baseURL *url.URL, logger *slog.Logger, limits AccountLimits) *Service {
+// limits (NewAccountLimits); the zero AccountLimits disables them. google
+// verifies Google ID tokens; nil disables Google sign-in.
+func NewService(pool *pgxpool.Pool, sender email.Sender, baseURL *url.URL, logger *slog.Logger,
+	limits AccountLimits, google googleid.Verifier) *Service {
 	return &Service{
 		pool:       pool,
 		sender:     sender,
 		baseURL:    baseURL,
 		logger:     logger,
 		limits:     limits,
+		google:     google,
 		emailSlots: make(chan struct{}, maxInFlightEmails),
 		// argon2 with parallelism 1 is single-threaded CPU work: more
 		// concurrent hashes than CPUs add memory (19 MiB each) but no throughput.

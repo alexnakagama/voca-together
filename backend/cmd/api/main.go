@@ -51,7 +51,9 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	authSvc := auth.NewService(pool, sender, baseURL, logger, auth.NewAccountLimits(logger))
+	// No Google verifier yet (nil: Google sign-in disabled, fails closed);
+	// it needs GOOGLE_CLIENT_ID configuration first.
+	authSvc := auth.NewService(pool, sender, baseURL, logger, auth.NewAccountLimits(logger), nil)
 	// Runs after the server has shut down: lets in-flight emails finish.
 	defer authSvc.Wait()
 

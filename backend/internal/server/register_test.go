@@ -35,7 +35,7 @@ func newTestAPI(t *testing.T) testAPI {
 	logs := &bytes.Buffer{}
 	logger := slog.New(slog.NewTextHandler(logs, nil))
 	base, _ := url.Parse("https://api.example.com")
-	svc := auth.NewService(pool, rec, base, logger, auth.AccountLimits{})
+	svc := auth.NewService(pool, rec, base, logger, auth.AccountLimits{}, nil)
 	t.Cleanup(svc.Wait)
 	return testAPI{handler: New(logger, svc, Options{}), svc: svc, pool: pool, emails: rec, logs: logs}
 }

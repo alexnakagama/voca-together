@@ -27,7 +27,7 @@ const (
 // dbFreeService is an auth service without a database, for requests that
 // are rejected before any database access (missing credentials).
 func dbFreeService() *auth.Service {
-	return auth.NewService(nil, nil, nil, slog.New(slog.DiscardHandler), auth.AccountLimits{})
+	return auth.NewService(nil, nil, nil, slog.New(slog.DiscardHandler), auth.AccountLimits{}, nil)
 }
 
 func tightLimiter() *ratelimit.Limiter[netip.Prefix] {
@@ -185,7 +185,7 @@ func newLimitedTestAPI(t *testing.T) testAPI {
 	logs := &bytes.Buffer{}
 	logger := slog.New(slog.NewTextHandler(logs, nil))
 	base, _ := url.Parse("https://api.example.com")
-	svc := auth.NewService(pool, rec, base, logger, auth.NewAccountLimits(logger))
+	svc := auth.NewService(pool, rec, base, logger, auth.NewAccountLimits(logger), nil)
 	t.Cleanup(svc.Wait)
 	return testAPI{handler: New(logger, svc, Options{}), svc: svc, pool: pool, emails: rec, logs: logs}
 }

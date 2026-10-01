@@ -30,6 +30,31 @@ func TestVerifyValidToken(t *testing.T) {
 	}
 }
 
+// AcceptedUntil is exactly where Verify stops accepting the token: the
+// caller can rely on it (e.g. to keep a replay record) without knowing the
+// clock skew.
+func TestVerifyAcceptedUntil(t *testing.T) {
+	f := newFixture(t)
+	claims := googleClaims(f.clock.Now())
+	tok := sign(keyA, header(kidA), claims)
+	c, err := f.v.Verify(context.Background(), tok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	until := c.AcceptedUntil()
+	if want := time.Unix(claims["exp"].(int64), 0).Add(clockSkew); !until.Equal(want) {
+		t.Fatalf("AcceptedUntil = %v, want exp + skew = %v", until, want)
+	}
+
+	f.clock.Advance(until.Sub(f.clock.Now()) - time.Nanosecond)
+	if _, err := f.v.Verify(context.Background(), tok); err != nil {
+		t.Fatalf("just before AcceptedUntil: %v", err)
+	}
+	f.clock.Advance(time.Nanosecond)
+	_, err = f.v.Verify(context.Background(), tok)
+	requireReason(t, err, ReasonExpired)
+}
+
 // Absent optional claims are empty; they are not policy here.
 func TestVerifyOptionalClaimsAbsent(t *testing.T) {
 	f := newFixture(t)
