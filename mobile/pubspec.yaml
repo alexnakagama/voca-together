@@ -9,7 +9,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_localizations:
+    sdk: flutter
   go_router: ^18.0.2
+  intl: any
 
 dev_dependencies:
   flutter_test:
@@ -18,3 +21,7 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  # Runs gen-l10n (l10n.yaml) on pub get, run, build and test.
+  generate: true
+  assets:
+    - assets/google/

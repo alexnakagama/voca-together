@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import 'config.dart';
+import 'l10n/app_localizations.dart';
 import 'router.dart';
 import 'session.dart';
+import 'ui/theme.dart';
 
 /// The application root. Owns the router; [session] belongs to the caller.
 class VocaTogetherApp extends StatefulWidget {
@@ -46,6 +48,13 @@ class _VocaTogetherAppState extends State<VocaTogetherApp> {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp.router(title: 'VocaTogether', routerConfig: _router);
+    return MaterialApp.router(
+      onGenerateTitle: (context) => AppLocalizations.of(context).appTitle,
+      theme: AppTheme.light,
+      darkTheme: AppTheme.dark,
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      routerConfig: _router,
+    );
   }
 }

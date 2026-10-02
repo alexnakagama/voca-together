@@ -6,7 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 VocaTogether: a language-exchange app. The repo holds the Go backend (`backend/`, module `vocatogether/backend`) and
 the Flutter Android client (`mobile/`, package `vocatogether`, applicationId and namespace `com.vocatogether.app`).
-The client is at roadmap stage 2 (app shell, session stub and routing; no auth or HTTP yet); `docs/decisions.md`
+The client is at roadmap stage 3 (app shell, session stub, routing, design system and reusable auth widgets; no auth or
+HTTP yet); `docs/decisions.md`
 specifies its contracts with the backend.
 
 ## Commands
@@ -60,6 +61,13 @@ flutter build apk --debug --dart-define-from-file=config/dev.json
   session state (`unknown`/`signedOut`/`signedIn`); `router.dart` holds `Routes` and `authRedirect`, the only
   navigation policy. Screens (`lib/screens/`) never read or change session state or decide access. Never put a token
   or email in a route. Android deep links are disabled in the manifest until designed.
+- UI (decision 022): `lib/ui/theme.dart` holds `AppTheme` (M3 light/dark) and the `Spacing`/`Radii` constants;
+  `lib/ui/widgets/` holds the reusable widgets, which never import `Session`, the router or `AppConfig` and hardcode
+  no user-visible string. `GoogleSignInButton` follows Google's branding guidelines (its colors and the official logo
+  in `assets/google/` must not be changed). Previews in `lib/ui/previews/` use `@VocaPreview` and stay pure UI;
+  add each new preview function to `test/ui/previews_test.dart`.
+- Strings: add them to `lib/l10n/app_en.arb` with an `@` description; `flutter pub get` (also run by `flutter
+  test/run/build`) regenerates the committed `lib/l10n/app_localizations*.dart`. Never edit the generated files.
 
 Config (env): `DATABASE_URL` (required, secret, never log it), `ENV` (`development`|`test`|`production`),
 `HTTP_ADDR` (default `:8080`), `APP_BASE_URL` (used in emailed links; https and a public host required in production),

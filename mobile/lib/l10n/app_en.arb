@@ -1,0 +1,31 @@
+{
+  "@@locale": "en",
+  "appTitle": "VocaTogether",
+  "@appTitle": {
+    "description": "The app's name, shown by Android in the recent-apps switcher."
+  },
+  "emailLabel": "Email",
+  "@emailLabel": {
+    "description": "Label of an email address text field."
+  },
+  "passwordLabel": "Password",
+  "@passwordLabel": {
+    "description": "Label of a password text field."
+  },
+  "showPassword": "Show password",
+  "@showPassword": {
+    "description": "Tooltip and accessibility label of the button that reveals the password being typed."
+  },
+  "hidePassword": "Hide password",
+  "@hidePassword": {
+    "description": "Tooltip and accessibility label of the button that hides the password being typed again."
+  },
+  "continueWithGoogle": "Continue with Google",
+  "@continueWithGoogle": {
+    "description": "Text of the Sign in with Google button. Must be one of Google's approved button texts (or its official translation)."
+  },
+  "errorLabel": "Error",
+  "@errorLabel": {
+    "description": "Accessibility label of the icon in front of a form-level error message."
+  }
+}
