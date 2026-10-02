@@ -1,7 +1,9 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:vocatogether/api/api_paths.dart';
 import 'package:vocatogether/app.dart';
+import 'package:vocatogether/auth/token_store.dart';
 import 'package:vocatogether/config.dart';
 import 'package:vocatogether/router.dart';
 import 'package:vocatogether/screens/forgot_password_screen.dart';
@@ -10,6 +12,8 @@ import 'package:vocatogether/screens/login_screen.dart';
 import 'package:vocatogether/screens/register_screen.dart';
 import 'package:vocatogether/screens/splash_screen.dart';
 import 'package:vocatogether/session.dart';
+
+import 'support/fakes.dart';
 
 final _config = AppConfig(apiBaseUrl: Uri.parse('http://10.0.2.2:8080'));
 
@@ -57,8 +61,11 @@ void main() {
   });
 
   group('routing', () {
-    Future<Session> pumpApp(WidgetTester tester, SessionStatus initial) async {
-      final session = Session(initial: initial);
+    Future<SessionManager> pumpApp(
+      WidgetTester tester,
+      SessionStatus initial,
+    ) async {
+      final session = await _managerAt(initial);
       addTearDown(session.dispose);
       await tester.pumpWidget(
         VocaTogetherApp(config: _config, session: session),
@@ -150,20 +157,37 @@ void main() {
     });
 
     testWidgets('session changes drive navigation', (tester) async {
-      final session = await pumpApp(tester, SessionStatus.unknown);
+      final server = FakeServer()
+        ..once(
+          'POST',
+          ApiPaths.login,
+          (_) =>
+              jsonResponse(200, tokenBody(accessToken('1'), refreshToken('1'))),
+        )
+        ..once('POST', ApiPaths.logout, (_) => noContent());
+      final session = SessionManager(
+        store: InMemoryTokenStore(),
+        authApi: authApiFor(server.client),
+        clock: FakeAuthClock(),
+      );
+      addTearDown(session.dispose);
+      await tester.pumpWidget(
+        VocaTogetherApp(config: _config, session: session),
+      );
+      await tester.pump();
       expect(find.byType(SplashScreen), findsOneWidget);
 
-      session.markSignedOut();
+      await session.restore();
       await tester.pumpAndSettle();
       expect(find.byType(LoginScreen), findsOneWidget);
 
       await go(tester, Routes.register);
-      session.markSignedIn();
+      await session.signIn(email: 'a@b.c', password: 'pw');
       await tester.pumpAndSettle();
       expect(find.byType(HomeScreen), findsOneWidget);
       expect(find.byType(RegisterScreen), findsNothing);
 
-      session.markSignedOut();
+      await session.logout();
       await tester.pumpAndSettle();
       expect(find.byType(LoginScreen), findsOneWidget);
       expect(find.byType(HomeScreen), findsNothing);
@@ -172,7 +196,7 @@ void main() {
     testWidgets('the router stops listening when the app is removed', (
       tester,
     ) async {
-      final session = _CountingSession();
+      final session = _CountingSession(InMemoryTokenStore());
       addTearDown(session.dispose);
 
       await tester.pumpWidget(
@@ -185,10 +209,16 @@ void main() {
     });
 
     testWidgets('replacing the session replaces the router', (tester) async {
-      final first = _CountingSession();
+      final first = _CountingSession(InMemoryTokenStore());
       addTearDown(first.dispose);
-      final second = _CountingSession(initial: SessionStatus.signedIn);
+      final clock = FakeAuthClock();
+      final second = _CountingSession(
+        InMemoryTokenStore(raw: storedRaw(clock, '1')),
+        clock: clock,
+      );
       addTearDown(second.dispose);
+      await second.restore();
+      expect(second.status, SessionStatus.signedIn);
 
       await tester.pumpWidget(VocaTogetherApp(config: _config, session: first));
       await tester.pumpWidget(
@@ -197,15 +227,38 @@ void main() {
       expect(first.listeners, 0);
       expect(second.listeners, 1);
 
-      second.markSignedOut();
+      await second.logout();
       await tester.pumpAndSettle();
       expect(find.byType(LoginScreen), findsOneWidget);
     });
   });
 }
 
-class _CountingSession extends Session {
-  _CountingSession({super.initial});
+/// A manager over fakes, brought to [status] through restore.
+Future<SessionManager> _managerAt(SessionStatus status) async {
+  final clock = FakeAuthClock();
+  final manager = SessionManager(
+    store: InMemoryTokenStore(
+      raw: status == SessionStatus.signedIn ? storedRaw(clock, '1') : null,
+    ),
+    authApi: authApiFor(FakeServer().client),
+    clock: clock,
+  );
+  if (status != SessionStatus.unknown) await manager.restore();
+  assert(manager.status == status);
+  return manager;
+}
+
+class _CountingSession extends SessionManager {
+  _CountingSession(TokenStore store, {FakeAuthClock? clock})
+    : super(
+        store: store,
+        authApi: authApiFor(
+          (FakeServer()..always('POST', ApiPaths.logout, (_) => noContent()))
+              .client,
+        ),
+        clock: clock ?? FakeAuthClock(),
+      );
 
   int listeners = 0;
 

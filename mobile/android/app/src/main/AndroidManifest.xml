@@ -3,7 +3,12 @@
          so release builds would have no network without it. -->
     <uses-permission android:name="android.permission.INTERNET"/>
 
+    <!-- Backup is off: tokens must never leave the device (docs/decisions.md 023). allowBackup="false" covers
+         API 24-30; on API 31+ cloud backup and device-to-device transfer follow dataExtractionRules, which exclude
+         everything. -->
     <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:label="VocaTogether"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">

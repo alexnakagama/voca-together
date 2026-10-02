@@ -3,10 +3,17 @@ import 'package:vocatogether/app.dart';
 import 'package:vocatogether/config.dart';
 import 'package:vocatogether/session.dart';
 
+import 'support/fakes.dart';
+
 void main() {
   testWidgets('signed-out app opens on log in', (tester) async {
-    final session = Session(initial: SessionStatus.signedOut);
+    final session = SessionManager(
+      store: InMemoryTokenStore(),
+      authApi: authApiFor(FakeServer().client),
+      clock: FakeAuthClock(),
+    );
     addTearDown(session.dispose);
+    await session.restore();
 
     await tester.pumpWidget(
       VocaTogetherApp(

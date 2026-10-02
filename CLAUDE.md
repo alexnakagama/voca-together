@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 VocaTogether: a language-exchange app. The repo holds the Go backend (`backend/`, module `vocatogether/backend`) and
 the Flutter Android client (`mobile/`, package `vocatogether`, applicationId and namespace `com.vocatogether.app`).
-The client is at roadmap stage 3 (app shell, session stub, routing, design system and reusable auth widgets; no auth or
-HTTP yet); `docs/decisions.md`
+The client is at roadmap stage 4 (app shell, routing, design system, reusable auth widgets, API client, secure token
+storage and session management; no real auth screens yet); `docs/decisions.md`
 specifies its contracts with the backend.
 
 ## Commands
@@ -55,12 +55,25 @@ flutter build apk --debug --dart-define-from-file=config/dev.json
   built from that base URL. The debug-only `android/app/src/debug/res/xml/network_security_config.xml` (cleartext
   only to `10.0.2.2`) governs only platform stacks: WebView, and `cronet_http`/`ok_http` if adopted.
   `INTERNET` is declared in the main manifest because Flutter's template grants it only in debug and profile builds.
-- Structure (decision 021): `main.dart` is the composition root (config → `Session` → `VocaTogetherApp`) and the
+- Structure (decision 021): `main.dart` is the composition root (config → `SessionManager` → `VocaTogetherApp`) and the
   only place long-lived objects are built; pass them down by constructor (no provider/riverpod/bloc/get_it, no
-  top-level mutable state). `app.dart` owns and disposes the `GoRouter`; `session.dart` is the `ChangeNotifier`
-  session state (`unknown`/`signedOut`/`signedIn`); `router.dart` holds `Routes` and `authRedirect`, the only
-  navigation policy. Screens (`lib/screens/`) never read or change session state or decide access. Never put a token
-  or email in a route. Android deep links are disabled in the manifest until designed.
+  top-level mutable state). `app.dart` owns and disposes the `GoRouter`; `session.dart` is `SessionManager`, the
+  `ChangeNotifier` session (`unknown`/`signedOut`/`signedIn`) that the router listens to; `router.dart` holds `Routes`
+  and `authRedirect`, the only navigation policy. Screens (`lib/screens/`) never read or change session state or
+  decide access. Never put a token or email in a route. Android deep links are disabled in the manifest until designed.
+- Networking and session (decision 023, read it before touching auth code): `SessionManager` → `TokenStore`
+  (`lib/auth/`) + `AuthApi` → `ApiClient` (`lib/api/`) → `http.Client`. `ApiClient` holds no auth state, never retries,
+  never follows redirects and never logs. `SessionManager` holds the only in-memory tokens and owns refresh (single
+  flight, generation check, `/healthz` probe first, the 014/018 failure matrix in 023) and logout. **Token boundary:**
+  screens may use only `AccountApi` (register/resend/forgot, token-free) and `SessionManager`'s public API, which
+  takes and returns no app token (`signIn`/`signInWithGoogle`/`logout` → `void`, `me()` → `Me`). `AuthApi` (returns
+  `AuthTokens`, takes raw tokens) is built only in `main` and held only by `SessionManager`; the generic request
+  wrapper `_authorized` stays private, and each new protected route gets a typed `SessionManager` method.
+  `test/architecture_test.dart` enforces the import allowlist and fails if `lib/screens/` or `lib/ui/` names a token
+  type or value. `SecureTokenStore` (one `flutter_secure_storage` key, explicit `AndroidOptions`) is the only place
+  tokens persist; app backup and device transfer are disabled in the manifest. Nothing in `api/`, `auth/` or
+  `session.dart` may log; `test/leak_test.dart` checks redaction and where each secret travels. Session tests are
+  host-only (`test/support/fakes.dart`: `FakeServer` on `MockClient`, `InMemoryTokenStore`, `FakeAuthClock`).
 - UI (decision 022): `lib/ui/theme.dart` holds `AppTheme` (M3 light/dark) and the `Spacing`/`Radii` constants;
   `lib/ui/widgets/` holds the reusable widgets, which never import `Session`, the router or `AppConfig` and hardcode
   no user-visible string. `GoogleSignInButton` follows Google's branding guidelines (its colors and the official logo

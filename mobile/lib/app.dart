@@ -16,7 +16,7 @@ class VocaTogetherApp extends StatefulWidget {
   });
 
   final AppConfig config;
-  final Session session;
+  final SessionManager session;
 
   @override
   State<VocaTogetherApp> createState() => _VocaTogetherAppState();

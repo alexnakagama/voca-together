@@ -43,7 +43,7 @@ String? authRedirect(SessionStatus status, Uri location) {
 ///
 /// The caller owns the router and must [GoRouter.dispose] it, which also
 /// stops it listening to [session].
-GoRouter createRouter(Session session) {
+GoRouter createRouter(SessionManager session) {
   return GoRouter(
     initialLocation: Routes.splash,
     refreshListenable: session,
