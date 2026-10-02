@@ -1,5 +1,7 @@
 import 'package:go_router/go_router.dart';
 
+import 'api/account_api.dart';
+
 import 'screens/forgot_password_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
@@ -39,11 +41,11 @@ String? authRedirect(SessionStatus status, Uri location) {
 }
 
 /// Builds the app's router, which re-runs [authRedirect] whenever [session]
-/// changes.
+/// changes. Each screen gets only the dependencies it uses.
 ///
 /// The caller owns the router and must [GoRouter.dispose] it, which also
 /// stops it listening to [session].
-GoRouter createRouter(SessionManager session) {
+GoRouter createRouter(SessionManager session, AccountApi accountApi) {
   return GoRouter(
     initialLocation: Routes.splash,
     refreshListenable: session,
@@ -55,19 +57,21 @@ GoRouter createRouter(SessionManager session) {
       ),
       GoRoute(
         path: Routes.login,
-        builder: (context, state) => const LoginScreen(),
+        builder: (context, state) =>
+            LoginScreen(session: session, accountApi: accountApi),
       ),
       GoRoute(
         path: Routes.register,
-        builder: (context, state) => const RegisterScreen(),
+        builder: (context, state) => RegisterScreen(accountApi: accountApi),
       ),
       GoRoute(
         path: Routes.forgotPassword,
-        builder: (context, state) => const ForgotPasswordScreen(),
+        builder: (context, state) =>
+            ForgotPasswordScreen(accountApi: accountApi),
       ),
       GoRoute(
         path: Routes.home,
-        builder: (context, state) => const HomeScreen(),
+        builder: (context, state) => HomeScreen(session: session),
       ),
     ],
   );

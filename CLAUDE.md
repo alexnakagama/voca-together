@@ -6,9 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 VocaTogether: a language-exchange app. The repo holds the Go backend (`backend/`, module `vocatogether/backend`) and
 the Flutter Android client (`mobile/`, package `vocatogether`, applicationId and namespace `com.vocatogether.app`).
-The client is at roadmap stage 4 (app shell, routing, design system, reusable auth widgets, API client, secure token
-storage and session management; no real auth screens yet); `docs/decisions.md`
-specifies its contracts with the backend.
+The client is at roadmap stage 5 (app shell, routing, design system, API client, secure token storage, session
+management, and the email/password auth screens: log in, register, forgot password, inline resend verification, and
+a home screen with `/v1/me` and logout; no Google sign-in yet); `docs/decisions.md` specifies its contracts with the
+backend.
 
 ## Commands
 
@@ -55,12 +56,14 @@ flutter build apk --debug --dart-define-from-file=config/dev.json
   built from that base URL. The debug-only `android/app/src/debug/res/xml/network_security_config.xml` (cleartext
   only to `10.0.2.2`) governs only platform stacks: WebView, and `cronet_http`/`ok_http` if adopted.
   `INTERNET` is declared in the main manifest because Flutter's template grants it only in debug and profile builds.
-- Structure (decision 021): `main.dart` is the composition root (config → `SessionManager` → `VocaTogetherApp`) and the
+- Structure (decision 021): `main.dart` is the composition root (config → `SessionManager` + `AccountApi` →
+  `VocaTogetherApp` → `createRouter`, which hands each screen only what it uses) and the
   only place long-lived objects are built; pass them down by constructor (no provider/riverpod/bloc/get_it, no
   top-level mutable state). `app.dart` owns and disposes the `GoRouter`; `session.dart` is `SessionManager`, the
   `ChangeNotifier` session (`unknown`/`signedOut`/`signedIn`) that the router listens to; `router.dart` holds `Routes`
   and `authRedirect`, the only navigation policy. Screens (`lib/screens/`) never read or change session state or
-  decide access. Never put a token or email in a route. Android deep links are disabled in the manifest until designed.
+  decide access: they call `SessionManager`/`AccountApi` and the redirect reacts (the architecture test forbids
+  `SessionStatus`, `.status` and `authRedirect` in `lib/screens/`). Never put a token or email in a route. Android deep links are disabled in the manifest until designed.
 - Networking and session (decision 023, read it before touching auth code): `SessionManager` → `TokenStore`
   (`lib/auth/`) + `AuthApi` → `ApiClient` (`lib/api/`) → `http.Client`. `ApiClient` holds no auth state, never retries,
   never follows redirects and never logs. `SessionManager` holds the only in-memory tokens and owns refresh (single
@@ -79,6 +82,15 @@ flutter build apk --debug --dart-define-from-file=config/dev.json
   no user-visible string. `GoogleSignInButton` follows Google's branding guidelines (its colors and the official logo
   in `assets/google/` must not be changed). Previews in `lib/ui/previews/` use `@VocaPreview` and stay pure UI;
   add each new preview function to `test/ui/previews_test.dart`.
+- Screens (decision 024): `StatefulWidget`s holding only ephemeral form state (controllers, focus, `_busy`, errors);
+  every `await` is followed by a `mounted` check and the submit handler checks `_busy` (the keyboard bypasses the
+  button). Every failure goes through `presentFailure` (`lib/screens/failure_presentation.dart`), the one mapping
+  from `ApiException`s and server codes to localized text and field errors; screens branch on `FailureKind`, never on
+  code strings, and never show server text. Client validation is only empty fields and password confirmation; the
+  password policy and normalization stay on the server, and values are sent exactly as typed. Success text for
+  register, forgot and resend is neutral (no account enumeration). Widget tests use `test/screens/harness.dart`
+  (the real app over `FakeServer`); `test/screens/accessibility_test.dart` and `privacy_test.dart` cover every
+  screen state.
 - Strings: add them to `lib/l10n/app_en.arb` with an `@` description; `flutter pub get` (also run by `flutter
   test/run/build`) regenerates the committed `lib/l10n/app_localizations*.dart`. Never edit the generated files.
 

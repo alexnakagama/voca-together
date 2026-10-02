@@ -29,4 +29,206 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get errorLabel => 'Error';
+
+  @override
+  String get noticeLabel => 'Notice';
+
+  @override
+  String get splashLoading => 'Loading';
+
+  @override
+  String get backToLogIn => 'Back to log in';
+
+  @override
+  String get tryAgain => 'Try again';
+
+  @override
+  String get logInTitle => 'Log in';
+
+  @override
+  String get logInButton => 'Log in';
+
+  @override
+  String get forgotPasswordLink => 'Forgot password?';
+
+  @override
+  String get createAccountLink => 'Create an account';
+
+  @override
+  String emailNotVerifiedNotice(String email) {
+    return 'Verify your email address to log in. Open the link we sent to $email, then log in again.';
+  }
+
+  @override
+  String get resendVerificationButton => 'Send a new verification email';
+
+  @override
+  String resendVerificationSent(String email) {
+    return 'If $email is waiting to be verified, we’ve sent a new link. It can take a few minutes to arrive.';
+  }
+
+  @override
+  String get registerTitle => 'Create account';
+
+  @override
+  String get registerButton => 'Create account';
+
+  @override
+  String get confirmPasswordLabel => 'Confirm password';
+
+  @override
+  String get haveAccountLink => 'Already have an account? Log in';
+
+  @override
+  String get checkEmailTitle => 'Check your email';
+
+  @override
+  String registerSent(String email) {
+    return 'We’ve sent a message to $email with the next steps. Open it to finish setting up your account, then log in.';
+  }
+
+  @override
+  String get forgotPasswordTitle => 'Reset your password';
+
+  @override
+  String get forgotPasswordIntro =>
+      'Enter the email address you use for VocaTogether and we’ll send you an email with the next steps.';
+
+  @override
+  String get forgotPasswordButton => 'Send reset link';
+
+  @override
+  String forgotPasswordSent(String email) {
+    return 'If there’s a VocaTogether account for $email, we’ve sent it an email with the next steps. Open the link in that email to choose a new password, then log in here.';
+  }
+
+  @override
+  String get homeLoading => 'Loading your account';
+
+  @override
+  String get homeSignedInTitle => 'You’re signed in';
+
+  @override
+  String homeSignedInAs(String email) {
+    return 'Signed in as $email';
+  }
+
+  @override
+  String homeMemberSince(DateTime date) {
+    final intl.DateFormat dateDateFormat = intl.DateFormat.yMMMMd(localeName);
+    final String dateString = dateDateFormat.format(date);
+
+    return 'Member since $dateString';
+  }
+
+  @override
+  String get logOutButton => 'Log out';
+
+  @override
+  String get emailRequired => 'Enter your email address';
+
+  @override
+  String get passwordRequired => 'Enter your password';
+
+  @override
+  String get confirmPasswordRequired => 'Enter your password again';
+
+  @override
+  String get passwordsDoNotMatch => 'The passwords don’t match';
+
+  @override
+  String get errorEmailInvalid => 'Enter a valid email address';
+
+  @override
+  String get errorPasswordTooShort =>
+      'This password is too short. Choose a longer one.';
+
+  @override
+  String get errorPasswordTooLong =>
+      'This password is too long. Choose a shorter one.';
+
+  @override
+  String get errorPasswordTooCommon =>
+      'This password is too common. Choose one that’s harder to guess.';
+
+  @override
+  String get errorPasswordSameAsEmail =>
+      'Your password can’t be your email address.';
+
+  @override
+  String get errorCheckInput => 'Check the details you entered and try again.';
+
+  @override
+  String get errorInvalidCredentials => 'Incorrect email or password.';
+
+  @override
+  String get errorEmailNotVerified =>
+      'Verify your email address before logging in.';
+
+  @override
+  String errorRateLimited(String wait) {
+    return 'Too many attempts. Try again in $wait.';
+  }
+
+  @override
+  String get errorRateLimitedNoWait =>
+      'Too many attempts. Please wait a moment and try again.';
+
+  @override
+  String errorUnavailable(String wait) {
+    return 'VocaTogether is busy right now. Try again in $wait.';
+  }
+
+  @override
+  String get errorUnavailableNoWait =>
+      'VocaTogether is busy right now. Please try again in a moment.';
+
+  @override
+  String get errorSessionInvalid =>
+      'We couldn’t confirm your session. Try again.';
+
+  @override
+  String get errorUnexpected =>
+      'Something went wrong on our side. Please try again.';
+
+  @override
+  String get errorNetwork =>
+      'Couldn’t connect. Check your internet connection and try again.';
+
+  @override
+  String get errorTimeout =>
+      'The connection timed out. Check your internet connection and try again.';
+
+  @override
+  String waitSeconds(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count seconds',
+      one: '1 second',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String waitMinutes(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count minutes',
+      one: '1 minute',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String waitHours(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count hours',
+      one: '1 hour',
+    );
+    return '$_temp0';
+  }
 }

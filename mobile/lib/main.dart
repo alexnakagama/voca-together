@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/io_client.dart';
 
+import 'api/account_api.dart';
 import 'api/api_client.dart';
 import 'api/auth_api.dart';
 import 'app.dart';
@@ -39,7 +40,12 @@ void main() {
     authApi: AuthApi(apiClient),
   );
 
-  runApp(VocaTogetherApp(config: config, session: session));
+  // The token-free account calls screens may make (decision 023).
+  final accountApi = AccountApi(apiClient);
+
+  runApp(
+    VocaTogetherApp(config: config, session: session, accountApi: accountApi),
+  );
   // The splash screen shows until the stored session has been read.
   unawaited(session.restore());
 }

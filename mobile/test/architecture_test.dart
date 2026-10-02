@@ -199,14 +199,46 @@ void main() {
     );
   });
 
-  test('main passes only config and session to the widget tree', () {
-    final main = sources['main.dart']!;
-    expect(
-      RegExp(r'VocaTogetherApp\(([^)]*)\)')
-          .firstMatch(main)!
-          .group(1)!
-          .replaceAll(RegExp(r'\s'), ''),
-      'config:config,session:session',
+  test(
+    'main passes only config, session and AccountApi to the widget tree',
+    () {
+      final main = sources['main.dart']!;
+      expect(
+        RegExp(r'VocaTogetherApp\(([^)]*)\)')
+            .firstMatch(main)!
+            .group(1)!
+            .replaceAll(RegExp(r'\s'), ''),
+        'config:config,session:session,accountApi:accountApi',
+      );
+    },
+  );
+
+  test('screens never read the session status or make access decisions', () {
+    // Navigation policy lives only in router.dart (021): screens call
+    // SessionManager's actions and let the redirect react.
+    final forbidden = RegExp(r'\bSessionStatus\b|\.status\b|\bauthRedirect\b');
+    final violations = <String>[];
+    sources.forEach((path, source) {
+      if (!path.startsWith('screens/')) return;
+      for (final m in forbidden.allMatches(source)) {
+        violations.add('$path: ${m.group(0)}');
+      }
+    });
+    expect(violations, isEmpty);
+  });
+
+  test('screens and widgets never print or log', () {
+    final forbidden = RegExp(
+      r'\b(print|debugPrint|debugPrintStack|log)\s*\(|dart:developer|'
+      r'\bstdout\b|\bstderr\b',
     );
+    final violations = <String>[];
+    sources.forEach((path, source) {
+      if (!_isUi(path)) return;
+      for (final m in forbidden.allMatches(source)) {
+        violations.add('$path: ${m.group(0)}');
+      }
+    });
+    expect(violations, isEmpty);
   });
 }

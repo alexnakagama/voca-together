@@ -3,9 +3,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vocatogether/ui/previews/app_text_field_previews.dart';
 import 'package:vocatogether/ui/previews/auth_scaffold_previews.dart';
 import 'package:vocatogether/ui/previews/form_error_banner_previews.dart';
+import 'package:vocatogether/ui/previews/form_notice_banner_previews.dart';
 import 'package:vocatogether/ui/previews/google_sign_in_button_previews.dart';
 import 'package:vocatogether/ui/previews/preview_support.dart';
 import 'package:vocatogether/ui/previews/primary_button_previews.dart';
+import 'package:vocatogether/ui/previews/secondary_button_previews.dart';
 import 'package:vocatogether/ui/widgets/app_text_field.dart';
 
 /// Pumps [preview] laid out the way Flutter 3.47's widget previewer lays out a
@@ -59,6 +61,11 @@ void main() {
     'googleButtonLargeText': (googleButtonLargeText, const Size(320, 160)),
     'errorBanner': (errorBanner, fallback),
     'errorBannerLong': (errorBannerLong, fallback),
+    'noticeBanner': (noticeBanner, fallback),
+    'noticeBannerLong': (noticeBannerLong, fallback),
+    'secondaryButton': (secondaryButton, fallback),
+    'secondaryButtonBusy': (secondaryButtonBusy, fallback),
+    'secondaryButtonLargeText': (secondaryButtonLargeText, fallback),
     'authScaffoldLight': (authScaffoldLight, const Size(390, 760)),
     'authScaffoldDarkError': (authScaffoldDarkError, const Size(390, 760)),
     'authScaffoldSmallLargeText': (

@@ -230,3 +230,26 @@ Future<SessionManager> signedInManager(
   assert(manager.status == SessionStatus.signedIn);
   return manager;
 }
+
+/// The 202 that register, resend-verification and forgot-password return.
+http.Response accepted() => jsonResponse(202, {'status': 'accepted'});
+
+/// A `GET /v1/me` 200 body.
+Map<String, Object?> meBody({
+  String id = 'user-1',
+  String email = 'ana@example.com',
+  String createdAt = '2026-03-15T12:00:00Z',
+}) => {
+  'id': id,
+  'email': email,
+  'email_verified_at': createdAt,
+  'created_at': createdAt,
+};
+
+/// A responder for a connection that fails (DNS, refused, reset).
+http.Response networkFailure(http.Request _) =>
+    throw http.ClientException('connection failed');
+
+/// A responder that never answers, so the client's timeout decides.
+Future<http.Response> neverAnswers(http.Request _) =>
+    Completer<http.Response>().future;
