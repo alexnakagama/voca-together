@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 VocaTogether: a language-exchange app. The repo holds the Go backend (`backend/`, module `vocatogether/backend`) and
 the Flutter Android client (`mobile/`, package `vocatogether`, applicationId and namespace `com.vocatogether.app`).
-The client is at roadmap stage 1 (project and app shell only); `docs/decisions.md` specifies its contracts with the
-backend.
+The client is at roadmap stage 2 (app shell, session stub and routing; no auth or HTTP yet); `docs/decisions.md`
+specifies its contracts with the backend.
 
 ## Commands
 
@@ -54,6 +54,12 @@ flutter build apk --debug --dart-define-from-file=config/dev.json
   built from that base URL. The debug-only `android/app/src/debug/res/xml/network_security_config.xml` (cleartext
   only to `10.0.2.2`) governs only platform stacks: WebView, and `cronet_http`/`ok_http` if adopted.
   `INTERNET` is declared in the main manifest because Flutter's template grants it only in debug and profile builds.
+- Structure (decision 021): `main.dart` is the composition root (config → `Session` → `VocaTogetherApp`) and the
+  only place long-lived objects are built; pass them down by constructor (no provider/riverpod/bloc/get_it, no
+  top-level mutable state). `app.dart` owns and disposes the `GoRouter`; `session.dart` is the `ChangeNotifier`
+  session state (`unknown`/`signedOut`/`signedIn`); `router.dart` holds `Routes` and `authRedirect`, the only
+  navigation policy. Screens (`lib/screens/`) never read or change session state or decide access. Never put a token
+  or email in a route. Android deep links are disabled in the manifest until designed.
 
 Config (env): `DATABASE_URL` (required, secret, never log it), `ENV` (`development`|`test`|`production`),
 `HTTP_ADDR` (default `:8080`), `APP_BASE_URL` (used in emailed links; https and a public host required in production),
