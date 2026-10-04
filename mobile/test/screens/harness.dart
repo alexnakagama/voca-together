@@ -14,11 +14,15 @@ final l10n = lookupAppLocalizations(const Locale('en'));
 /// The real app over fakes: the real router, `SessionManager` and
 /// `AccountApi`, talking to [server].
 final class TestApp {
-  TestApp(this.server, this.session, this.store);
+  TestApp(this.server, this.session, this.store, this.google);
 
   final FakeServer server;
   final SessionManager session;
   final InMemoryTokenStore store;
+
+  /// The scripted Google side, or null when the app was pumped without
+  /// Google configuration.
+  final FakeGoogleIdentity? google;
 
   /// The router's current location, as a URL would show it.
   String location(WidgetTester tester) =>
@@ -29,6 +33,9 @@ final class TestApp {
 /// Pumps the app, restored signed out (on log in) or [signedIn] (on home,
 /// which loads `/v1/me`: script it first).
 ///
+/// With [google], the app has Google sign-in over that fake; without, it is
+/// a build with no Google configuration (no button).
+///
 /// [size] sets the logical screen size, [textScale] the system font scale,
 /// [keyboard] a bottom inset like an open keyboard. With [settle] false, only
 /// two frames are pumped (for requests that never finish, where a spinner
@@ -36,6 +43,7 @@ final class TestApp {
 Future<TestApp> pumpApp(
   WidgetTester tester, {
   FakeServer? server,
+  FakeGoogleIdentity? google,
   bool signedIn = false,
   Size? size,
   double textScale = 1,
@@ -65,6 +73,7 @@ Future<TestApp> pumpApp(
     store: store,
     authApi: authApiFor(backend.client),
     clock: clock,
+    google: google,
   );
   addTearDown(session.dispose);
   await session.restore();
@@ -82,7 +91,7 @@ Future<TestApp> pumpApp(
     await tester.pump();
     await tester.pump();
   }
-  return TestApp(backend, session, store);
+  return TestApp(backend, session, store, google);
 }
 
 /// The text field labelled [label].

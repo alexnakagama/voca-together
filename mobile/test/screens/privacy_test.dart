@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:vocatogether/api/api_paths.dart';
+import 'package:vocatogether/auth/google_identity_exception.dart';
+import 'package:vocatogether/ui/widgets/google_sign_in_button.dart';
 
 import '../support/fakes.dart';
 import 'harness.dart';
@@ -13,11 +15,13 @@ const _email = 'leak.email@example.com';
 const _password = 'LEAK-password-123';
 final _access = accessToken('LEAKaccess');
 final _refresh = refreshToken('LEAKrefresh');
+const _idToken = 'LEAKidtoken.payload.signature';
+const _idToken2 = 'LEAKidtokenTwo.payload.signature';
 
 /// An error body that echoes secrets, as a broken proxy might.
 http.Response _echo(int status) => http.Response(
   '{"error":{"code":"invalid_credentials","detail":"$_password $_email '
-  '$_access"}}',
+  '$_access $_idToken"}}',
   status,
   headers: {'content-type': 'application/json'},
 );
@@ -97,8 +101,32 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
     )
     ..once('GET', ApiPaths.me, (_) => _echo(500))
     ..once('GET', ApiPaths.me, (_) => jsonResponse(200, meBody(email: _email)))
+    ..once('POST', ApiPaths.logout, (_) => _echo(500))
+    // Google: an echoing 409, an echoing 500, then a session.
+    ..once(
+      'POST',
+      ApiPaths.google,
+      (_) => http.Response(
+        '{"error":{"code":"account_exists","detail":"$_email $_idToken"}}',
+        409,
+        headers: {'content-type': 'application/json'},
+      ),
+    )
+    ..once('POST', ApiPaths.google, (_) => _echo(500))
+    ..once(
+      'POST',
+      ApiPaths.google,
+      (_) => jsonResponse(200, tokenBody(_access, _refresh)),
+    )
+    ..once('GET', ApiPaths.me, (_) => jsonResponse(200, meBody(email: _email)))
     ..once('POST', ApiPaths.logout, (_) => _echo(500));
-  final app = await pumpApp(tester, server: server);
+  final google = FakeGoogleIdentity()
+    ..next(_idToken)
+    ..fail(const GoogleIdentityException(GoogleIdentityFailure.misconfigured))
+    ..fail(const GoogleIdentityException(GoogleIdentityFailure.cancelled))
+    ..next(_idToken2)
+    ..next(_idToken);
+  final app = await pumpApp(tester, server: server, google: google);
   void record() => locations.add(app.location(tester));
   final logIn = find.widgetWithText(FilledButton, l10n.logInButton);
 
@@ -158,4 +186,44 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
   record();
   _checkScreen(tester);
   expect(app.store.raw, isNull);
+
+  // Google sign-in: refused with an echoing body, Google failing, the
+  // chooser closed, a server error, then a session and log out.
+  Future<void> continueWithGoogle() async {
+    await tapAndSettle(tester, find.byType(GoogleSignInButton));
+    record();
+    _checkScreen(tester);
+  }
+
+  await continueWithGoogle();
+  expect(find.text(l10n.errorAccountExists), findsOneWidget);
+  await continueWithGoogle();
+  expect(find.text(l10n.errorGoogleUnavailable), findsOneWidget);
+  await continueWithGoogle();
+  await continueWithGoogle();
+  expect(server.count(ApiPaths.google), 2);
+  await tapAndSettle(tester, find.byType(GoogleSignInButton));
+  record();
+  _checkScreen(tester, emailAllowed: true);
+  expect(app.location(tester), '/home');
+  expect(app.store.raw, isNot(contains('LEAKidtoken')));
+  await tapAndSettle(
+    tester,
+    find.widgetWithText(OutlinedButton, l10n.logOutButton),
+  );
+  record();
+  _checkScreen(tester);
+  expect(app.store.raw, isNull);
+  // The ID tokens went to the Google endpoint's body and nowhere else.
+  for (final r in server.requests) {
+    final carries =
+        r.body.contains('LEAKidtoken') ||
+        r.url.toString().contains('LEAKidtoken') ||
+        r.headers.values.any((v) => v.contains('LEAKidtoken'));
+    if (r.url.path == ApiPaths.google) {
+      expect(r.headers.containsKey('Authorization'), isFalse);
+    } else {
+      expect(carries, isFalse, reason: r.url.path);
+    }
+  }
 }

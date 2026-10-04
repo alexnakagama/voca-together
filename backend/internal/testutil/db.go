@@ -33,7 +33,7 @@ func DB(t *testing.T) *pgxpool.Pool {
 	if err := db.Migrate(ctx, pool); err != nil {
 		t.Fatalf("migrate test db: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `TRUNCATE users, user_tokens, sessions, user_identities, google_id_token_uses CASCADE`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE users, user_tokens, sessions, user_identities CASCADE`); err != nil {
 		t.Fatalf("truncate test db: %v", err)
 	}
 	return pool

@@ -43,12 +43,18 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 
 // MigrateDownAll rolls back every migration. Intended for tests only.
 func MigrateDownAll(ctx context.Context, pool *pgxpool.Pool) error {
+	return MigrateDownTo(ctx, pool, 0)
+}
+
+// MigrateDownTo rolls back every migration above version, leaving the schema
+// as that migration left it. Intended for tests only.
+func MigrateDownTo(ctx context.Context, pool *pgxpool.Pool, version int64) error {
 	p, closeDB, err := newProvider(pool)
 	if err != nil {
 		return err
 	}
 	defer closeDB()
-	if _, err := p.DownTo(ctx, 0); err != nil {
+	if _, err := p.DownTo(ctx, version); err != nil {
 		return fmt.Errorf("db: migrate down: %w", err)
 	}
 	return nil

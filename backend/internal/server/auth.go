@@ -202,17 +202,18 @@ func handleRefresh(logger *slog.Logger, svc *auth.Service) http.HandlerFunc {
 
 // handleGoogleSignIn answers 200 with new session credentials for the
 // account of a Google ID token, created first if needed (decision 020); the
-// body is the same as login's. Every unusable token (rejected, replayed, or
-// Google sign-in not configured) gets the same 401 invalid_google_token, so
-// clients can't tell them apart. 403 google_email_unusable and 409
+// body is the same as login's. Every unusable token (rejected by the
+// verifier, or Google sign-in not configured) gets the same 401
+// invalid_google_token, so clients can't tell them apart. A token that
+// verifies is accepted every time it is presented (decision 026). 403 google_email_unusable and 409
 // account_exists come only after the token verified. The 401 carries no
 // WWW-Authenticate: as for login, the token is a credential in the body, not
 // an HTTP authentication scheme.
 //
 // Only the body carries the ID token; the Authorization header and the query
 // string are ignored. Every response is marked no-store, as for login. A 503
-// or 500 may come after the token was spent, so clients retry with a new ID
-// token (requestTimeout).
+// or 500 may come after the session was committed; a retry, with the same ID
+// token or a new one, creates another session (requestTimeout).
 func handleGoogleSignIn(logger *slog.Logger, svc *auth.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")

@@ -647,11 +647,7 @@ const identityProviderGoogle = "google"
 // ID token and decided the email policy; the store applies the decision and
 // nothing else.
 type googleSignInInput struct {
-	tokenHash []byte // SHA-256 of the raw ID token
-	// acceptedUntil is the verifier's Claims.AcceptedUntil: until then the
-	// token would verify again, so its use must be remembered that long.
-	acceptedUntil time.Time
-	subject       string // Google sub
+	subject string // Google sub
 	// eligible says whether email may create a new account. It is used only
 	// when no user has the identity yet; a linked identity signs in whatever
 	// its token's email is now (users.email is never synced).
@@ -668,9 +664,8 @@ type googleOutcome int
 const (
 	googleSignedIn      googleOutcome = iota // session created for the identity's existing user
 	googleCreated                            // new user, identity and session created
-	googleReplayed                           // the ID token was used before; nothing written
-	googleIneligible                         // unknown identity, eligible=false; only the token use written
-	googleAccountExists                      // unknown identity, email taken; only the token use written
+	googleIneligible                         // unknown identity, eligible=false; nothing written
+	googleAccountExists                      // unknown identity, email taken; nothing written
 )
 
 // googleSignInResult reports googleSignIn's outcome. userID is set for
@@ -687,19 +682,17 @@ type googleSignInResult struct {
 // retries once.
 var errGoogleIdentityRace = errors.New("auth: google identity created concurrently")
 
-// googleSignIn records the ID token as used and signs in the user linked to
-// the Google subject, creating the user and identity first if none is linked
-// and in.eligible allows it (decision 020). Everything commits together,
-// including the token use for googleIneligible and googleAccountExists: once
-// a verified token reaches the database it is spent, whatever the outcome.
+// googleSignIn signs in the user linked to the Google subject, creating the
+// user and identity first if none is linked and in.eligible allows it
+// (decision 020). Everything commits together. The ID token itself never
+// reaches the store and its use isn't recorded: a token is accepted whenever
+// it verifies (decision 026).
 //
 // If a concurrent first sign-in links the same subject to a different email
 // first (errGoogleIdentityRace), the transaction is rolled back and retried
-// once; the retry finds the identity and signs in to its user. The rollback
-// also removed the token use, so the retry consumes the token again (and
-// reports googleReplayed if a request with the same token won meanwhile). A
-// second race can't happen, since identities are never deleted, so it is
-// returned as an error.
+// once; the retry finds the identity and signs in to its user. A second race
+// can't happen, since identities are never deleted, so it is returned as an
+// error.
 func googleSignIn(ctx context.Context, pool *pgxpool.Pool, in googleSignInInput) (r googleSignInResult, err error) {
 	for attempt := 1; ; attempt++ {
 		err = pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
@@ -720,43 +713,34 @@ func googleSignIn(ctx context.Context, pool *pgxpool.Pool, in googleSignInInput)
 // what keeps concurrent sign-ins correct and deadlock-free; don't reorder
 // them:
 //
-//  1. Consume the ID token: the first statement, holding no other lock. Two
-//     requests with the same token serialize on its primary key and the
-//     second finds the conflict (googleReplayed).
-//  2. Look up the identity and lock its user FOR SHARE (lock order, as in
-//     login). Found: insert the session (step 6).
-//  3. Not found and not eligible: googleIneligible.
-//  4. Insert the user. ON CONFLICT waits for a concurrent insert of the same
+//  1. Look up the identity and lock its user FOR SHARE (lock order, as in
+//     login). Found: insert the session (step 5).
+//  2. Not found and not eligible: googleIneligible.
+//  3. Insert the user. ON CONFLICT waits for a concurrent insert of the same
 //     email and then sees its outcome; a conflict re-runs the lookup as a new
 //     statement, which sees a concurrent first sign-in that committed the user
-//     and identity together (then step 6 for its user). Otherwise the email
-//     belongs to another account: googleAccountExists, with that account
-//     left untouched (no automatic linking).
-//  5. Insert the identity. A conflict means a concurrent first sign-in of the
+//     and identity together (then step 5 for its user). That is also how
+//     requests carrying the same ID token at once end: one creates the
+//     account, the others sign in to it. Otherwise the email belongs to
+//     another account: googleAccountExists, with that account left untouched
+//     (no automatic linking).
+//  4. Insert the identity. A conflict means a concurrent first sign-in of the
 //     same subject with another email committed first: errGoogleIdentityRace.
-//  6. Insert the session. The users_auth_method_required trigger checks the
+//  5. Insert the session. The users_auth_method_required trigger checks the
 //     new user at commit.
 //
-// Each attempt inserts at most one row per unique key (token hash, email,
-// subject), always in that order, and only waits for a transaction inserting
-// the same key. Such a transaction inserted its own earlier keys before this
-// one could wait on it and never waits back on this one's, so the waits
-// can't form a cycle. Session hashes are random and never conflict. The
-// FOR SHARE in step 2 waits only for a transaction holding the user row FOR
-// UPDATE (reset, verification), which never touches the Google tables.
-// PostgreSQL's unique constraints are the only arbiter: no extra locks.
+// Each attempt inserts at most one row per unique key (email, subject),
+// always in that order, and only waits for a transaction inserting the same
+// key. Such a transaction inserted its own earlier key before this one could
+// wait on it and never waits back on this one's, so the waits can't form a
+// cycle. Session hashes are random and never conflict. The FOR SHARE in step
+// 1 waits only for a transaction holding the user row FOR UPDATE (reset,
+// verification), which never touches the Google tables. PostgreSQL's unique
+// constraints are the only arbiter: no extra locks.
 func googleSignInTx(ctx context.Context, tx pgx.Tx, in googleSignInInput) (googleSignInResult, error) {
-	consumed, err := consumeGoogleIDTokenTx(ctx, tx, in.tokenHash, in.acceptedUntil)
-	if err != nil {
-		return googleSignInResult{}, err
-	}
-	if !consumed {
-		return googleSignInResult{outcome: googleReplayed}, nil
-	}
-
 	r := googleSignInResult{outcome: googleSignedIn}
-	var found bool
-	r.userID, found, err = lockUserByGoogleSubjectTx(ctx, tx, in.subject)
+	userID, found, err := lockUserByGoogleSubjectTx(ctx, tx, in.subject)
+	r.userID = userID
 	if err != nil {
 		return googleSignInResult{}, err
 	}
@@ -800,26 +784,6 @@ func googleSignInTx(ctx context.Context, tx pgx.Tx, in googleSignInInput) (googl
 		return googleSignInResult{}, err
 	}
 	return r, nil
-}
-
-// consumeGoogleIDTokenTx records the ID token with the given hash as used,
-// and reports false, having written nothing, if it was already. Only the
-// hash is stored. The row expires at acceptedUntil, when the verifier starts
-// rejecting the token anyway, and cleanup then deletes it.
-func consumeGoogleIDTokenTx(ctx context.Context, tx pgx.Tx, tokenHash []byte, acceptedUntil time.Time) (bool, error) {
-	var one int
-	err := tx.QueryRow(ctx,
-		`INSERT INTO google_id_token_uses (token_hash, expires_at) VALUES ($1, $2)
-		 ON CONFLICT ON CONSTRAINT google_id_token_uses_pkey DO NOTHING
-		 RETURNING 1`,
-		tokenHash, acceptedUntil).Scan(&one)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("consume google id token: %w", err)
-	}
-	return true, nil
 }
 
 // lockUserByGoogleSubjectTx returns the user linked to the Google subject
@@ -925,25 +889,6 @@ func deleteDeadTokens(ctx context.Context, pool *pgxpool.Pool, retention time.Du
 		retention.Seconds(), limit)
 	if err != nil {
 		return 0, fmt.Errorf("delete tokens: %w", err)
-	}
-	return tag.RowsAffected(), nil
-}
-
-// deleteExpiredGoogleTokenUses deletes up to limit Google ID token uses whose
-// expires_at has passed. They need no retention: past expires_at the
-// verifier rejects the token itself (see googleSignInInput.acceptedUntil), so the row no
-// longer prevents anything. Like the other deletes, it never waits for a lock
-// (SKIP LOCKED).
-func deleteExpiredGoogleTokenUses(ctx context.Context, pool *pgxpool.Pool, limit int) (int64, error) {
-	tag, err := pool.Exec(ctx,
-		`DELETE FROM google_id_token_uses WHERE token_hash IN (
-		     SELECT token_hash FROM google_id_token_uses
-		     WHERE expires_at < now()
-		     LIMIT $1
-		     FOR UPDATE SKIP LOCKED)`,
-		limit)
-	if err != nil {
-		return 0, fmt.Errorf("delete google id token uses: %w", err)
 	}
 	return tag.RowsAffected(), nil
 }

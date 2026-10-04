@@ -14,9 +14,11 @@ import '../ui/widgets/form_error_banner.dart';
 import '../ui/widgets/form_notice_banner.dart';
 import '../ui/widgets/primary_button.dart';
 import 'failure_presentation.dart';
+import 'google_sign_in_section.dart';
 import 'resend_verification.dart';
 
-/// Email and password log in (decision 024).
+/// Email and password log in (decision 024), and "Continue with Google"
+/// when the build has it (decision 025).
 ///
 /// Success needs no navigation here: the session becomes signed in and the
 /// router's redirect takes over. The only client checks are empty fields;
@@ -42,6 +44,9 @@ class _LoginScreenState extends State<LoginScreen> {
   final _passwordFocus = FocusNode();
 
   bool _busy = false;
+
+  /// A Google sign-in is running: the form is locked but not working.
+  bool _googleBusy = false;
   String? _banner;
   String? _emailError;
   String? _passwordError;
@@ -89,7 +94,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _submit() async {
     // The keyboard's done action bypasses the button's guard.
-    if (_busy) return;
+    if (_busy || _googleBusy) return;
     final l10n = AppLocalizations.of(context);
     final email = _email.text;
     final password = _password.text;
@@ -161,6 +166,22 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  void _googleStarted() {
+    setState(() {
+      _googleBusy = true;
+      // A new attempt: what the last one said no longer applies.
+      _banner = null;
+      _unverifiedEmail = null;
+    });
+  }
+
+  void _googleFailed(FailurePresentation failure) {
+    setState(() {
+      _googleBusy = false;
+      _banner = failure.message;
+    });
+  }
+
   void _open(String route) => unawaited(context.push(route));
 
   @override
@@ -168,6 +189,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final l10n = AppLocalizations.of(context);
     final banner = _banner;
     final unverified = _unverifiedEmail;
+    final locked = _busy || _googleBusy;
     return AuthScaffold(
       title: l10n.logInTitle,
       children: [
@@ -187,7 +209,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 controller: _email,
                 focusNode: _emailFocus,
                 errorText: _emailError,
-                enabled: !_busy,
+                enabled: !locked,
                 textInputAction: TextInputAction.next,
                 onSubmitted: (_) => _passwordFocus.requestFocus(),
               ),
@@ -196,20 +218,31 @@ class _LoginScreenState extends State<LoginScreen> {
                 controller: _password,
                 focusNode: _passwordFocus,
                 errorText: _passwordError,
-                enabled: !_busy,
+                enabled: !locked,
                 textInputAction: TextInputAction.done,
                 onSubmitted: (_) => _submit(),
               ),
             ],
           ),
         ),
-        PrimaryButton(label: l10n.logInButton, onPressed: _submit, busy: _busy),
+        PrimaryButton(
+          label: l10n.logInButton,
+          onPressed: _googleBusy ? null : _submit,
+          busy: _busy,
+        ),
+        if (widget.session.googleSignInAvailable)
+          GoogleSignInSection(
+            session: widget.session,
+            enabled: !_busy,
+            onStarted: _googleStarted,
+            onFailed: _googleFailed,
+          ),
         TextButton(
-          onPressed: _busy ? null : () => _open(Routes.forgotPassword),
+          onPressed: locked ? null : () => _open(Routes.forgotPassword),
           child: Text(l10n.forgotPasswordLink),
         ),
         TextButton(
-          onPressed: _busy ? null : () => _open(Routes.register),
+          onPressed: locked ? null : () => _open(Routes.register),
           child: Text(l10n.createAccountLink),
         ),
       ],

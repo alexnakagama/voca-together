@@ -21,30 +21,27 @@ import (
 // ---- Store ----
 
 // googleAttempt is one Google sign-in as the service will pass it to the
-// store: a verified ID token (only its hash and acceptedUntil reach the store) and the
-// new session's tokens.
+// store: the verified claims' subject and email (the ID token itself never
+// reaches the store) and the new session's tokens.
 type googleAttempt struct {
 	googleSignInInput
 	rawIDToken      string
 	access, refresh Token
 }
 
-// newGoogleAttempt returns an eligible attempt with a fresh ID token that
-// the verifier accepts for another hour (whole seconds, like a real exp
-// claim plus the skew).
+// newGoogleAttempt returns an eligible attempt. rawIDToken is what the
+// service would have verified; tests use it to check it is stored nowhere.
 func newGoogleAttempt(subject, addr string) googleAttempt {
 	raw := "eyJhbGciOiJSUzI1NiJ9.test-payload." + NewToken("").Raw
 	access, refresh := NewToken(AccessTokenPrefix), NewToken(RefreshTokenPrefix)
 	return googleAttempt{
 		googleSignInInput: googleSignInInput{
-			tokenHash:     HashToken(raw),
-			acceptedUntil: time.Unix(time.Now().Add(time.Hour).Unix(), 0),
-			subject:       subject,
-			eligible:      true,
-			email:         addr,
-			accessHash:    access.Hash,
-			refreshHash:   refresh.Hash,
-			userAgent:     ptr(testUserAgent),
+			subject:     subject,
+			eligible:    true,
+			email:       addr,
+			accessHash:  access.Hash,
+			refreshHash: refresh.Hash,
+			userAgent:   ptr(testUserAgent),
 		},
 		rawIDToken: raw,
 		access:     access,
@@ -53,14 +50,14 @@ func newGoogleAttempt(subject, addr string) googleAttempt {
 }
 
 // withNewSession returns the attempt with the same ID token but new session
-// tokens, as a replayed request would have.
+// tokens, as a second request carrying that token has.
 func (a googleAttempt) withNewSession() googleAttempt {
 	a.access, a.refresh = NewToken(AccessTokenPrefix), NewToken(RefreshTokenPrefix)
 	a.accessHash, a.refreshHash = a.access.Hash, a.refresh.Hash
 	return a
 }
 
-type googleTables struct{ users, identities, sessions, tokenUses int }
+type googleTables struct{ users, identities, sessions int }
 
 func countGoogleTables(t *testing.T, pool *pgxpool.Pool) googleTables {
 	t.Helper()
@@ -68,7 +65,6 @@ func countGoogleTables(t *testing.T, pool *pgxpool.Pool) googleTables {
 		users:      countRows(t, pool, `SELECT count(*) FROM users`),
 		identities: countRows(t, pool, `SELECT count(*) FROM user_identities`),
 		sessions:   countRows(t, pool, `SELECT count(*) FROM sessions`),
-		tokenUses:  countRows(t, pool, `SELECT count(*) FROM google_id_token_uses`),
 	}
 }
 
@@ -95,11 +91,6 @@ func requirePgConstraint(t *testing.T, err error, code, constraint string) {
 	if !errors.As(err, &pgErr) || pgErr.Code != code || pgErr.ConstraintName != constraint {
 		t.Fatalf("err = %v, want SQLSTATE %s on %s", err, code, constraint)
 	}
-}
-
-func tokenUseExists(t *testing.T, pool *pgxpool.Pool, a googleAttempt) bool {
-	t.Helper()
-	return countRows(t, pool, `SELECT count(*) FROM google_id_token_uses WHERE token_hash = $1`, a.tokenHash) == 1
 }
 
 // userIDByEmail returns the id of the account with the address.
@@ -243,7 +234,7 @@ func TestGoogleSignInCreatesAccount(t *testing.T) {
 
 	r, err := googleSignIn(ctx, pool, a.googleSignInInput)
 	requireGoogleOutcome(t, r, err, googleCreated)
-	requireGoogleTables(t, pool, googleTables{users: 1, identities: 1, sessions: 1, tokenUses: 1})
+	requireGoogleTables(t, pool, googleTables{users: 1, identities: 1, sessions: 1})
 
 	if r.userID != userIDByEmail(t, pool, "gina@outlook.example") {
 		t.Errorf("userID %s is not the new account", r.userID)
@@ -267,16 +258,7 @@ func TestGoogleSignInCreatesAccount(t *testing.T) {
 	}
 	requireFreshSession(t, sessions[0], r.userID, a.access, a.refresh, a.userAgent)
 
-	// Only the SHA-256 of the ID token is kept, expiring when the verifier
-	// stops accepting the token.
-	var storedExpiry time.Time
-	if err := pool.QueryRow(ctx, `SELECT expires_at FROM google_id_token_uses WHERE token_hash = $1`, HashToken(a.rawIDToken)).
-		Scan(&storedExpiry); err != nil {
-		t.Fatal(err)
-	}
-	if !storedExpiry.Equal(a.acceptedUntil) {
-		t.Errorf("token use expires_at = %v, want acceptedUntil = %v", storedExpiry, a.acceptedUntil)
-	}
+	// Nothing of the ID token is kept, not even a hash.
 	requireNoSecrets(t, "database", dumpTables(t, pool), []string{a.rawIDToken, "test-payload", a.access.Raw, a.refresh.Raw})
 }
 
@@ -299,61 +281,68 @@ func TestGoogleSignInExistingIdentity(t *testing.T) {
 			t.Errorf("attempt %d: user %s session %q; want %s and a session", i, r.userID, r.sessionID, userID)
 		}
 	}
-	requireGoogleTables(t, pool, googleTables{users: 1, identities: 1, sessions: 3, tokenUses: 3})
+	requireGoogleTables(t, pool, googleTables{users: 1, identities: 1, sessions: 3})
 	if after := usersAndIdentities(t, pool); after != before {
 		t.Errorf("sign-in changed the account:\nbefore %s\nafter  %s", before, after)
 	}
 }
 
-func TestGoogleSignInReplay(t *testing.T) {
+// Google hands an app the same ID token again while it is valid, so a second
+// sign-in with it is an ordinary sign-in to the same account (decision 026).
+func TestGoogleSignInSameTokenTwice(t *testing.T) {
 	pool := testutil.DB(t)
 	ctx := context.Background()
 	a := newGoogleAttempt("1001", "gina@example.com")
-	if r, err := googleSignIn(ctx, pool, a.googleSignInInput); err != nil || r.outcome != googleCreated {
-		t.Fatalf("first use: %+v, %v", r, err)
-	}
-	before := dumpTables(t, pool)
+	first, err := googleSignIn(ctx, pool, a.googleSignInInput)
+	requireGoogleOutcome(t, first, err, googleCreated)
+	before := usersAndIdentities(t, pool)
 
-	replay := a.withNewSession()
-	r, err := googleSignIn(ctx, pool, replay.googleSignInInput)
-	requireGoogleOutcome(t, r, err, googleReplayed)
-	if r.userID != "" || r.sessionID != "" {
-		t.Errorf("replay result = %+v, want no user or session", r)
+	again := a.withNewSession()
+	second, err := googleSignIn(ctx, pool, again.googleSignInInput)
+	requireGoogleOutcome(t, second, err, googleSignedIn)
+	if second.userID != first.userID || second.sessionID == "" || second.sessionID == first.sessionID {
+		t.Errorf("second = %+v, want a new session for user %s", second, first.userID)
 	}
-	if after := dumpTables(t, pool); after != before {
-		t.Errorf("replay wrote something:\nbefore %s\nafter  %s", before, after)
+	if after := usersAndIdentities(t, pool); after != before {
+		t.Errorf("the second sign-in changed the account:\nbefore %s\nafter  %s", before, after)
 	}
-	if n := countRows(t, pool, `SELECT count(*) FROM sessions WHERE access_token_hash = $1`, replay.access.Hash); n != 0 {
-		t.Error("replay created a session")
+	if n := countRows(t, pool, `SELECT count(*) FROM sessions WHERE access_token_hash = $1`, again.access.Hash); n != 1 {
+		t.Error("the second sign-in created no session")
+	}
+	if n := sessionCount(t, pool); n != 2 {
+		t.Errorf("sessions = %d, want 2", n)
 	}
 }
 
-// A token is spent whatever the outcome it got: a replay after a refusal is
-// still a replay, even once the refusal no longer applies.
-func TestGoogleSignInRefusedTokenIsSpent(t *testing.T) {
+// A refusal isn't remembered either: presenting the same token again is
+// judged as it stands then.
+func TestGoogleSignInSameTokenAfterRefusal(t *testing.T) {
 	pool := testutil.DB(t)
 	ctx := context.Background()
 
-	ineligible := newGoogleAttempt("1001", "gina@example.com")
-	ineligible.eligible = false
-	r, err := googleSignIn(ctx, pool, ineligible.googleSignInInput)
-	requireGoogleOutcome(t, r, err, googleIneligible)
-	retry := ineligible.withNewSession()
-	retry.eligible = true
-	r, err = googleSignIn(ctx, pool, retry.googleSignInInput)
-	requireGoogleOutcome(t, r, err, googleReplayed)
-
 	seedAccount(t, pool, "ana@example.com", "hash", true)
 	collision := newGoogleAttempt("1002", "ana@example.com")
-	r, err = googleSignIn(ctx, pool, collision.googleSignInInput)
-	requireGoogleOutcome(t, r, err, googleAccountExists)
-	r, err = googleSignIn(ctx, pool, collision.withNewSession().googleSignInInput)
-	requireGoogleOutcome(t, r, err, googleReplayed)
+	for range 2 {
+		r, err := googleSignIn(ctx, pool, collision.withNewSession().googleSignInInput)
+		requireGoogleOutcome(t, r, err, googleAccountExists)
+	}
 
-	requireGoogleTables(t, pool, googleTables{users: 1, identities: 0, sessions: 0, tokenUses: 2})
+	ineligible := newGoogleAttempt("1001", "gina@example.com")
+	ineligible.eligible = false
+	for range 2 {
+		r, err := googleSignIn(ctx, pool, ineligible.withNewSession().googleSignInInput)
+		requireGoogleOutcome(t, r, err, googleIneligible)
+	}
+
+	if n := countRows(t, pool, `SELECT count(*) FROM users`); n != 1 {
+		t.Errorf("users = %d, want only the seeded account", n)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM user_identities`) + sessionCount(t, pool); n != 0 {
+		t.Errorf("identities + sessions = %d, want 0", n)
+	}
 }
 
-func TestGoogleSignInIneligibleWritesOnlyTokenUse(t *testing.T) {
+func TestGoogleSignInIneligibleWritesNothing(t *testing.T) {
 	pool := testutil.DB(t)
 	a := newGoogleAttempt("1001", "")
 	a.eligible = false
@@ -363,15 +352,12 @@ func TestGoogleSignInIneligibleWritesOnlyTokenUse(t *testing.T) {
 	if r.userID != "" || r.sessionID != "" {
 		t.Errorf("result = %+v, want no user or session", r)
 	}
-	requireGoogleTables(t, pool, googleTables{tokenUses: 1})
-	if !tokenUseExists(t, pool, a) {
-		t.Error("token use not committed")
-	}
+	requireGoogleTables(t, pool, googleTables{})
 }
 
 // An unknown identity whose email already has an account gets
 // googleAccountExists, whatever kind of account it is. Nothing is linked and
-// the account is untouched; only the token use is written.
+// the account is untouched; nothing is written.
 func TestGoogleSignInAccountExists(t *testing.T) {
 	pool := testutil.DB(t)
 	ctx := context.Background()
@@ -391,9 +377,6 @@ func TestGoogleSignInAccountExists(t *testing.T) {
 			if r.userID != existing || r.sessionID != "" {
 				t.Errorf("result = %+v, want the existing user %s and no session", r, existing)
 			}
-			if !tokenUseExists(t, pool, a) {
-				t.Error("token use not committed")
-			}
 		})
 	}
 	if after := usersAndIdentities(t, pool); after != before {
@@ -406,14 +389,13 @@ func TestGoogleSignInAccountExists(t *testing.T) {
 
 // ---- googleSignIn: atomicity ----
 
-// Each injected failure must roll back everything the attempt wrote,
-// including the token use, so the token isn't spent and works afterwards.
+// Each injected failure must roll back everything the attempt wrote, and
+// the same token works afterwards.
 func TestGoogleSignInRollsBackOnFailure(t *testing.T) {
 	for _, event := range []string{
 		"BEFORE INSERT ON sessions",
 		"BEFORE INSERT ON user_identities",
 		"BEFORE INSERT ON users",
-		"AFTER INSERT ON google_id_token_uses",
 	} {
 		t.Run(event, func(t *testing.T) {
 			pool := testutil.DB(t)
@@ -526,7 +508,7 @@ func TestGoogleSignInSameSubjectRaceRetries(t *testing.T) {
 	if res.r.userID != winner {
 		t.Errorf("signed in to %s, want the winner %s", res.r.userID, winner)
 	}
-	requireGoogleTables(t, pool, googleTables{users: 1, identities: 1, sessions: 1, tokenUses: 1})
+	requireGoogleTables(t, pool, googleTables{users: 1, identities: 1, sessions: 1})
 	if n := countRows(t, pool, `SELECT count(*) FROM users WHERE email = 'second@example.com'`); n != 0 {
 		t.Error("the loser's email got an account")
 	}
@@ -550,7 +532,7 @@ func TestGoogleSignInSameSubjectRaceWinnerRollsBack(t *testing.T) {
 	if res.r.userID != userIDByEmail(t, pool, "second@example.com") {
 		t.Error("account not created for the waiting attempt's email")
 	}
-	requireGoogleTables(t, pool, googleTables{users: 1, identities: 1, sessions: 1, tokenUses: 1})
+	requireGoogleTables(t, pool, googleTables{users: 1, identities: 1, sessions: 1})
 }
 
 // Same email, other subject: the waiting user insert sees the committed
@@ -580,7 +562,7 @@ func TestGoogleSignInConcurrentEmailCollision(t *testing.T) {
 				if res.r.userID != holder {
 					t.Errorf("userID = %s, want the existing account %s", res.r.userID, holder)
 				}
-				requireGoogleTables(t, pool, googleTables{users: 1, tokenUses: 1})
+				requireGoogleTables(t, pool, googleTables{users: 1})
 				if loadUser(t, pool, "ana@example.com").passwordHash != "hash" {
 					t.Error("existing account changed")
 				}
@@ -590,7 +572,7 @@ func TestGoogleSignInConcurrentEmailCollision(t *testing.T) {
 				}
 				res = <-done
 				requireGoogleOutcome(t, res.r, res.err, googleCreated)
-				requireGoogleTables(t, pool, googleTables{users: 1, identities: 1, sessions: 1, tokenUses: 1})
+				requireGoogleTables(t, pool, googleTables{users: 1, identities: 1, sessions: 1})
 			}
 		})
 	}
@@ -686,6 +668,8 @@ func countOutcomes(t *testing.T, results []googleResultErr) map[googleOutcome]in
 
 const concurrentAttempts = 12
 
+// The same token in many requests at once (a double tap, a retry): one
+// account and one identity, and every request gets its own session.
 func TestGoogleSignInConcurrentSameToken(t *testing.T) {
 	pool := testutil.DB(t)
 	a := newGoogleAttempt("1001", "gina@example.com")
@@ -695,10 +679,18 @@ func TestGoogleSignInConcurrentSameToken(t *testing.T) {
 	}
 
 	counts := countOutcomes(t, runConcurrently(t, pool, attempts))
-	if counts[googleCreated] != 1 || counts[googleReplayed] != concurrentAttempts-1 {
-		t.Errorf("outcomes = %v, want 1 created and %d replayed", counts, concurrentAttempts-1)
+	if counts[googleCreated] != 1 || counts[googleSignedIn] != concurrentAttempts-1 {
+		t.Errorf("outcomes = %v, want 1 created and %d signed in", counts, concurrentAttempts-1)
 	}
-	requireGoogleTables(t, pool, googleTables{users: 1, identities: 1, sessions: 1, tokenUses: 1})
+	if n := countRows(t, pool, `SELECT count(*) FROM users`); n != 1 {
+		t.Errorf("users = %d, want 1", n)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM user_identities`); n != 1 {
+		t.Errorf("identities = %d, want 1", n)
+	}
+	if n := sessionCount(t, pool); n != concurrentAttempts {
+		t.Errorf("sessions = %d, want %d", n, concurrentAttempts)
+	}
 }
 
 // First sign-ins of one subject with different tokens: one account, one
@@ -714,7 +706,7 @@ func TestGoogleSignInConcurrentSameSubject(t *testing.T) {
 	if counts[googleCreated] != 1 || counts[googleSignedIn] != concurrentAttempts-1 {
 		t.Errorf("outcomes = %v, want 1 created and %d signed in", counts, concurrentAttempts-1)
 	}
-	requireGoogleTables(t, pool, googleTables{users: 1, identities: 1, sessions: concurrentAttempts, tokenUses: concurrentAttempts})
+	requireGoogleTables(t, pool, googleTables{users: 1, identities: 1, sessions: concurrentAttempts})
 }
 
 // One subject, a different email per attempt (the retry path): still one
@@ -731,7 +723,7 @@ func TestGoogleSignInConcurrentSameSubjectConflictingEmails(t *testing.T) {
 	if counts[googleCreated] != 1 || counts[googleSignedIn] != concurrentAttempts-1 {
 		t.Errorf("outcomes = %v, want 1 created and %d signed in", counts, concurrentAttempts-1)
 	}
-	requireGoogleTables(t, pool, googleTables{users: 1, identities: 1, sessions: concurrentAttempts, tokenUses: concurrentAttempts})
+	requireGoogleTables(t, pool, googleTables{users: 1, identities: 1, sessions: concurrentAttempts})
 	var winner string
 	for i, res := range results {
 		if res.r.outcome == googleCreated {
@@ -756,7 +748,7 @@ func TestGoogleSignInConcurrentSameEmail(t *testing.T) {
 	if counts[googleCreated] != 1 || counts[googleAccountExists] != concurrentAttempts-1 {
 		t.Errorf("outcomes = %v, want 1 created and %d account_exists", counts, concurrentAttempts-1)
 	}
-	requireGoogleTables(t, pool, googleTables{users: 1, identities: 1, sessions: 1, tokenUses: concurrentAttempts})
+	requireGoogleTables(t, pool, googleTables{users: 1, identities: 1, sessions: 1})
 }
 
 // A mix of subjects, emails, shared tokens and an existing password account,
@@ -878,110 +870,6 @@ func TestGoogleCreatedAccountWithPasswordAuth(t *testing.T) {
 	}
 }
 
-// ---- Cleanup ----
-
-func insertGoogleTokenUse(t *testing.T, pool *pgxpool.Pool, expiresIn time.Duration) []byte {
-	t.Helper()
-	h := NewToken("").Hash
-	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO google_id_token_uses (token_hash, expires_at) VALUES ($1, now() + make_interval(secs => $2))`,
-		h, expiresIn.Seconds()); err != nil {
-		t.Fatal(err)
-	}
-	return h
-}
-
-func googleTokenUseLeft(t *testing.T, pool *pgxpool.Pool, h []byte) bool {
-	t.Helper()
-	return countRows(t, pool, `SELECT count(*) FROM google_id_token_uses WHERE token_hash = $1`, h) == 1
-}
-
-// Token uses go as soon as they expire (no retention): the verifier rejects
-// the token by then.
-func TestCleanupDeletesExpiredGoogleTokenUses(t *testing.T) {
-	s := newTestService(t, &email.Recorder{})
-	expired := [][]byte{insertGoogleTokenUse(t, s.pool, -time.Second), insertGoogleTokenUse(t, s.pool, -31*day)}
-	live := insertGoogleTokenUse(t, s.pool, time.Minute)
-
-	sessions, tokens, googleTokens, err := s.cleanup(context.Background())
-	if err != nil || sessions != 0 || tokens != 0 || googleTokens != 2 {
-		t.Fatalf("cleanup = %d, %d, %d, %v; want 0, 0, 2", sessions, tokens, googleTokens, err)
-	}
-	for _, h := range expired {
-		if googleTokenUseLeft(t, s.pool, h) {
-			t.Error("expired token use survived")
-		}
-	}
-	if !googleTokenUseLeft(t, s.pool, live) {
-		t.Error("live token use deleted")
-	}
-	if _, _, googleTokens, err := s.cleanup(context.Background()); err != nil || googleTokens != 0 {
-		t.Errorf("second run: %d, %v", googleTokens, err)
-	}
-}
-
-// A row a sign-in stored keeps its token replay-proof until expires_at.
-func TestCleanupKeepsGoogleTokenUseUntilExpiry(t *testing.T) {
-	s := newTestService(t, &email.Recorder{})
-	ctx := context.Background()
-	a := newGoogleAttempt("1001", "gina@example.com")
-	a.acceptedUntil = time.Now().Add(30 * time.Second) // exp has passed, but the verifier still accepts it
-	r, err := googleSignIn(ctx, s.pool, a.googleSignInInput)
-	requireGoogleOutcome(t, r, err, googleCreated)
-
-	if _, _, n, err := s.cleanup(ctx); err != nil || n != 0 {
-		t.Fatalf("cleanup deleted %d token uses, err %v; want 0", n, err)
-	}
-	r, err = googleSignIn(ctx, s.pool, a.withNewSession().googleSignInInput)
-	requireGoogleOutcome(t, r, err, googleReplayed)
-}
-
-func TestCleanupGoogleTokenUsesInBatches(t *testing.T) {
-	s := newTestService(t, &email.Recorder{})
-	for range 5 {
-		insertGoogleTokenUse(t, s.pool, -time.Second)
-	}
-	s.cleanupBatchSize = 2
-	if _, _, n, err := s.cleanup(context.Background()); err != nil || n != 5 {
-		t.Fatalf("deleted %d, err %v; want 5 over several batches", n, err)
-	}
-}
-
-func TestCleanupSkipsLockedGoogleTokenUses(t *testing.T) {
-	s := newTestService(t, &email.Recorder{})
-	ctx := context.Background()
-	h := insertGoogleTokenUse(t, s.pool, -time.Second)
-	tx := beginTx(t, s.pool)
-	if _, err := tx.Exec(ctx, `SELECT 1 FROM google_id_token_uses WHERE token_hash = $1 FOR UPDATE`, h); err != nil {
-		t.Fatal(err)
-	}
-
-	runCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	if _, _, n, err := s.cleanup(runCtx); err != nil || n != 0 {
-		t.Fatalf("cleanup blocked or deleted a locked row: %d, %v", n, err)
-	}
-	if err := tx.Rollback(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, n, err := s.cleanup(ctx); err != nil || n != 1 {
-		t.Errorf("after unlock: %d, %v; want 1", n, err)
-	}
-}
-
-func TestRunCleanupLogsGoogleTokenUses(t *testing.T) {
-	s := newTestService(t, &email.Recorder{})
-	insertGoogleTokenUse(t, s.pool, -time.Second)
-
-	logs := runCleanupUntilLogged(t, s, time.Hour)
-	if n := countRows(t, s.pool, `SELECT count(*) FROM google_id_token_uses`); n != 0 {
-		t.Errorf("token uses = %d after a logged run, want 0", n)
-	}
-	if !strings.Contains(logs, "google_token_uses_deleted=1") {
-		t.Errorf("cleanup log lacks the token use count:\n%s", logs)
-	}
-}
-
 // ---- SignInWithGoogle ----
 
 // Google subjects are 21-digit strings; these are long enough that they
@@ -1084,7 +972,7 @@ func TestSignInWithGoogleCreatesAccount(t *testing.T) {
 	}
 	sessions := loadSessions(t, f.pool)
 	requireFreshSession(t, sessions[0], userID, creds.AccessToken, creds.RefreshToken, ptr(testUserAgent))
-	requireGoogleTables(t, f.pool, googleTables{users: 1, identities: 1, sessions: 1, tokenUses: 1})
+	requireGoogleTables(t, f.pool, googleTables{users: 1, identities: 1, sessions: 1})
 
 	requireLogged(t, f.testService, `msg="auth: google sign-in succeeded"`, "user_id="+userID,
 		"session_id="+sessions[0].id, "new_account=true")
@@ -1123,7 +1011,7 @@ func TestSignInWithGoogleExistingIdentity(t *testing.T) {
 	if after := usersAndIdentities(t, f.pool); after != before {
 		t.Errorf("account changed:\n%s\nwant\n%s", after, before)
 	}
-	requireGoogleTables(t, f.pool, googleTables{users: 1, identities: 1, sessions: len(cases), tokenUses: len(cases)})
+	requireGoogleTables(t, f.pool, googleTables{users: 1, identities: 1, sessions: len(cases)})
 	requireLogged(t, f.testService, "new_account=false")
 	if strings.Contains(f.logs.String(), "new_account=true") {
 		t.Error("an existing identity was logged as a new account")
@@ -1132,7 +1020,7 @@ func TestSignInWithGoogleExistingIdentity(t *testing.T) {
 }
 
 // A new identity whose email can't create an account gets
-// ErrGoogleEmailUnusable; only the token use is written.
+// ErrGoogleEmailUnusable; nothing is written.
 func TestSignInWithGoogleIneligibleEmail(t *testing.T) {
 	for _, c := range []struct {
 		name, email string
@@ -1153,7 +1041,7 @@ func TestSignInWithGoogleIneligibleEmail(t *testing.T) {
 			creds, err := f.SignInWithGoogle(context.Background(), raw, testUserAgent)
 			requireErrorIs(t, err, ErrGoogleEmailUnusable)
 			requireNoCredentials(t, creds)
-			requireGoogleTables(t, f.pool, googleTables{tokenUses: 1})
+			requireGoogleTables(t, f.pool, googleTables{})
 			requireLogged(t, f.testService, `msg="auth: google sign-in failed"`, "reason="+c.reason)
 			requireGoogleLogsClean(t, f.testService, []string{raw}, []string{"gina@outlook.com", "gína@example.com"})
 		})
@@ -1185,29 +1073,99 @@ func TestSignInWithGoogleExistingAccount(t *testing.T) {
 			if after := usersAndIdentities(t, f.pool); after != before {
 				t.Errorf("account changed:\n%s\nwant\n%s", after, before)
 			}
-			requireGoogleTables(t, f.pool, googleTables{users: 1, tokenUses: 1})
+			requireGoogleTables(t, f.pool, googleTables{users: 1})
 			requireLogged(t, f.testService, "reason=account_exists", "user_id="+userID)
 			requireGoogleLogsClean(t, f.testService, []string{raw}, []string{"ana@example.com", "Ana@Example.com"})
 		})
 	}
 }
 
-// A token is accepted once: a replay gets the same error as an invalid
-// token and creates nothing.
-func TestSignInWithGoogleReplay(t *testing.T) {
+// A token is accepted whenever it verifies: Google returns the same one to
+// the app again while it is valid, so a second sign-in with it is an
+// ordinary sign-in to the same account, with its own session (decision 026).
+func TestSignInWithGoogleSameTokenTwice(t *testing.T) {
 	f := newGoogleFixture(t)
+	ctx := context.Background()
 	raw := f.issue(testGoogleSubject, "gina@outlook.com", true)
-	first, err := f.SignInWithGoogle(context.Background(), raw, testUserAgent)
+	first, err := f.SignInWithGoogle(ctx, raw, testUserAgent)
 	if err != nil {
 		t.Fatal(err)
 	}
+	before := usersAndIdentities(t, f.pool)
 
-	creds, err := f.SignInWithGoogle(context.Background(), raw, testUserAgent)
-	requireErrorIs(t, err, ErrInvalidGoogleToken)
-	requireNoCredentials(t, creds)
-	requireGoogleTables(t, f.pool, googleTables{users: 1, identities: 1, sessions: 1, tokenUses: 1})
-	requireLogged(t, f.testService, "reason=replayed")
-	requireGoogleLogsClean(t, f.testService, []string{raw}, []string{"gina@outlook.com"}, first)
+	second, err := f.SignInWithGoogle(ctx, raw, testUserAgent)
+	if err != nil {
+		t.Fatalf("second sign-in with the same token: %v", err)
+	}
+	if second.AccessToken.Raw == first.AccessToken.Raw || second.RefreshToken.Raw == first.RefreshToken.Raw {
+		t.Error("the second sign-in returned the first session's tokens")
+	}
+	requireGoogleTables(t, f.pool, googleTables{users: 1, identities: 1, sessions: 2})
+	if after := usersAndIdentities(t, f.pool); after != before {
+		t.Errorf("account changed:\n%s\nwant\n%s", after, before)
+	}
+	requireLogged(t, f.testService, "new_account=true", "new_account=false")
+	if strings.Contains(f.logs.String(), "replayed") {
+		t.Error("a repeated token was logged as a replay")
+	}
+	// Both sessions work, and nothing of the ID token is stored.
+	for _, c := range []Credentials{first, second} {
+		if _, err := f.Authenticate(ctx, c.AccessToken.Raw); err != nil {
+			t.Errorf("session not usable: %v", err)
+		}
+	}
+	requireNoSecrets(t, "database", dumpTables(t, f.pool), tokenSecrets(raw))
+	requireGoogleLogsClean(t, f.testService, []string{raw}, []string{"gina@outlook.com"}, first, second)
+}
+
+// The same token in many requests at once: one account, one identity, a
+// session each, and no error.
+func TestSignInWithGoogleSameTokenConcurrently(t *testing.T) {
+	f := newGoogleFixture(t)
+	raw := f.issue(testGoogleSubject, "gina@outlook.com", true)
+
+	errs := make([]error, concurrentAttempts)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, errs[i] = f.SignInWithGoogle(context.Background(), raw, testUserAgent)
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("attempt %d: %v", i, err)
+		}
+	}
+	requireGoogleTables(t, f.pool, googleTables{users: 1, identities: 1, sessions: concurrentAttempts})
+}
+
+// A refusal isn't remembered: the same token gets the same answer again,
+// and still changes nothing.
+func TestSignInWithGoogleSameTokenAfterRefusal(t *testing.T) {
+	f := newGoogleFixture(t)
+	ctx := context.Background()
+	seedAccount(t, f.pool, "ana@example.com", HashPassword(testPassword), true)
+	before := usersAndIdentities(t, f.pool)
+	taken := f.issue(testGoogleSubject, "ana@example.com", true)
+	unverified := f.issue("209876543210987654321", "gina@outlook.com", false)
+
+	for range 2 {
+		_, err := f.SignInWithGoogle(ctx, taken, testUserAgent)
+		requireErrorIs(t, err, ErrAccountExists)
+		_, err = f.SignInWithGoogle(ctx, unverified, testUserAgent)
+		requireErrorIs(t, err, ErrGoogleEmailUnusable)
+	}
+	requireGoogleTables(t, f.pool, googleTables{users: 1})
+	if after := usersAndIdentities(t, f.pool); after != before {
+		t.Errorf("account changed:\n%s\nwant\n%s", after, before)
+	}
 }
 
 // Verifier outcomes are decided before any database work (the service has
@@ -1256,46 +1214,6 @@ func TestSignInWithGoogleRequiresToken(t *testing.T) {
 	})
 	_, err := s.SignInWithGoogle(context.Background(), "", testUserAgent)
 	requireFieldErrors(t, err, ErrIDTokenRequired)
-}
-
-// The token use is remembered exactly as long as the verifier would accept
-// the token: the store gets the verifier's AcceptedUntil unchanged.
-func TestSignInWithGoogleStoresAcceptedUntil(t *testing.T) {
-	f := newGoogleFixture(t)
-	until := time.Unix(time.Now().Add(42*time.Minute).Unix(), 0)
-	raw := fakeIDToken()
-	f.tokens[raw] = googleid.NewClaims(testGoogleSubject, "gina@outlook.com", true, "", until)
-
-	if _, err := f.SignInWithGoogle(context.Background(), raw, testUserAgent); err != nil {
-		t.Fatal(err)
-	}
-	var stored time.Time
-	if err := f.pool.QueryRow(context.Background(),
-		`SELECT expires_at FROM google_id_token_uses WHERE token_hash = $1`, HashToken(raw)).Scan(&stored); err != nil {
-		t.Fatal(err)
-	}
-	if !stored.Equal(until) {
-		t.Errorf("expires_at = %v, want AcceptedUntil %v", stored, until)
-	}
-}
-
-// Claims without an acceptance window would make the replay record expire
-// at once, so they are refused as an internal error before any database
-// work.
-func TestSignInWithGoogleRefusesClaimsWithoutAcceptedUntil(t *testing.T) {
-	s, _ := dbFreeService(t)
-	raw := fakeIDToken()
-	s.google = googleid.Fake{Tokens: map[string]googleid.Claims{
-		raw: googleid.NewClaims(testGoogleSubject, "gina@outlook.com", true, "", time.Time{}),
-	}}
-	creds, err := s.SignInWithGoogle(context.Background(), raw, testUserAgent)
-	requireInternal(t, err)
-	for _, sentinel := range []error{ErrInvalidGoogleToken, ErrGoogleEmailUnusable, ErrAccountExists, ErrGoogleUnavailable} {
-		if errors.Is(err, sentinel) {
-			t.Errorf("err = %v, want an internal error", err)
-		}
-	}
-	requireNoCredentials(t, creds)
 }
 
 // A cancelled request stops before the database, whether it was cancelled

@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vocatogether/api/api_exception.dart';
+import 'package:vocatogether/auth/google_identity_exception.dart';
 import 'package:vocatogether/auth/token_store.dart';
 import 'package:vocatogether/screens/failure_presentation.dart';
 import 'package:vocatogether/session.dart';
@@ -53,15 +54,19 @@ void main() {
       ),
       'invalid_google_token': (
         401,
-        FailureKind.unexpected,
-        l10n.errorUnexpected,
+        FailureKind.googleRejected,
+        l10n.errorGoogleRejected,
       ),
       'google_email_unusable': (
         403,
-        FailureKind.unexpected,
-        l10n.errorUnexpected,
+        FailureKind.googleEmailUnusable,
+        l10n.errorGoogleEmailUnusable,
       ),
-      'account_exists': (409, FailureKind.unexpected, l10n.errorUnexpected),
+      'account_exists': (
+        409,
+        FailureKind.accountExists,
+        l10n.errorAccountExists,
+      ),
       'rate_limited': (
         429,
         FailureKind.rateLimited,
@@ -263,6 +268,41 @@ void main() {
       final unknown = _http(400, 'show_this_text');
       for (final e in [hostile, unknown]) {
         final p = _present(e);
+        expect(p.message, l10n.errorUnexpected);
+      }
+    });
+  });
+
+  group('Google sign-in', () {
+    test('a closed account chooser is not an error: nothing is shown', () {
+      final p = _present(
+        const GoogleIdentityException(GoogleIdentityFailure.cancelled),
+      );
+      expect(p.kind, FailureKind.cancelled);
+      expect(p.message, isNull);
+    });
+
+    for (final failure in GoogleIdentityFailure.values) {
+      if (failure == GoogleIdentityFailure.cancelled) continue;
+      test('${failure.name} says Google sign-in is unavailable', () {
+        final p = _present(GoogleIdentityException(failure));
+        expect(p.kind, FailureKind.googleUnavailable);
+        expect(p.message, l10n.errorGoogleUnavailable);
+      });
+    }
+
+    test('the account-exists message never points to a password', () {
+      // The existing account may have none (020).
+      expect(
+        l10n.errorAccountExists.toLowerCase(),
+        isNot(contains('password')),
+      );
+    });
+
+    test('a programming error gets the generic message', () {
+      for (final error in <Object>[StateError('x'), ArgumentError('x')]) {
+        final p = _present(error);
+        expect(p.kind, FailureKind.unexpected);
         expect(p.message, l10n.errorUnexpected);
       }
     });

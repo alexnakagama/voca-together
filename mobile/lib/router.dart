@@ -62,7 +62,8 @@ GoRouter createRouter(SessionManager session, AccountApi accountApi) {
       ),
       GoRoute(
         path: Routes.register,
-        builder: (context, state) => RegisterScreen(accountApi: accountApi),
+        builder: (context, state) =>
+            RegisterScreen(session: session, accountApi: accountApi),
       ),
       GoRoute(
         path: Routes.forgotPassword,

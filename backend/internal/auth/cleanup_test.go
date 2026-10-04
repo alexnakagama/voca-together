@@ -83,7 +83,7 @@ func TestCleanupDeletesOnlyRowsPastRetention(t *testing.T) {
 	usedOld := insertToken(t, s.pool, userID, PurposePasswordReset, old, true)
 	expiredRecent := insertToken(t, s.pool, userID, PurposeEmailVerification, recent, true)
 
-	sessions, tokens, _, err := s.cleanup(context.Background())
+	sessions, tokens, err := s.cleanup(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestCleanupDeletesOnlyRowsPastRetention(t *testing.T) {
 	}
 
 	// Idempotent.
-	if sessions, tokens, _, err := s.cleanup(context.Background()); err != nil || sessions != 0 || tokens != 0 {
+	if sessions, tokens, err := s.cleanup(context.Background()); err != nil || sessions != 0 || tokens != 0 {
 		t.Errorf("second run: sessions = %d, tokens = %d, err = %v", sessions, tokens, err)
 	}
 }
@@ -129,7 +129,7 @@ func TestCleanupWorksInBatches(t *testing.T) {
 		insertSession(t, s.pool, userID, old, old, nil)
 	}
 	s.cleanupBatchSize = 2
-	sessions, _, _, err := s.cleanup(context.Background())
+	sessions, _, err := s.cleanup(context.Background())
 	if err != nil || sessions != 5 {
 		t.Fatalf("sessions = %d, err = %v; want 5 over several batches", sessions, err)
 	}
@@ -159,7 +159,7 @@ func TestCleanupSkipsLockedRows(t *testing.T) {
 
 	runCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	sessions, tokens, _, err := s.cleanup(runCtx)
+	sessions, tokens, err := s.cleanup(runCtx)
 	if err != nil {
 		t.Fatalf("cleanup blocked or failed: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestCleanupSkipsLockedRows(t *testing.T) {
 	if err := tx.Rollback(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if sessions, tokens, _, err := s.cleanup(ctx); err != nil || sessions != 1 || tokens != 1 {
+	if sessions, tokens, err := s.cleanup(ctx); err != nil || sessions != 1 || tokens != 1 {
 		t.Errorf("after unlock: sessions = %d, tokens = %d, err = %v; want 1 and 1", sessions, tokens, err)
 	}
 }
@@ -259,19 +259,19 @@ func TestRunCleanupLogsSlowRun(t *testing.T) {
 	if _, err := s.pool.Exec(ctx, `
 		CREATE FUNCTION test_slow_delete() RETURNS trigger LANGUAGE plpgsql
 		AS $$ BEGIN PERFORM pg_sleep(0.05); RETURN NULL; END $$;
-		CREATE TRIGGER test_slow_delete BEFORE DELETE ON google_id_token_uses
+		CREATE TRIGGER test_slow_delete BEFORE DELETE ON user_tokens
 		FOR EACH STATEMENT EXECUTE FUNCTION test_slow_delete()`); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if _, err := s.pool.Exec(ctx, `DROP TRIGGER test_slow_delete ON google_id_token_uses;
+		if _, err := s.pool.Exec(ctx, `DROP TRIGGER test_slow_delete ON user_tokens;
 			DROP FUNCTION test_slow_delete()`); err != nil {
 			t.Errorf("remove trigger: %v", err)
 		}
 	})
 
 	logs := runCleanupUntilLogged(t, s, time.Hour)
-	if !strings.Contains(logs, "sessions_deleted=1") || !strings.Contains(logs, "google_token_uses_deleted=0") {
+	if !strings.Contains(logs, "sessions_deleted=1") || !strings.Contains(logs, "tokens_deleted=0") {
 		t.Errorf("slow run not logged with counts:\n%s", logs)
 	}
 }

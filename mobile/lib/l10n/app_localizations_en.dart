@@ -231,4 +231,25 @@ class AppLocalizationsEn extends AppLocalizations {
     );
     return '$_temp0';
   }
+
+  @override
+  String get googleSignInDivider => 'or';
+
+  @override
+  String get googleSignInProgress => 'Signing in with Google';
+
+  @override
+  String get errorGoogleUnavailable =>
+      'Google sign-in isn’t available right now. Try again.';
+
+  @override
+  String get errorGoogleRejected => 'Google sign-in didn’t work. Try again.';
+
+  @override
+  String get errorGoogleEmailUnusable =>
+      'This Google account can’t be used: Google hasn’t confirmed its email address.';
+
+  @override
+  String get errorAccountExists =>
+      'There’s already a VocaTogether account for this Google account’s email. Log in the way that account was set up.';
 }

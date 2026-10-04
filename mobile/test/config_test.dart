@@ -56,4 +56,66 @@ void main() {
       }
     });
   });
+
+  group('parseGoogleServerClientId', () {
+    const valid = '1234567890-abc123def.apps.googleusercontent.com';
+
+    test('accepts a client ID in any build', () {
+      expect(parseGoogleServerClientId(valid, required: true), valid);
+      expect(parseGoogleServerClientId(valid, required: false), valid);
+    });
+
+    test('a debug build may leave it out: Google sign-in is off', () {
+      expect(parseGoogleServerClientId('', required: false), isNull);
+    });
+
+    test('a release build refuses to start without it', () {
+      expect(
+        () => parseGoogleServerClientId('', required: true),
+        throwsA(isA<ConfigException>()),
+      );
+    });
+
+    final invalid = {
+      'only the suffix': '.apps.googleusercontent.com',
+      'another suffix': '1234-abc.apps.googleusercontent.com.evil.example',
+      'no suffix': '1234-abc',
+      'a client secret': 'GOCSPX-abcdefghijklmnopqrstuvwxyz12',
+      'leading whitespace': ' $valid',
+      'trailing newline': '$valid\n',
+      'a space inside': '1234 abc.apps.googleusercontent.com',
+      'a control character': '1234\tabc.apps.googleusercontent.com',
+      'non-ASCII': '1234-ñ.apps.googleusercontent.com',
+      'too long': '${'1' * 229}.apps.googleusercontent.com',
+      'a quoted value': '"$valid"',
+    };
+    for (final MapEntry(key: name, value: raw) in invalid.entries) {
+      for (final required in [true, false]) {
+        test('rejects $name (required: $required)', () {
+          expect(
+            () => parseGoogleServerClientId(raw, required: required),
+            throwsA(isA<ConfigException>()),
+          );
+        });
+      }
+    }
+
+    test('accepts the longest allowed value', () {
+      final longest = '${'1' * 228}.apps.googleusercontent.com';
+      expect(longest.length, 255);
+      expect(parseGoogleServerClientId(longest, required: true), longest);
+    });
+
+    test('error messages name the variable and never echo the value', () {
+      for (final raw in ['', 'GOCSPX-hunter2secret']) {
+        try {
+          parseGoogleServerClientId(raw, required: true);
+          fail('expected ConfigException');
+        } on ConfigException catch (e) {
+          expect(e.toString(), isNot(contains('hunter2')));
+          expect(e.toString(), contains('GOOGLE_SERVER_CLIENT_ID'));
+        }
+      }
+    });
+  });
 }

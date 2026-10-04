@@ -347,21 +347,6 @@ func TestUserIdentitiesConstraints(t *testing.T) {
 		foreignKeyViolation, "user_identities_user_id_fkey")
 }
 
-func TestGoogleIDTokenUsesConstraints(t *testing.T) {
-	ctx := context.Background()
-	pool := testutil.DB(t)
-	insert := func(h []byte) error {
-		_, err := pool.Exec(ctx,
-			`INSERT INTO google_id_token_uses (token_hash, expires_at) VALUES ($1, now() + interval '1 hour')`, h)
-		return err
-	}
-	if err := insert(hash(1)); err != nil {
-		t.Fatal(err)
-	}
-	requirePgError(t, insert(hash(1)), uniqueViolation, "google_id_token_uses_pkey")
-	requirePgError(t, insert([]byte("short")), checkViolation, "google_id_token_uses_token_hash_length")
-}
-
 func countRows(t *testing.T, pool *pgxpool.Pool, query string, args ...any) int {
 	t.Helper()
 	var n int

@@ -7,6 +7,7 @@ import 'api/auth_api.dart';
 import 'api/me.dart';
 import 'auth/auth_clock.dart';
 import 'auth/auth_tokens.dart';
+import 'auth/google_identity.dart';
 import 'auth/token_store.dart';
 
 /// Whether the app has a signed-in user.
@@ -33,11 +34,13 @@ class SignedOutException implements Exception {
 /// The session: its status, which the router observes, and every policy that
 /// involves tokens (docs/decisions.md 014, 015, 018, 023).
 ///
-/// The only holder of tokens in memory, and the only user of [TokenStore]
-/// and [AuthApi]. Its public API neither takes nor returns a token: screens
-/// get [status], `void` from sign-in and logout, typed results such as [Me],
-/// and exceptions. Tokens leave it only as arguments of its own [AuthApi]
-/// calls, inside this library (decision 023).
+/// The only holder of tokens in memory, and the only user of [TokenStore],
+/// [AuthApi] and [GoogleIdentity]. Its public API neither takes nor returns
+/// a token: screens get [status], `void` from sign-in and logout, typed
+/// results such as [Me], and exceptions. Tokens leave it only as arguments
+/// of its own [AuthApi] calls, inside this library (decision 023). A Google
+/// ID token is the same: obtained, posted once and dropped inside
+/// [signInWithGoogle] (decision 025).
 ///
 /// Concurrency (one isolate, so races exist only across `await`s):
 /// - Every token change creates a new session object with a new generation.
@@ -56,6 +59,7 @@ class SessionManager extends ChangeNotifier {
     required this._store,
     required AuthApi authApi,
     AuthClock? clock,
+    this._google,
   }) : _api = authApi,
        _clock = clock ?? AuthClock();
 
@@ -70,9 +74,17 @@ class SessionManager extends ChangeNotifier {
   /// always sends one).
   static const defaultRetryAfter = Duration(seconds: 5);
 
+  /// How long a Google sign-in waits for the Google sign-out a logout
+  /// started (call order only, see [signInWithGoogle]). Past it the sign-in
+  /// goes ahead rather than leave the user unable to sign in.
+  static const googleSignOutWait = Duration(seconds: 10);
+
   final TokenStore _store;
   final AuthApi _api;
   final AuthClock _clock;
+
+  /// Null when this build has no Google configuration.
+  final GoogleIdentity? _google;
 
   SessionStatus _status = SessionStatus.unknown;
   _Session? _session;
@@ -83,11 +95,18 @@ class SessionManager extends ChangeNotifier {
   Future<_Session>? _refreshing;
   Future<void>? _loggingOut;
 
+  /// The Google sign-out started by the latest logout, while it runs.
+  Future<void>? _googleSigningOut;
+
   /// Monotonic time before which a refresh must not be sent (after a 429).
   Duration? _refreshNotBefore;
   bool _disposed = false;
 
   SessionStatus get status => _status;
+
+  /// Whether [signInWithGoogle] can be offered. False in a build without
+  /// `GOOGLE_SERVER_CLIENT_ID`, which only debug builds allow.
+  bool get googleSignInAvailable => _google != null;
 
   /// Restores the stored session, once, without using the network, so an
   /// offline start still opens signed in. Never throws: any storage problem
@@ -123,14 +142,45 @@ class SessionManager extends ChangeNotifier {
   /// to explain; nothing is retried. If the tokens can't be stored, throws
   /// [TokenStoreException] and stays signed out.
   Future<void> signIn({required String email, required String password}) =>
-      _signIn(() => _api.login(email: email, password: password));
+      _signIn<void>(null, (_) => _api.login(email: email, password: password));
 
-  /// Signs in with a Google ID token (`POST /v1/auth/google`), like [signIn].
-  /// After a 500, 503 or timeout, retry only with a new ID token (020).
-  Future<void> signInWithGoogle({required String idToken}) =>
-      _signIn(() => _api.google(idToken: idToken));
+  /// Signs in with Google (`POST /v1/auth/google`), like [signIn]: asks
+  /// Google for an ID token (its account chooser opens), posts it, and
+  /// starts an ordinary session from the answer.
+  ///
+  /// The ID token never leaves this call: Google is asked every time, the
+  /// token is sent in that one request's body and dropped, whatever the
+  /// outcome. Nothing is retried here; a later attempt is always the user's
+  /// and asks Google again. Google may answer with the same token while it
+  /// is valid, and the backend accepts it again (026).
+  ///
+  /// Throws `GoogleIdentityException` when Google gives no token (nothing
+  /// was sent), and [StateError] too when this build has no Google
+  /// configuration (see [googleSignInAvailable]).
+  Future<void> signInWithGoogle() {
+    _checkNotDisposed();
+    final google = _google;
+    if (google == null) throw StateError('Google sign-in is not configured');
+    return _signIn<String>(() {
+      // Order, not security: the plugin asks that `authenticate` isn't
+      // called for a new account until after `signOut`, so a sign-in waits
+      // for the sign-out the last logout started (025). Logout itself never
+      // waits for it, and the wait is bounded.
+      final signingOut = _googleSigningOut;
+      if (signingOut == null) return google.idToken();
+      return signingOut
+          .timeout(googleSignOutWait, onTimeout: () {})
+          .then((_) => google.idToken());
+    }, (idToken) => _api.google(idToken: idToken));
+  }
 
-  Future<void> _signIn(Future<AuthTokens> Function() request) {
+  /// Starts the one sign-in that may run. [credential], when given, runs
+  /// first and its result goes to [request]; it may take as long as the user
+  /// does (Google's account chooser), and holds the sign-in slot meanwhile.
+  Future<void> _signIn<C>(
+    Future<C> Function()? credential,
+    Future<AuthTokens> Function(C credential) request,
+  ) {
     _checkNotDisposed();
     if (_status != SessionStatus.signedOut ||
         _signingIn != null ||
@@ -141,15 +191,29 @@ class SessionManager extends ChangeNotifier {
       );
     }
     return _signingIn = _singleFlight(
-      _runSignIn(request),
+      _runSignIn(credential, request),
       () => _signingIn = null,
     );
   }
 
-  Future<void> _runSignIn(Future<AuthTokens> Function() request) async {
+  Future<void> _runSignIn<C>(
+    Future<C> Function()? credential,
+    Future<AuthTokens> Function(C credential) request,
+  ) async {
+    final C obtained;
+    if (credential == null) {
+      obtained = null as C;
+    } else {
+      obtained = await credential();
+      // Disposed meanwhile: the credential is dropped unsent, so no session
+      // is created that nobody will get.
+      if (_disposed) return;
+    }
+    // The deadlines count from when the request is sent, not from when the
+    // user started choosing an account.
     final sentWall = _clock.now();
     final sentMono = _clock.elapsed();
-    final tokens = await request();
+    final tokens = await request(obtained);
     final session = _Session.issued(tokens, sentWall, sentMono, ++_generation);
     // Stored first: a session that can't be persisted isn't started.
     await _store.write(session.toStored());
@@ -225,7 +289,9 @@ class SessionManager extends ChangeNotifier {
   /// Signs out (decision 015): waits for any refresh or sign-in, deletes the
   /// tokens from memory and storage, goes signed out, then revokes the
   /// session on the server with the latest access token. The server's answer,
-  /// or its absence, changes nothing. Never throws.
+  /// or its absence, changes nothing. Google's credential state on the device
+  /// is cleared too, best effort and without waiting for it: only the next
+  /// Google sign-in waits (see [signInWithGoogle]). Never throws.
   Future<void> logout() {
     _checkNotDisposed();
     return _loggingOut ??= _runLogout();
@@ -250,6 +316,7 @@ class SessionManager extends ChangeNotifier {
     } finally {
       _loggingOut = null;
     }
+    if (!_disposed) _startGoogleSignOut();
     if (access != null && !_disposed) {
       try {
         await _api.logout(accessToken: access);
@@ -386,6 +453,27 @@ class SessionManager extends ChangeNotifier {
     _refreshNotBefore = null;
     await _clearStore();
     _setStatus(SessionStatus.signedOut);
+  }
+
+  /// Starts making Google forget the account chosen on this device, so the
+  /// next Google sign-in offers every account again. Returns at once and never throws: logout doesn't depend on
+  /// Google. While it runs it is [_googleSigningOut], which the next Google
+  /// sign-in waits for.
+  void _startGoogleSignOut() {
+    final google = _google;
+    if (google == null) return;
+    late final Future<void> signingOut;
+    Future<void> run() async {
+      try {
+        await google.clear();
+      } on Object {
+        // Best effort.
+      } finally {
+        if (identical(_googleSigningOut, signingOut)) _googleSigningOut = null;
+      }
+    }
+
+    _googleSigningOut = signingOut = run();
   }
 
   /// Deletes the stored session; false if storage failed.

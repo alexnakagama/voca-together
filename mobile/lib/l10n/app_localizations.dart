@@ -429,6 +429,42 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'{count, plural, =1{1 hour} other{{count} hours}}'**
   String waitHours(int count);
+
+  /// Separates the email and password form from the Continue with Google button.
+  ///
+  /// In en, this message translates to:
+  /// **'or'**
+  String get googleSignInDivider;
+
+  /// Accessibility label of the progress indicator shown while a Google sign-in is running.
+  ///
+  /// In en, this message translates to:
+  /// **'Signing in with Google'**
+  String get googleSignInProgress;
+
+  /// Error when Google gave the app no sign-in result (other than the user closing Google's account chooser, which shows nothing).
+  ///
+  /// In en, this message translates to:
+  /// **'Google sign-in isn’t available right now. Try again.'**
+  String get errorGoogleUnavailable;
+
+  /// Error when the server did not accept the Google sign-in. Trying again starts a new Google sign-in.
+  ///
+  /// In en, this message translates to:
+  /// **'Google sign-in didn’t work. Try again.'**
+  String get errorGoogleRejected;
+
+  /// Error when a Google account can't create a VocaTogether account because Google reports no verified email address for it.
+  ///
+  /// In en, this message translates to:
+  /// **'This Google account can’t be used: Google hasn’t confirmed its email address.'**
+  String get errorGoogleEmailUnusable;
+
+  /// Error when signing in with Google and the Google account's email address already belongs to a VocaTogether account that isn't connected to this Google account. Must not mention a password: that account may have none.
+  ///
+  /// In en, this message translates to:
+  /// **'There’s already a VocaTogether account for this Google account’s email. Log in the way that account was set up.'**
+  String get errorAccountExists;
 }
 
 class _AppLocalizationsDelegate

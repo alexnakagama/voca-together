@@ -30,9 +30,8 @@ func TestVerifyValidToken(t *testing.T) {
 	}
 }
 
-// AcceptedUntil is exactly where Verify stops accepting the token: the
-// caller can rely on it (e.g. to keep a replay record) without knowing the
-// clock skew.
+// AcceptedUntil is exactly where Verify stops accepting the token (exp plus
+// the clock skew).
 func TestVerifyAcceptedUntil(t *testing.T) {
 	f := newFixture(t)
 	claims := googleClaims(f.clock.Now())

@@ -8,6 +8,7 @@ import 'package:vocatogether/api/api_client.dart';
 import 'package:vocatogether/api/auth_api.dart';
 import 'package:vocatogether/auth/auth_clock.dart';
 import 'package:vocatogether/auth/auth_tokens.dart';
+import 'package:vocatogether/auth/google_identity.dart';
 import 'package:vocatogether/auth/token_store.dart';
 import 'package:vocatogether/session.dart';
 
@@ -219,12 +220,14 @@ Future<SessionManager> signedInManager(
   FakeAuthClock clock, {
   String marker = '1',
   Duration remaining = const Duration(minutes: 10),
+  GoogleIdentity? google,
 }) async {
   store.raw ??= storedRaw(clock, marker, remaining: remaining);
   final manager = SessionManager(
     store: store,
     authApi: authApiFor(server.client),
     clock: clock,
+    google: google,
   );
   await manager.restore();
   assert(manager.status == SessionStatus.signedIn);
@@ -253,3 +256,49 @@ http.Response networkFailure(http.Request _) =>
 /// A responder that never answers, so the client's timeout decides.
 Future<http.Response> neverAnswers(http.Request _) =>
     Completer<http.Response>().future;
+
+/// A Google ID token as [PluginGoogleIdentity] would return it (three
+/// base64url segments), whose first segment starts with [marker].
+String googleIdToken(String marker) => 'GID$marker.payload.signature';
+
+/// A scripted [GoogleIdentity]: each [idToken] call takes the next scripted
+/// outcome, and an unscripted call fails the test.
+class FakeGoogleIdentity implements GoogleIdentity {
+  final _script = <Future<String> Function()>[];
+
+  /// How many times a token was asked for.
+  int calls = 0;
+
+  int clears = 0;
+  Object? clearError;
+
+  /// When set, [clear] waits for it.
+  Completer<void>? clearGate;
+
+  /// Called at the start of every [clear].
+  void Function()? onClear;
+
+  /// The next call returns [token].
+  void next(String token) => _script.add(() async => token);
+
+  /// The next call throws [error].
+  void fail(Object error) => _script.add(() async => throw error);
+
+  /// The next call waits for [gate], like an open account chooser.
+  void wait(Completer<String> gate) => _script.add(() => gate.future);
+
+  @override
+  Future<String> idToken() {
+    calls++;
+    if (_script.isEmpty) throw StateError('unscripted Google sign-in');
+    return _script.removeAt(0)();
+  }
+
+  @override
+  Future<void> clear() async {
+    clears++;
+    onClear?.call();
+    await clearGate?.future;
+    if (clearError case final e?) throw e;
+  }
+}

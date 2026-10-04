@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vocatogether/api/api_paths.dart';
+import 'package:vocatogether/auth/google_identity_exception.dart';
+import 'package:vocatogether/ui/widgets/google_sign_in_button.dart';
 import 'package:vocatogether/ui/widgets/form_error_banner.dart';
 import 'package:vocatogether/ui/widgets/form_notice_banner.dart';
 
@@ -13,6 +17,7 @@ final class _Case {
   const _Case(
     this.name, {
     this.script,
+    this.google,
     this.signedIn = false,
     this.drive,
     required this.action,
@@ -20,6 +25,9 @@ final class _Case {
 
   final String name;
   final void Function(FakeServer server)? script;
+
+  /// Scripts Google; when set, the app has Google sign-in.
+  final void Function(FakeGoogleIdentity google)? google;
   final bool signedIn;
   final Future<void> Function(WidgetTester tester)? drive;
   final String action;
@@ -138,6 +146,29 @@ final _cases = <_Case>[
         s.once('GET', ApiPaths.me, (_) => jsonResponse(200, meBody())),
     action: l10n.logOutButton,
   ),
+  _Case('login with Google', google: (_) {}, action: l10n.continueWithGoogle),
+  _Case(
+    'login with Google, account exists',
+    google: (g) => g.next(googleIdToken('one')),
+    script: (s) => s.once(
+      'POST',
+      ApiPaths.google,
+      (_) => errorResponse(409, 'account_exists'),
+    ),
+    drive: (t) => tapAndSettle(t, find.byType(GoogleSignInButton)),
+    action: l10n.continueWithGoogle,
+  ),
+  _Case(
+    'register with Google, Google unavailable',
+    google: (g) => g.fail(
+      const GoogleIdentityException(GoogleIdentityFailure.unavailable),
+    ),
+    drive: (t) async {
+      await _openRegister(t);
+      await tapAndSettle(t, find.byType(GoogleSignInButton));
+    },
+    action: l10n.continueWithGoogle,
+  ),
   _Case(
     'home, failed',
     signedIn: true,
@@ -156,9 +187,15 @@ Future<void> _reach(
 }) async {
   final server = FakeServer();
   c.script?.call(server);
+  FakeGoogleIdentity? google;
+  if (c.google case final script?) {
+    google = FakeGoogleIdentity();
+    script(google);
+  }
   await pumpApp(
     tester,
     server: server,
+    google: google,
     signedIn: c.signedIn,
     size: size,
     textScale: textScale,
@@ -306,6 +343,35 @@ void main() {
         ),
       );
       await tester.pump(const Duration(seconds: 16));
+      await tester.pumpAndSettle();
+      handle.dispose();
+    });
+
+    testWidgets('a running Google sign-in is announced, and its button reads '
+        'as disabled', (tester) async {
+      final handle = tester.ensureSemantics();
+      final chooser = Completer<String>();
+      final google = FakeGoogleIdentity()..wait(chooser);
+      await pumpApp(tester, google: google);
+      await tester.ensureVisible(find.byType(GoogleSignInButton));
+      await tester.tap(find.byType(GoogleSignInButton));
+      await tester.pump();
+
+      expect(find.bySemanticsLabel(l10n.googleSignInProgress), findsOneWidget);
+      expect(
+        tester.getSemantics(find.byType(OutlinedButton)),
+        isSemantics(
+          label: l10n.continueWithGoogle,
+          isButton: true,
+          hasEnabledState: true,
+          isEnabled: false,
+        ),
+      );
+      await expectLater(tester, meetsGuideline(textContrastGuideline));
+
+      chooser.completeError(
+        const GoogleIdentityException(GoogleIdentityFailure.cancelled),
+      );
       await tester.pumpAndSettle();
       handle.dispose();
     });

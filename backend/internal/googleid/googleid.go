@@ -8,8 +8,9 @@
 //
 // It returns only the claims the auth layer needs and knows nothing about
 // users, sessions, databases or HTTP routes. Account policy (which emails may
-// create accounts) and replay protection (each token accepted once) belong to
-// the caller.
+// create accounts) belongs to the caller. A token verifies every time it is
+// presented until it expires: nothing here or in the caller remembers it
+// (docs/decisions.md 026).
 //
 // Not checked, on purpose:
 //   - azp: for Android it names one of our own Android OAuth clients. Google
@@ -47,9 +48,8 @@ type Verifier interface {
 // and HostedDomain are as Google asserted them, without normalization or
 // policy, and are empty or false when absent. AcceptedUntil is when the
 // verifier stops accepting the token (exp plus the clock skew it tolerates):
-// Verify succeeds for it only while now is before AcceptedUntil, so a caller
-// that must remember the token (replay protection) knows how long without
-// knowing the skew.
+// Verify succeeds for it only while now is before AcceptedUntil. No caller
+// uses it today; it states the window in which the token is accepted.
 //
 // Claims hold personal data, so they never print: every fmt verb, slog,
 // JSON and text marshalling show [REDACTED]. The values sit behind a pointer

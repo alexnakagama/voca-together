@@ -5,12 +5,14 @@ import 'package:go_router/go_router.dart';
 import '../api/account_api.dart';
 import '../l10n/app_localizations.dart';
 import '../router.dart';
+import '../session.dart';
 import '../ui/theme.dart';
 import '../ui/widgets/app_text_field.dart';
 import '../ui/widgets/auth_scaffold.dart';
 import '../ui/widgets/form_error_banner.dart';
 import '../ui/widgets/primary_button.dart';
 import 'failure_presentation.dart';
+import 'google_sign_in_section.dart';
 import 'resend_verification.dart';
 
 /// Registration (`POST /v1/auth/register`, decision 024).
@@ -20,9 +22,18 @@ import 'resend_verification.dart';
 /// the values are sent exactly as typed. A 202 switches the screen to a
 /// "check your email" view that reads the same whether or not the address
 /// already had an account (005).
+///
+/// The form also offers "Continue with Google" when the build has it
+/// (decision 025): for a new Google user that is the registration, and it
+/// ends signed in rather than on the confirmation.
 class RegisterScreen extends StatefulWidget {
-  const RegisterScreen({super.key, required this.accountApi});
+  const RegisterScreen({
+    super.key,
+    required this.session,
+    required this.accountApi,
+  });
 
+  final SessionManager session;
   final AccountApi accountApi;
 
   @override
@@ -38,6 +49,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _confirmFocus = FocusNode();
 
   bool _busy = false;
+
+  /// A Google sign-in is running: the form is locked but not working.
+  bool _googleBusy = false;
   String? _banner;
   String? _emailError;
   String? _passwordError;
@@ -88,7 +102,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   Future<void> _submit() async {
-    if (_busy) return;
+    if (_busy || _googleBusy) return;
     final l10n = AppLocalizations.of(context);
     final email = _email.text;
     final password = _password.text;
@@ -157,6 +171,21 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
   }
 
+  void _googleStarted() {
+    setState(() {
+      _googleBusy = true;
+      // A new attempt: what the last one said no longer applies.
+      _banner = null;
+    });
+  }
+
+  void _googleFailed(FailurePresentation failure) {
+    setState(() {
+      _googleBusy = false;
+      _banner = failure.message;
+    });
+  }
+
   void _backToLogIn() => context.go(Routes.login);
 
   @override
@@ -184,6 +213,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
 
     final banner = _banner;
+    final locked = _busy || _googleBusy;
     return AuthScaffold(
       title: l10n.registerTitle,
       children: [
@@ -196,7 +226,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 controller: _email,
                 focusNode: _emailFocus,
                 errorText: _emailError,
-                enabled: !_busy,
+                enabled: !locked,
                 textInputAction: TextInputAction.next,
                 onSubmitted: (_) => _passwordFocus.requestFocus(),
               ),
@@ -205,7 +235,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 controller: _password,
                 focusNode: _passwordFocus,
                 errorText: _passwordError,
-                enabled: !_busy,
+                enabled: !locked,
                 newPassword: true,
                 textInputAction: TextInputAction.next,
                 onSubmitted: (_) => _confirmFocus.requestFocus(),
@@ -216,7 +246,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 focusNode: _confirmFocus,
                 label: l10n.confirmPasswordLabel,
                 errorText: _confirmError,
-                enabled: !_busy,
+                enabled: !locked,
                 newPassword: true,
                 textInputAction: TextInputAction.done,
                 onSubmitted: (_) => _submit(),
@@ -226,11 +256,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
         ),
         PrimaryButton(
           label: l10n.registerButton,
-          onPressed: _submit,
+          onPressed: _googleBusy ? null : _submit,
           busy: _busy,
         ),
+        if (widget.session.googleSignInAvailable)
+          GoogleSignInSection(
+            session: widget.session,
+            enabled: !_busy,
+            onStarted: _googleStarted,
+            onFailed: _googleFailed,
+          ),
         TextButton(
-          onPressed: _busy ? null : _backToLogIn,
+          onPressed: locked ? null : _backToLogIn,
           child: Text(l10n.haveAccountLink),
         ),
       ],

@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:vocatogether/api/api_paths.dart';
 import 'package:vocatogether/api/api_exception.dart';
 import 'package:vocatogether/auth/auth_tokens.dart';
+import 'package:vocatogether/auth/google_identity_exception.dart';
 import 'package:vocatogether/auth/token_store.dart';
 import 'package:vocatogether/session.dart';
 
@@ -20,6 +21,7 @@ final _refresh2 = refreshToken('LEAKrefreshTwo');
 const _email = 'leak.email@example.com';
 const _password = 'LEAK-password-123';
 const _idToken = 'LEAKidtoken.payload.signature';
+const _idToken2 = 'LEAKidtokenTwo.payload.signature';
 
 const _markers = ['LEAK', 'leak.email'];
 
@@ -65,7 +67,17 @@ Future<FakeServer> _runEveryFlow(List<String> strings) async {
   final clock = FakeAuthClock();
   final api = authApiFor(server.client);
   final account = accountApiFor(server.client);
-  final manager = SessionManager(store: store, authApi: api, clock: clock);
+  // Google hands over marked ID tokens, then fails.
+  final google = FakeGoogleIdentity()
+    ..next(_idToken)
+    ..fail(const GoogleIdentityException(GoogleIdentityFailure.misconfigured))
+    ..next(_idToken2);
+  final manager = SessionManager(
+    store: store,
+    authApi: api,
+    clock: clock,
+    google: google,
+  );
   addTearDown(manager.dispose);
 
   // Error bodies that echo secrets, as a broken proxy might.
@@ -124,11 +136,13 @@ Future<FakeServer> _runEveryFlow(List<String> strings) async {
       (_) => jsonResponse(200, tokenBody(_access1, _refresh1)),
     );
   await record(() => manager.signIn(email: _email, password: _password));
-  await record(() => manager.signInWithGoogle(idToken: _idToken));
+  await record(manager.signInWithGoogle);
   await record(() => manager.signIn(email: _email, password: _password));
-  // Google sign-in succeeds.
-  await record(() => manager.signInWithGoogle(idToken: _idToken));
+  // Google gives no token, then Google sign-in succeeds with a new one.
+  await record(manager.signInWithGoogle);
+  await record(manager.signInWithGoogle);
   expect(manager.status, SessionStatus.signedIn);
+  expect(store.raw, isNot(contains('LEAKidtoken')), reason: 'never stored');
 
   // An authorized call that is refused, refreshes and retries.
   var valid = _access2;
@@ -224,6 +238,7 @@ void _checkPlacement(List<http.Request> requests) {
     _refresh1: {(ApiPaths.refresh, 'body')},
     _refresh2: {(ApiPaths.refresh, 'body')},
     _idToken: {(ApiPaths.google, 'body')},
+    _idToken2: {(ApiPaths.google, 'body')},
     _password: {(ApiPaths.register, 'body'), (ApiPaths.login, 'body')},
     _email: {
       (ApiPaths.register, 'body'),
@@ -268,4 +283,13 @@ void _checkPlacement(List<http.Request> requests) {
   expect(seen[_refresh1], contains((ApiPaths.refresh, 'body')));
   expect(seen[_refresh2], contains((ApiPaths.refresh, 'body')));
   expect(seen[_idToken], contains((ApiPaths.google, 'body')));
+  expect(seen[_idToken2], contains((ApiPaths.google, 'body')));
+  // The app never sends an ID token a second time by itself.
+  for (final token in [_idToken, _idToken2]) {
+    expect(
+      requests.where((r) => r.body.contains('"$token"')),
+      hasLength(1),
+      reason: 'one request per Google answer',
+    );
+  }
 }

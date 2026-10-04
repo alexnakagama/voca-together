@@ -286,5 +286,29 @@
         "type": "int"
       }
     }
+  },
+  "googleSignInDivider": "or",
+  "@googleSignInDivider": {
+    "description": "Separates the email and password form from the Continue with Google button."
+  },
+  "googleSignInProgress": "Signing in with Google",
+  "@googleSignInProgress": {
+    "description": "Accessibility label of the progress indicator shown while a Google sign-in is running."
+  },
+  "errorGoogleUnavailable": "Google sign-in isn’t available right now. Try again.",
+  "@errorGoogleUnavailable": {
+    "description": "Error when Google gave the app no sign-in result (other than the user closing Google's account chooser, which shows nothing)."
+  },
+  "errorGoogleRejected": "Google sign-in didn’t work. Try again.",
+  "@errorGoogleRejected": {
+    "description": "Error when the server did not accept the Google sign-in. Trying again starts a new Google sign-in."
+  },
+  "errorGoogleEmailUnusable": "This Google account can’t be used: Google hasn’t confirmed its email address.",
+  "@errorGoogleEmailUnusable": {
+    "description": "Error when a Google account can't create a VocaTogether account because Google reports no verified email address for it."
+  },
+  "errorAccountExists": "There’s already a VocaTogether account for this Google account’s email. Log in the way that account was set up.",
+  "@errorAccountExists": {
+    "description": "Error when signing in with Google and the Google account's email address already belongs to a VocaTogether account that isn't connected to this Google account. Must not mention a password: that account may have none."
   }
 }

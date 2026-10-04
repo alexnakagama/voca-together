@@ -59,17 +59,17 @@ var ErrInvalidAccessToken = errors.New("auth: invalid access token")
 // rate-limit and context errors (decision 020).
 var (
 	// ErrInvalidGoogleToken covers every ID token that can't be used:
-	// rejected by the verifier for any reason, already used (replayed), or
-	// Google sign-in not configured. One error for all keeps the response from
+	// rejected by the verifier for any reason, or Google sign-in not
+	// configured. One error for all keeps the response from
 	// revealing which.
 	ErrInvalidGoogleToken = errors.New("auth: invalid google token")
 	// ErrGoogleEmailUnusable means the token is valid and its identity is not
 	// linked to any account, but its email can't create one: missing, not
-	// verified by Google, or rejected by NormalizeEmail. The token is spent.
+	// verified by Google, or rejected by NormalizeEmail.
 	ErrGoogleEmailUnusable = errors.New("auth: google email unusable")
 	// ErrAccountExists means the token is valid and its identity is not
 	// linked, but its email already belongs to an account. Nothing is linked
-	// automatically; the token is spent.
+	// automatically.
 	ErrAccountExists = errors.New("auth: account exists")
 	// ErrGoogleUnavailable means Google's signing keys couldn't be obtained,
 	// so nothing about the token was decided and nothing was written: a retry

@@ -46,7 +46,7 @@ void main() {
     expect(errorOf(tester, l10n.emailLabel), isNull);
     expect(find.text(l10n.forgotPasswordLink), findsOneWidget);
     expect(find.text(l10n.createAccountLink), findsOneWidget);
-    // Google sign-in is stage 6.
+    // This app was built without Google configuration.
     expect(find.text(l10n.continueWithGoogle), findsNothing);
   });
 

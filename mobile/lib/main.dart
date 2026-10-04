@@ -10,6 +10,7 @@ import 'api/account_api.dart';
 import 'api/api_client.dart';
 import 'api/auth_api.dart';
 import 'app.dart';
+import 'auth/google_identity_plugin.dart';
 import 'auth/token_store.dart';
 import 'config.dart';
 import 'session.dart';
@@ -35,9 +36,15 @@ void main() {
     httpClient: httpClient,
     requireHttps: kReleaseMode,
   );
+  // Google sign-in exists only with a client ID, which release builds
+  // require (config.dart). Nothing touches Google until the user asks to.
+  final googleClientId = config.googleServerClientId;
   final session = SessionManager(
     store: SecureTokenStore(const FlutterSecureStorage()),
     authApi: AuthApi(apiClient),
+    google: googleClientId == null
+        ? null
+        : PluginGoogleIdentity(serverClientId: googleClientId),
   );
 
   // The token-free account calls screens may make (decision 023).

@@ -6,10 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 VocaTogether: a language-exchange app. The repo holds the Go backend (`backend/`, module `vocatogether/backend`) and
 the Flutter Android client (`mobile/`, package `vocatogether`, applicationId and namespace `com.vocatogether.app`).
-The client is at roadmap stage 5 (app shell, routing, design system, API client, secure token storage, session
-management, and the email/password auth screens: log in, register, forgot password, inline resend verification, and
-a home screen with `/v1/me` and logout; no Google sign-in yet); `docs/decisions.md` specifies its contracts with the
-backend.
+The client is at roadmap stage 6 (app shell, routing, design system, API client, secure token storage, session
+management, the email/password auth screens: log in, register, forgot password, inline resend verification, a home
+screen with `/v1/me` and logout, and Google sign-in on log in and register); `docs/decisions.md` specifies its
+contracts with the backend.
 
 ## Commands
 
@@ -33,7 +33,7 @@ TEST_DATABASE_URL=postgres://voca:voca@localhost:5432/voca_test?sslmode=disable 
 - DB-backed tests use `testutil.DB(t)`, which migrates and TRUNCATEs a single shared database. They **skip**
   silently when `TEST_DATABASE_URL` is unset, so a "passing" run without it proves little. Never use `t.Parallel`
   in them and always keep `-p 1`.
-- `testutil.DB` truncates `users, user_tokens, sessions, user_identities, google_id_token_uses`; add new tables there
+- `testutil.DB` truncates `users, user_tokens, sessions, user_identities`; add new tables there
   when adding migrations.
 
 Mobile (Flutter, Android only):
@@ -49,7 +49,9 @@ flutter build apk --debug --dart-define-from-file=config/dev.json
 - Build-time config comes only from `--dart-define-from-file` (`mobile/config/<env>.json`); `lib/config.dart`
   validates it at startup and throws if it's missing or invalid. Every value is compiled into the APK and is
   therefore public: never put a secret there. `API_BASE_URL` is an http(s) origin with no path, query, fragment or
-  credentials. Release builds require https.
+  credentials. Release builds require https. `GOOGLE_SERVER_CLIENT_ID` is the Web OAuth client ID (the backend's
+  `GOOGLE_CLIENT_ID`; never an Android client ID or a secret): required in release builds, optional in debug, where
+  leaving it out hides the Google button.
 - Dart's own sockets (`dart:io` `HttpClient`, `package:http`'s default client on Android) ignore Android's Network
   Security Configuration: Flutter doesn't pass it to the Dart VM. The https requirement on `API_BASE_URL` in
   release builds (`lib/config.dart`) is the only cleartext control for Dart traffic, so every API request must be
@@ -69,7 +71,7 @@ flutter build apk --debug --dart-define-from-file=config/dev.json
   never follows redirects and never logs. `SessionManager` holds the only in-memory tokens and owns refresh (single
   flight, generation check, `/healthz` probe first, the 014/018 failure matrix in 023) and logout. **Token boundary:**
   screens may use only `AccountApi` (register/resend/forgot, token-free) and `SessionManager`'s public API, which
-  takes and returns no app token (`signIn`/`signInWithGoogle`/`logout` → `void`, `me()` → `Me`). `AuthApi` (returns
+  takes and returns no token (`signIn`/`signInWithGoogle()`/`logout` → `void`, `me()` → `Me`). `AuthApi` (returns
   `AuthTokens`, takes raw tokens) is built only in `main` and held only by `SessionManager`; the generic request
   wrapper `_authorized` stays private, and each new protected route gets a typed `SessionManager` method.
   `test/architecture_test.dart` enforces the import allowlist and fails if `lib/screens/` or `lib/ui/` names a token
@@ -77,6 +79,15 @@ flutter build apk --debug --dart-define-from-file=config/dev.json
   tokens persist; app backup and device transfer are disabled in the manifest. Nothing in `api/`, `auth/` or
   `session.dart` may log; `test/leak_test.dart` checks redaction and where each secret travels. Session tests are
   host-only (`test/support/fakes.dart`: `FakeServer` on `MockClient`, `InMemoryTokenStore`, `FakeAuthClock`).
+- Google sign-in (decisions 025 and 026, read them with 020): `SessionManager.signInWithGoogle()` gets an ID token
+  from `GoogleIdentity` (`lib/auth/`; `PluginGoogleIdentity` is the only importer of `package:google_sign_in`, built
+  only in `main`), posts it once in the body of `/v1/auth/google` and drops it. An ID token is never a field, never
+  stored, never kept and never retried: every attempt asks Google again (Google may answer with the same token; 026).
+  The adapter reads only the ID token (no email, no scopes, no silent sign-in, no nonce) and initializes the plugin
+  once. Screens use `GoogleSignInSection` and may import only `google_identity_exception.dart` from the Google files.
+  Logout also clears Google's credential state, best effort, and the next Google sign-in waits for it (call order for
+  the plugin, not security; bounded at 10 s). No `google-services.json`, no Firebase. Tests use `FakeGoogleIdentity`
+  (`pumpApp(google: …)`) and `FakeGooglePlatform` under the real adapter.
 - UI (decision 022): `lib/ui/theme.dart` holds `AppTheme` (M3 light/dark) and the `Spacing`/`Radii` constants;
   `lib/ui/widgets/` holds the reusable widgets, which never import `Session`, the router or `AppConfig` and hardcode
   no user-visible string. `GoogleSignInButton` follows Google's branding guidelines (its colors and the official logo
@@ -185,9 +196,11 @@ design decision, append a new entry there in the same style. Key invariants:
   client ID). `azp` and nonce are deliberately unchecked. That rests on our deployment assumptions (020 Stage 6
   preconditions), not on a Google guarantee; see 020 Stage 2 before changing the Google Cloud project or adding a
   web client.
-- Each verified ID token is accepted at most once: the first write of the sign-in transaction inserts its hash into
-  `google_id_token_uses`, and once that commits the token is spent (200, 403 or 409). After 500/503 or no response
-  clients sign in with a **new** ID token; replaying the old one is 401 `invalid_google_token`.
+- An ID token is accepted every time it is presented while it verifies (decision 026, which supersedes 020's single
+  acceptance): Google returns the same token to the app again while it is valid, so nothing records a token's use
+  and `google_id_token_uses` was dropped by migration 00004. Accepted risk: a captured valid token can open a session
+  until it expires (about an hour), even after a logout or a password reset. Don't reintroduce a replay table; real
+  replay protection needs a per-request nonce, which `google_sign_in` can't send (026).
 - Accounts are found by `(google, sub)`; the token's email is never synced. A new identity creates a passwordless
   account only if Google says its email is verified (no Gmail/Workspace-only restriction; don't add one). An address
   that already has an account gets 409 `account_exists`: nothing is linked automatically, and that account may have

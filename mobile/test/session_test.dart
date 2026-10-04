@@ -154,18 +154,6 @@ void main() {
       );
     });
 
-    test('with Google sends only the ID token', () async {
-      server.once(
-        'POST',
-        ApiPaths.google,
-        (_) =>
-            jsonResponse(200, tokenBody(accessToken('1'), refreshToken('1'))),
-      );
-      await manager.signInWithGoogle(idToken: 'h.p.s');
-      expect(manager.status, SessionStatus.signedIn);
-      expect(server.requests.single.body, '{"id_token":"h.p.s"}');
-    });
-
     test('an API error propagates and stays signed out', () async {
       server.once(
         'POST',
@@ -192,22 +180,6 @@ void main() {
             jsonResponse(200, tokenBody(accessToken('1'), refreshToken('1'))),
       );
       await manager.signIn(email: 'a@b.c', password: 'pw');
-      expect(manager.status, SessionStatus.signedIn);
-    });
-
-    test('an invalid Google token fails without wedging sign-in', () async {
-      await expectLater(
-        manager.signInWithGoogle(idToken: ''),
-        throwsArgumentError,
-      );
-      expect(server.requests, isEmpty);
-      server.once(
-        'POST',
-        ApiPaths.google,
-        (_) =>
-            jsonResponse(200, tokenBody(accessToken('1'), refreshToken('1'))),
-      );
-      await manager.signInWithGoogle(idToken: 'h.p.s');
       expect(manager.status, SessionStatus.signedIn);
     });
 

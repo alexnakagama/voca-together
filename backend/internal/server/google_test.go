@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -138,8 +139,8 @@ func (a testAPI) meID(t *testing.T, accessToken string) string {
 }
 
 // A new identity gets an account and a session; the same identity signs in
-// to the same account again. Each request calls the service once, spends
-// its ID token, and stores the request's user agent with its session.
+// to the same account again. Each request calls the service once and stores
+// the request's user agent with its session.
 func TestGoogleSignInEndpoint(t *testing.T) {
 	api := newGoogleTestAPI(t, auth.AccountLimits{})
 
@@ -158,7 +159,7 @@ func TestGoogleSignInEndpoint(t *testing.T) {
 	if first.AccessToken == again.AccessToken || first.RefreshToken == again.RefreshToken {
 		t.Error("sign-ins share credentials")
 	}
-	for table, want := range map[string]int{"users": 1, "user_identities": 1, "google_id_token_uses": 2, "sessions": 2} {
+	for table, want := range map[string]int{"users": 1, "user_identities": 1, "sessions": 2} {
 		if n := api.count(t, table); n != want {
 			t.Errorf("%s = %d, want %d", table, n, want)
 		}
@@ -189,8 +190,8 @@ func TestGoogleSignInEndpointValidationError(t *testing.T) {
 	}
 }
 
-// Malformed requests are rejected before the service: nothing is verified
-// and the token isn't spent.
+// Malformed requests are rejected before the service: nothing is verified,
+// and the token still works in a well-formed request.
 func TestGoogleSignInEndpointRejectsMalformedRequests(t *testing.T) {
 	api := newGoogleTestAPI(t, auth.AccountLimits{})
 	token := api.issue(googleSubject, "ana@example.com", true)
@@ -209,20 +210,90 @@ func TestGoogleSignInEndpointRejectsMalformedRequests(t *testing.T) {
 	if api.verifier.calls != 0 {
 		t.Errorf("verifier calls = %d, want 0", api.verifier.calls)
 	}
-	if n := api.count(t, "google_id_token_uses"); n != 0 {
-		t.Errorf("token uses = %d, want 0", n)
-	}
 	requireGoogleCredentials(t, api.google(valid))
 }
 
-// An unknown token, a replayed one, and any token while Google sign-in isn't
-// configured get the identical 401: no verifier reason reaches the client,
-// and replay can't be told apart. No WWW-Authenticate: the ID token is a
-// credential in the body, not an HTTP authentication scheme.
+// Google returns the same ID token to an app again while it is valid, so a
+// token that verifies is accepted every time it is presented (decision 026):
+// each request is a 200 with its own session for the same account.
+func TestGoogleSignInEndpointSameTokenTwice(t *testing.T) {
+	api := newGoogleTestAPI(t, auth.AccountLimits{})
+	body := googleBody(api.issue(googleSubject, "ana@example.com", true))
+
+	first := requireGoogleCredentials(t, api.google(body))
+	second := requireGoogleCredentials(t, api.google(body))
+
+	if a, b := api.meID(t, first.AccessToken), api.meID(t, second.AccessToken); a != b {
+		t.Errorf("second sign-in reached user %s, want %s", b, a)
+	}
+	if first.AccessToken == second.AccessToken || first.RefreshToken == second.RefreshToken {
+		t.Error("sign-ins share credentials")
+	}
+	for table, want := range map[string]int{"users": 1, "user_identities": 1, "sessions": 2} {
+		if n := api.count(t, table); n != want {
+			t.Errorf("%s = %d, want %d", table, n, want)
+		}
+	}
+}
+
+// The same token in several requests at once: all succeed, with one account
+// and one identity between them.
+func TestGoogleSignInEndpointSameTokenConcurrently(t *testing.T) {
+	api := newGoogleTestAPI(t, auth.AccountLimits{})
+	body := googleBody(api.issue(googleSubject, "ana@example.com", true))
+
+	const requests = 8
+	codes := make([]int, requests)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range codes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			codes[i] = api.google(body).Code
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	for i, code := range codes {
+		if code != http.StatusOK {
+			t.Errorf("request %d: status %d, want 200", i, code)
+		}
+	}
+	for table, want := range map[string]int{"users": 1, "user_identities": 1, "sessions": requests} {
+		if n := api.count(t, table); n != want {
+			t.Errorf("%s = %d, want %d", table, n, want)
+		}
+	}
+}
+
+// A refusal is the same every time the token is presented, and still links
+// and changes nothing.
+func TestGoogleSignInEndpointSameTokenAfterRefusal(t *testing.T) {
+	api := newGoogleTestAPI(t, auth.AccountLimits{})
+	api.verifiedAccount(t, "ana@example.com")
+	taken := googleBody(api.issue(googleSubject, "ana@example.com", true))
+	unverified := googleBody(api.issue("123456789012345678901", "bob@example.com", false))
+
+	for range 2 {
+		requireLoginResponse(t, api.google(taken), http.StatusConflict, accountExists)
+		requireLoginResponse(t, api.google(unverified), http.StatusForbidden, googleEmailUnusable)
+	}
+	for table, want := range map[string]int{"users": 1, "user_identities": 0, "sessions": 0} {
+		if n := api.count(t, table); n != want {
+			t.Errorf("%s = %d, want %d", table, n, want)
+		}
+	}
+}
+
+// An unknown token and any token while Google sign-in isn't configured get
+// the identical 401: no verifier reason reaches the client. No
+// WWW-Authenticate: the ID token is a credential in the body, not an HTTP
+// authentication scheme.
 func TestGoogleSignInEndpointUnusableTokensAreIdentical(t *testing.T) {
 	api := newGoogleTestAPI(t, auth.AccountLimits{})
-	replayed := api.issue(googleSubject, "ana@example.com", true)
-	requireGoogleCredentials(t, api.google(googleBody(replayed)))
 
 	base, _ := url.Parse("https://api.example.com")
 	discard := slog.New(slog.DiscardHandler)
@@ -231,7 +302,6 @@ func TestGoogleSignInEndpointUnusableTokensAreIdentical(t *testing.T) {
 
 	responses := map[string]*httptest.ResponseRecorder{
 		"unknown":        api.google(googleBody("eyJhbGciOiJSUzI1NiJ9.unknown.token")),
-		"replayed":       api.google(googleBody(replayed)),
 		"not configured": notConfigured.google(googleBody(api.issue(googleSubject, "ana@example.com", true))),
 	}
 	var first *httptest.ResponseRecorder
@@ -248,12 +318,13 @@ func TestGoogleSignInEndpointUnusableTokensAreIdentical(t *testing.T) {
 			t.Errorf("%s: headers differ:\n%v\nvs\n%v", name, rec.Header(), first.Header())
 		}
 	}
-	if n := api.count(t, "sessions"); n != 1 {
-		t.Errorf("sessions = %d, want 1", n)
+	if n := api.count(t, "sessions"); n != 0 {
+		t.Errorf("sessions = %d, want 0", n)
 	}
 }
 
-// Unavailable Google keys are a 503 that spent nothing.
+// Unavailable Google keys are a 503 that did nothing: the same token works
+// once the keys are back.
 func TestGoogleSignInEndpointGoogleUnavailable(t *testing.T) {
 	api := newGoogleTestAPI(t, auth.AccountLimits{})
 	token := api.issue(googleSubject, "ana@example.com", true)
@@ -264,9 +335,11 @@ func TestGoogleSignInEndpointGoogleUnavailable(t *testing.T) {
 	if got := rec.Header().Get("Retry-After"); got != "5" {
 		t.Errorf("Retry-After = %q, want 5", got)
 	}
-	if n := api.count(t, "google_id_token_uses"); n != 0 {
-		t.Errorf("token uses = %d, want 0", n)
+	if n := api.count(t, "users"); n != 0 {
+		t.Errorf("users = %d, want 0", n)
 	}
+	api.verifier.Err = nil
+	requireGoogleCredentials(t, api.google(googleBody(token)))
 }
 
 func TestGoogleSignInEndpointEmailUnusable(t *testing.T) {
@@ -293,15 +366,15 @@ func TestGoogleSignInEndpointAccountExists(t *testing.T) {
 	}
 }
 
-// A spent per-subject limit is a 429 that leaves the token unspent.
+// A spent per-subject limit is a 429 that creates no session.
 func TestGoogleSignInEndpointSubjectRateLimited(t *testing.T) {
 	limits := auth.AccountLimits{Login: ratelimit.New[[32]byte]("test", 1, time.Hour, 100, slog.New(slog.DiscardHandler))}
 	api := newGoogleTestAPI(t, limits)
 	requireGoogleCredentials(t, api.google(googleBody(api.issue(googleSubject, "ana@example.com", true))))
 
 	requireRateLimitedResponse(t, api.google(googleBody(api.issue(googleSubject, "ana@example.com", true))))
-	if n := api.count(t, "google_id_token_uses"); n != 1 {
-		t.Errorf("token uses = %d, want 1", n)
+	if n := api.count(t, "sessions"); n != 1 {
+		t.Errorf("sessions = %d, want 1", n)
 	}
 }
 
@@ -324,8 +397,8 @@ func TestGoogleSignInEndpointContextErrors(t *testing.T) {
 	if api.verifier.calls != 2 {
 		t.Errorf("verifier calls = %d, want 2 (no retries)", api.verifier.calls)
 	}
-	if n := api.count(t, "google_id_token_uses"); n != 0 {
-		t.Errorf("token uses = %d, want 0", n)
+	if n := api.count(t, "sessions"); n != 0 {
+		t.Errorf("sessions = %d, want 0", n)
 	}
 }
 
@@ -348,7 +421,7 @@ func TestGoogleSignInEndpointPassesRequestContext(t *testing.T) {
 }
 
 // Only the body carries the ID token: one in the Authorization header, the
-// query string or another header is ignored and isn't spent.
+// query string or another header is ignored.
 func TestGoogleSignInEndpointIgnoresTokenOutsideBody(t *testing.T) {
 	api := newGoogleTestAPI(t, auth.AccountLimits{})
 	token := api.issue(googleSubject, "ana@example.com", true)

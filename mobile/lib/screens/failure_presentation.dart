@@ -1,4 +1,5 @@
 import '../api/api_exception.dart';
+import '../auth/google_identity_exception.dart';
 import '../l10n/app_localizations.dart';
 import '../session.dart';
 
@@ -33,6 +34,22 @@ enum FailureKind {
   /// leaving the signed-in screens, so nothing should be shown.
   sessionEnded,
 
+  /// The user closed Google's account chooser: not an error, nothing to show.
+  cancelled,
+
+  /// Google gave the app no sign-in result; nothing was sent.
+  googleUnavailable,
+
+  /// The server didn't accept the Google sign-in; a new attempt may work.
+  googleRejected,
+
+  /// Google reports no verified email address for the account (020).
+  googleEmailUnusable,
+
+  /// The Google account's address already has an account that isn't linked
+  /// to it. Nothing is linked automatically (020).
+  accountExists,
+
   /// Anything else: 5xx, a broken response, an unknown code, a local failure.
   unexpected,
 }
@@ -49,7 +66,8 @@ final class FailurePresentation {
 
   final FailureKind kind;
 
-  /// Form-level text, or null when the field errors say it all.
+  /// Form-level text, or null when the field errors say it all or there is
+  /// nothing to say ([FailureKind.cancelled]).
   final String? message;
 
   /// Errors for the email and password fields (422 `fields`).
@@ -77,6 +95,13 @@ FailurePresentation presentFailure(Object error, AppLocalizations l10n) {
       message: l10n.errorTimeout,
     ),
     ApiHttpException() => _fromHttp(error, l10n),
+    GoogleIdentityException(failure: GoogleIdentityFailure.cancelled) =>
+      const FailurePresentation(FailureKind.cancelled),
+    // Why Google gave no token isn't the user's to fix, so one message.
+    GoogleIdentityException() => FailurePresentation(
+      FailureKind.googleUnavailable,
+      message: l10n.errorGoogleUnavailable,
+    ),
     // ApiProtocolException, a storage failure while signing in, and anything
     // else the screens can't explain.
     _ => _unexpected(l10n),
@@ -108,10 +133,25 @@ FailurePresentation _fromHttp(ApiHttpException e, AppLocalizations l10n) {
       );
     case 'internal_error' || 'invalid_request':
       return _unexpected(l10n);
-    // Google sign-in codes (020). No screen calls that endpoint yet; stage 6
-    // gives them their own messages.
-    case 'invalid_google_token' || 'google_email_unusable' || 'account_exists':
-      return _unexpected(l10n);
+    // Google sign-in (020). The server didn't accept what Google returned;
+    // the next attempt asks Google again.
+    case 'invalid_google_token':
+      return FailurePresentation(
+        FailureKind.googleRejected,
+        message: l10n.errorGoogleRejected,
+      );
+    case 'google_email_unusable':
+      return FailurePresentation(
+        FailureKind.googleEmailUnusable,
+        message: l10n.errorGoogleEmailUnusable,
+      );
+    // The existing account may have no password, so the text doesn't name a
+    // way in.
+    case 'account_exists':
+      return FailurePresentation(
+        FailureKind.accountExists,
+        message: l10n.errorAccountExists,
+      );
   }
   // No code, or one this app doesn't know (a proxy's error page, a newer
   // backend): only the status is reliable.

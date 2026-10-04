@@ -21,12 +21,13 @@ import (
 // NormalizeEmail (else ErrGoogleEmailUnusable) and that belongs to no account
 // (else ErrAccountExists; nothing is ever linked automatically).
 //
-// Every unusable token (rejected by the verifier, already used, or Google
-// sign-in not configured) returns ErrInvalidGoogleToken, and unavailable
-// Google keys return ErrGoogleUnavailable; neither writes anything. An empty
-// token returns a *ValidationError, and a spent per-subject limit a
-// *RateLimitedError, before any database work. Once a verified token reaches
-// the database it is spent, whatever the outcome; the store owns that
+// Every unusable token (rejected by the verifier, or Google sign-in not
+// configured) returns ErrInvalidGoogleToken, and unavailable Google keys
+// return ErrGoogleUnavailable; neither writes anything. An empty token
+// returns a *ValidationError, and a spent per-subject limit a
+// *RateLimitedError, before any database work. A token is accepted whenever
+// it verifies, however often it was presented before (decision 026): its use
+// isn't recorded, and the token never reaches the store. The store owns the
 // transaction and its only retry. Credentials are returned only after the
 // session is committed.
 func (s *Service) SignInWithGoogle(ctx context.Context, rawIDToken, userAgent string) (Credentials, error) {
@@ -41,11 +42,6 @@ func (s *Service) SignInWithGoogle(ctx context.Context, rawIDToken, userAgent st
 	if err != nil {
 		return Credentials{}, s.googleVerifyError(ctx, err)
 	}
-	// The verifier always sets it; without it the token use would expire at
-	// once and the token could be replayed.
-	if claims.AcceptedUntil().IsZero() {
-		return Credentials{}, errors.New("auth: google sign-in: verifier returned no expiry")
-	}
 	// Keyed by subject, not email: Google sign-in has its own bucket, and a
 	// new identity's email is the token holder's choice. Subjects never
 	// contain "@", so no key matches an email's.
@@ -59,14 +55,12 @@ func (s *Service) SignInWithGoogle(ctx context.Context, rawIDToken, userAgent st
 	addr, ineligible := googleAccountEmail(claims)
 	access, refresh := NewToken(AccessTokenPrefix), NewToken(RefreshTokenPrefix)
 	r, err := googleSignIn(ctx, s.pool, googleSignInInput{
-		tokenHash:     HashToken(rawIDToken),
-		acceptedUntil: claims.AcceptedUntil(),
-		subject:       claims.Subject(),
-		eligible:      ineligible == "",
-		email:         addr,
-		accessHash:    access.Hash,
-		refreshHash:   refresh.Hash,
-		userAgent:     normalizeUserAgent(userAgent),
+		subject:     claims.Subject(),
+		eligible:    ineligible == "",
+		email:       addr,
+		accessHash:  access.Hash,
+		refreshHash: refresh.Hash,
+		userAgent:   normalizeUserAgent(userAgent),
 	})
 	if err != nil {
 		return Credentials{}, err // already "auth: google sign-in: …"
@@ -77,9 +71,6 @@ func (s *Service) SignInWithGoogle(ctx context.Context, rawIDToken, userAgent st
 		s.logger.InfoContext(ctx, "auth: google sign-in succeeded",
 			"user_id", r.userID, "session_id", r.sessionID, "new_account", r.outcome == googleCreated)
 		return Credentials{AccessToken: access, RefreshToken: refresh, ExpiresIn: accessTokenTTL}, nil
-	case googleReplayed:
-		s.logGoogleFailed(ctx, "replayed", "")
-		return Credentials{}, ErrInvalidGoogleToken
 	case googleIneligible:
 		s.logGoogleFailed(ctx, ineligible, "")
 		return Credentials{}, ErrGoogleEmailUnusable

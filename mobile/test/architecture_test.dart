@@ -1,4 +1,4 @@
-// Enforces the token boundary of decision 023 over the real source: Dart
+// Enforces the token boundaries of decisions 023 and 025 over the real source: Dart
 // can't make a class private to a set of files, so the import rules are
 // checked here instead. Runs from the package root, like every flutter test.
 
@@ -92,6 +92,13 @@ void main() {
         },
         'auth/token_store.dart': {'session.dart', 'main.dart'},
         'auth/auth_clock.dart': {'session.dart'},
+        // The source of Google ID tokens (025): held by the session only.
+        'auth/google_identity.dart': {
+          'auth/google_identity_plugin.dart',
+          'session.dart',
+        },
+        'auth/google_identity_plugin.dart': {'main.dart'},
+        'package:google_sign_in/': {'auth/google_identity_plugin.dart'},
         'package:flutter_secure_storage/': {
           'auth/token_store.dart',
           'main.dart',
@@ -124,6 +131,8 @@ void main() {
         'api/account_api.dart',
         'api/api_exception.dart',
         'api/me.dart',
+        // Only the failure Google sign-in can end with; it holds no data.
+        'auth/google_identity_exception.dart',
         'session.dart',
       };
       final violations = <String>[];
@@ -136,7 +145,8 @@ void main() {
               imported == 'session.dart' ||
               imported == 'main.dart' ||
               imported.startsWith('package:http/') ||
-              imported.startsWith('package:flutter_secure_storage/');
+              imported.startsWith('package:flutter_secure_storage/') ||
+              imported.startsWith('package:google_sign_in');
           if (layer && !uiAllowed.contains(imported)) {
             violations.add('$path imports $imported');
           }
@@ -150,7 +160,13 @@ void main() {
     final forbidden = RegExp(
       r'\b(AuthApi|AuthTokens|StoredSession|StoredSessionCodec|TokenStore|'
       r'SecureTokenStore|ApiClient|accessToken|refreshToken|access_token|'
-      r'refresh_token|Authorization)\b|vt_at_|vt_rt_',
+      r'refresh_token|Authorization)\b|vt_at_|vt_rt_|'
+      // Google (025): no ID token, no token source, no plugin type, no
+      // client ID. (GoogleSignInButton, GoogleSignInSection and
+      // GoogleIdentityException are other words.)
+      r'[iI]dToken|id_token|\b(GoogleIdentity|PluginGoogleIdentity|'
+      r'GoogleSignIn|GoogleSignInAccount|GoogleSignInAuthentication)\b|'
+      r'[sS]erverClientId',
     );
     final violations = <String>[];
     sources.forEach((path, source) {
@@ -182,7 +198,7 @@ void main() {
     expect(declarations, isNotEmpty);
     final tokenish = RegExp(
       r'accessToken|refreshToken|AuthTokens|StoredSession|TokenStore|'
-      r'String Function|authorized',
+      r'String Function|authorized|[iI]dToken|GoogleIdentity',
     );
     for (final line in declarations) {
       expect(line, isNot(matches(tokenish)), reason: line);
@@ -197,6 +213,79 @@ void main() {
       body,
       isNot(contains(RegExp(r'^  Future<T> authorized', multiLine: true))),
     );
+    // Google sign-in takes nothing: the ID token is obtained inside (025).
+    expect(body, contains('  Future<void> signInWithGoogle() {'));
+  });
+
+  test('a Google ID token is never kept: no field, no top-level variable', () {
+    // In the session layer it may only be a parameter or a local of the one
+    // call that sends it.
+    final declaration = RegExp(
+      r'^(?:  )?(?:static\s+)?(?:late\s+)?(?:final\s+|var\s+|const\s+)?'
+      r'[\w<>?, ]*\b_?\w*[iI]dToken\w*\s*(?:=|;)',
+      multiLine: true,
+    );
+    for (final path in [
+      'session.dart',
+      'api/auth_api.dart',
+      'auth/google_identity.dart',
+      'auth/google_identity_plugin.dart',
+    ]) {
+      final matches = declaration
+          .allMatches(sources[path]!)
+          .map((m) => m.group(0)!.trim())
+          // The size limits are constants about tokens, not tokens.
+          .where((m) => !m.contains('maxIdTokenBytes'));
+      expect(matches, isEmpty, reason: path);
+    }
+    // And nothing else in lib/ names one at all.
+    final named = sources.keys.where(
+      (path) => RegExp(r'[iI]dToken|id_token').hasMatch(sources[path]!),
+    );
+    expect(
+      named.toSet().difference({
+        'session.dart',
+        'api/auth_api.dart',
+        'auth/google_identity.dart',
+        'auth/google_identity_plugin.dart',
+      }),
+      isEmpty,
+    );
+  });
+
+  test('the plugin adapter asks Google for an ID token and nothing else', () {
+    final adapter = sources['auth/google_identity_plugin.dart']!;
+    // No silent sign-in, no event stream, no scopes or access tokens, no
+    // profile data, no nonce or hosted domain, no revocation.
+    final forbidden = RegExp(
+      r'attemptLightweightAuthentication|authenticationEvents|'
+      r'authorizationClient|authorize|scopeHint|accessToken|serverAuthCode|'
+      r'\.email\b|displayName|photoUrl|\.id\b|nonce|hostedDomain|disconnect|'
+      r'clientId:',
+    );
+    expect(forbidden.allMatches(adapter).map((m) => m.group(0)), isEmpty);
+    expect(RegExp(r'\.authenticate\(\)').allMatches(adapter), hasLength(1));
+    expect(RegExp(r'\.initialize\(').allMatches(adapter), hasLength(1));
+  });
+
+  test('main gives the Google identity to the session and to nothing else', () {
+    final main = sources['main.dart']!;
+    expect('PluginGoogleIdentity('.allMatches(main), hasLength(1));
+    final session = RegExp(
+      r'SessionManager\((.*?)\n  \);',
+      dotAll: true,
+    ).firstMatch(main)!.group(1)!;
+    expect(session, contains('PluginGoogleIdentity('));
+    // The client ID reaches no widget: screens ask the session instead.
+    for (final path in sources.keys.where(_isUi)) {
+      expect(
+        sources[path],
+        isNot(contains('googleServerClientId')),
+        reason: path,
+      );
+    }
+    expect(sources['app.dart'], isNot(contains('googleServerClientId')));
+    expect(sources['router.dart'], isNot(contains('googleServerClientId')));
   });
 
   test(
@@ -220,6 +309,39 @@ void main() {
     final violations = <String>[];
     sources.forEach((path, source) {
       if (!path.startsWith('screens/')) return;
+      for (final m in forbidden.allMatches(source)) {
+        violations.add('$path: ${m.group(0)}');
+      }
+    });
+    expect(violations, isEmpty);
+  });
+
+  test('release builds fail closed without Google configuration', () {
+    // kReleaseMode can't be flipped in a host test, so the wiring is checked
+    // in the source; config_test covers what `required` does.
+    final config = sources['config.dart']!.replaceAll(RegExp(r'\s+'), ' ');
+    expect(
+      config,
+      contains(
+        'googleServerClientId: parseGoogleServerClientId( '
+        "const String.fromEnvironment('GOOGLE_SERVER_CLIENT_ID'), "
+        'required: kReleaseMode, )',
+      ),
+    );
+  });
+
+  test('nothing that handles a token prints or logs', () {
+    final forbidden = RegExp(
+      r'\b(print|debugPrint|debugPrintStack|log)\s*\(|dart:developer|'
+      r'\bstdout\b|\bstderr\b',
+    );
+    final violations = <String>[];
+    sources.forEach((path, source) {
+      if (!path.startsWith('api/') &&
+          !path.startsWith('auth/') &&
+          path != 'session.dart') {
+        return;
+      }
       for (final m in forbidden.allMatches(source)) {
         violations.add('$path: ${m.group(0)}');
       }
