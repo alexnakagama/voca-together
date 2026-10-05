@@ -12,7 +12,9 @@ Commands are in `CLAUDE.md`.
 ## Backend
 
 - DB-backed tests use `testutil.DB(t)`, which migrates and TRUNCATEs a single shared database
-  (`users, user_tokens, sessions, user_identities, profiles`; new tables are added there with their migration).
+  (`users, user_tokens, sessions, user_identities, profiles, user_languages`; new tables of user data are added
+  there with their migration). It never truncates `languages`, the catalog seeded by migration 00006: tests may
+  rely on its rows and must leave no change in it (a test that writes the catalog rolls back).
 - They skip silently when `TEST_DATABASE_URL` is unset. Never use `t.Parallel` in them and always keep `-p 1`.
 - Test doubles: `email.Recorder` for sent email, `googleid.Fake` for Google verification.
 

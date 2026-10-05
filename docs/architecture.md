@@ -1,7 +1,7 @@
 # Architecture
 
 A map of what exists and where. Rules to follow are in `CLAUDE.md` and `.claude/rules/`; the reasoning behind each
-choice is in `decisions.md`.
+choice is in the decision records, indexed by topic in `decisions.md`. `README.md` explains the layout.
 
 ## Overview
 
@@ -17,24 +17,26 @@ The backend is a modular monolith: one Go service, one PostgreSQL database, stdl
 
 `main` builds all dependencies in this order: config → email sender (`newEmailSender`) → Google verifier
 (`newGoogleVerifier`, before the DB so bad config exits at once) → pool → migrations → rate limiters → services
-(`auth`, `profile`) → router. It runs the hourly retention cleanup (`authSvc.RunCleanup`) and handles graceful shutdown, after which
+(`auth`, `profile`, `language`) → router. It runs the hourly retention cleanup (`authSvc.RunCleanup`) and handles graceful shutdown, after which
 `authSvc.Wait()` drains background emails.
 
 ### Packages (`backend/internal/`)
 
 | Package | Role |
 |---|---|
-| `server` | HTTP layer only: routing (`server.go`, `Options`), JSON decode/encode and error codes (`respond.go`), the `requireAccessToken` middleware (`authn.go`), per-IP and per-user limits and client IP (`limits.go`, `clientip.go`), security headers and the request deadline (`middleware.go`), the profile routes (`profile.go`), and the HTML pages that emailed links open (`pages.go`, templates embedded from `pages/`: `/verify-email` and `/reset-password`). |
+| `server` | HTTP layer only: routing (`server.go`, `Options`), JSON decode/encode and error codes (`respond.go`), the `requireAccessToken` middleware (`authn.go`), per-IP and per-user limits and client IP (`limits.go`, `clientip.go`), security headers and the request deadline (`middleware.go`), the profile routes (`profile.go`), the language routes (`languages.go`), and the HTML pages that emailed links open (`pages.go`, templates embedded from `pages/`: `/verify-email` and `/reset-password`). |
 | `config` | Reads the environment into `Config` (validation per `ENV`; secrets held as `config.Secret`). |
 | `auth` | The domain: `Service` (business logic, argon2 slot limiter with a queue timeout, bounded best-effort background email sending), Google sign-in (`google.go`), per-account limits (`limits.go`), retention cleanup (`cleanup.go`), `store.go` (SQL), tokens, password policy/hashing, email content (text, plus HTML from `templates/` for link emails), typed errors (`errors.go`). |
 | `profile` | The profile domain: `Service` (`Get`, `Save`), normalization and validation (`validate.go`), `store.go` (SQL), typed errors. Imports neither `auth` nor `server`. |
+| `language` | The languages domain (decision 029): the catalog and a member's own spoken and learning languages with a level. `Service` (`Catalog`, `Get`, `Save`), the `Level` scale (`level.go`), validation (`validate.go`), `store.go` (SQL; a save is one transaction that locks the `users` row first), typed errors. Imports none of `auth`, `server` and `profile`. |
 | `googleid` | Verifies Google ID tokens locally (stdlib RS256 + Google's key set, `Verifier` interface, `Fake` for tests). |
 | `email` | Delivery only: `Sender` interface; `ResendSender` for production (stdlib HTTP client); `LogSender` for dev/test; `Recorder` for unit tests. |
 | `ratelimit` | In-process per-key token bucket. |
-| `db` | Pool + goose migrations embedded from `migrations/*.sql`, applied on every startup. |
-| `testutil` | `testutil.DB(t)`: the shared test database. |
+| `db` | Pool + goose migrations embedded from `migrations/*.sql`, applied on every startup. Migration 00006 also seeds the `languages` catalog (107 rows). |
+| `testutil` | `testutil.DB(t)`: the shared test database. It empties the user tables and keeps the seeded `languages` catalog. |
 
-Dependency direction: `main` → `server` → `auth`, `profile`; `auth` → `email`, `googleid`.
+Dependency direction: `main` → `server` → `auth`, `profile`, `language`; `auth` → `email`, `googleid`. `profile` and
+`language` import neither `auth` nor each other.
 
 Handlers read `auth.Identity` from the request context via `identityFrom` and pass `UserID` explicitly to services,
 so domain packages never read the request context.
@@ -52,8 +54,8 @@ which hands each screen only what it uses.
 | `lib/app.dart` | Owns and disposes the `GoRouter`. |
 | `lib/session.dart` | `SessionManager`, the `ChangeNotifier` session (`unknown`/`signedOut`/`signedIn`) that the router listens to. |
 | `lib/router.dart` | `Routes` and `authRedirect`, the only navigation policy. |
-| `lib/api/` | `ApiClient` over `http.Client`, the API classes, and the models screens may see (`Me`, `Profile`). |
-| `lib/auth/` | `TokenStore`/`SecureTokenStore`, `AuthApi`, `GoogleIdentity`/`PluginGoogleIdentity`. |
+| `lib/api/` | `ApiClient` over `http.Client`, the API classes (`AccountApi`, `AuthApi`), `ApiPaths`, and the models screens may see (`Me`, `Profile`). |
+| `lib/auth/` | `AuthTokens`, `TokenStore`/`SecureTokenStore`, `AuthClock`, `GoogleIdentity`/`PluginGoogleIdentity`. |
 | `lib/screens/` | The screens and `failure_presentation.dart` (`presentFailure`). |
 | `lib/ui/` | `theme.dart` (`AppTheme`, `Spacing`, `Radii`), `widgets/`, `previews/`. |
 | `lib/l10n/` | `app_en.arb` and the generated localizations. |
@@ -80,17 +82,7 @@ management, the email/password auth screens (log in, register, forgot password, 
 screen with `/v1/me` and logout, Google sign-in on log in and register, and the user's own profile (create and
 edit, from home).
 
-## Decisions by topic
-
-| Topic | Decisions |
-|---|---|
-| Stack and libraries | 001, 008 |
-| Session tokens, login, refresh, logout, `/v1/me` | 002, 013, 014, 015, 016 |
-| Passwords and email addresses | 003, 009, 010 |
-| Registration, verification, password reset, one-time tokens | 004, 011, 012, 017 |
-| Account enumeration | 005 |
-| Email pages and delivery | 006, 007, 019 |
-| Hardening, rate limits, retention | 018 |
-| Google sign-in (backend) | 020, 026 |
-| User profile | 027 (backend), 028 (client) |
-| Flutter client | 021 (shell, routing), 022 (design system, l10n), 023 (networking, session), 024 (screens), 025 (Google), 028 (profile) |
+Stage 8 (languages) is done on the backend only: the three routes of decision 029 (`GET /v1/languages`, `GET` and
+`PUT /v1/me/languages`) are served and tested. The client has not started it: nothing in `mobile/` calls those
+routes, and there is no language model, route or screen yet. The client-side decisions already taken are a draft,
+decision 030; the requirements they put on the code are in `.claude/rules/languages.md`.

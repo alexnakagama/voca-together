@@ -1,7 +1,8 @@
 # VocaTogether mobile
 
 Flutter client (Android only). Commands are in the repository's `CLAUDE.md`, conventions in
-`.claude/rules/mobile.md`, the layer map in `docs/architecture.md` and design decisions in `docs/decisions.md`.
+`.claude/rules/mobile.md`, the layer map in `docs/architecture.md` and design decisions in `docs/decisions/`
+(indexed by `docs/decisions.md`).
 
 ```sh
 flutter run --dart-define-from-file=config/dev.json   # emulator → local backend at http://10.0.2.2:8080
@@ -9,7 +10,8 @@ flutter run --dart-define-from-file=config/dev.json   # emulator → local backe
 
 ## Google sign-in
 
-Design and reasoning: `docs/decisions.md` 020 (backend contract) and 025 (client).
+Rules: `.claude/rules/google-sign-in.md`. Design and reasoning: decisions 020 (backend contract), 025 (client) and
+026 (a Google ID token is accepted while it is valid, not once).
 
 `GOOGLE_SERVER_CLIENT_ID` in `config/<env>.json` is the **Web application** OAuth client ID of the Google Cloud
 project, the same value the backend gets as `GOOGLE_CLIENT_ID`. It is public. Release builds refuse to start without

@@ -5,7 +5,8 @@ paths:
 
 # Mobile rules (Flutter, Android only)
 
-The layer map is in `docs/architecture.md`. Test fakes and harnesses are in `testing.md`.
+The layer map is in `docs/architecture.md`. Test fakes and harnesses are in `testing.md`. Rules for one feature
+load with that feature's files: `auth.md` (session internals), `google-sign-in.md`, `profile.md`, `languages.md`.
 
 ## Build config
 
@@ -13,8 +14,7 @@ The layer map is in `docs/architecture.md`. Test fakes and harnesses are in `tes
   validates it at startup and throws if it's missing or invalid. Every value is compiled into the APK and is public:
   never put a secret there.
 - `API_BASE_URL` is an http(s) origin with no path, query, fragment or credentials. Release builds require https.
-- `GOOGLE_SERVER_CLIENT_ID` is the Web OAuth client ID (the backend's `GOOGLE_CLIENT_ID`; never an Android client ID
-  or a secret): required in release builds, optional in debug, where leaving it out hides the Google button.
+- `GOOGLE_SERVER_CLIENT_ID`: see `google-sign-in.md`.
 
 ## Cleartext and the manifest
 
@@ -39,38 +39,23 @@ The layer map is in `docs/architecture.md`. Test fakes and harnesses are in `tes
   status and the path only. `/profile` is always the caller's own (decision 028).
 - Never put a token or email in a route.
 
-## Networking and session (decision 023, read it before touching auth code)
+## Networking and the token boundary (decision 023)
 
 - `ApiClient` holds no auth state, never retries, never follows redirects and never logs. It sends GET, POST and
   PUT; use PUT only for writes the backend makes idempotent, because `_authorized` resends once after a 401 (028).
-- `SessionManager` holds the only in-memory tokens and owns refresh (single flight, generation check, `/healthz`
-  probe first, the 014/018 failure matrix in 023) and logout.
 - **Token boundary:** screens may use only `AccountApi` (register/resend/forgot, token-free) and `SessionManager`'s
   public API, which takes and returns no token (`signIn`/`signInWithGoogle()`/`logout` → `void`, `me()` → `Me`,
   `profile()` → `Profile?`, `saveProfile()` → `Profile`).
-- `AuthApi` (returns `AuthTokens`, takes raw tokens) is built only in `main` and held only by `SessionManager`. The
-  generic request wrapper `_authorized` stays private; each new protected route gets a typed `SessionManager` method.
-- `SecureTokenStore` (one `flutter_secure_storage` key, explicit `AndroidOptions`) is the only place tokens persist.
+- Adding a protected route: a path in `ApiPaths`, a call in `AuthApi` (which takes the raw access token and is held
+  only by `SessionManager`), and a typed, token-free `SessionManager` method that makes one `_authorized` call.
+  `_authorized` stays private. A model screens may import is added to the allowlist in `test/architecture_test.dart`.
 - Nothing in `api/`, `auth/` or `session.dart` may log.
-
-## Google sign-in (decisions 025 and 026, read them with 020)
-
-- `SessionManager.signInWithGoogle()` gets an ID token from `GoogleIdentity`, posts it once in the body of
-  `/v1/auth/google` and drops it. An ID token is never a field, never stored, never kept and never retried: every
-  attempt asks Google again (Google may answer with the same token; 026).
-- `PluginGoogleIdentity` is the only importer of `package:google_sign_in` and is built only in `main`. It reads only
-  the ID token (no email, no scopes, no silent sign-in, no nonce) and initializes the plugin once.
-- Screens use `GoogleSignInSection` and may import only `google_identity_exception.dart` from the Google files.
-- Logout also clears Google's credential state, best effort, and the next Google sign-in waits for it (call order for
-  the plugin, not security; bounded at 10 s).
-- No `google-services.json`, no Firebase.
+- How tokens are stored, refreshed and cleared is in `auth.md`; read decision 023 before changing any of it.
 
 ## UI (decision 022)
 
 - `lib/ui/theme.dart` holds `AppTheme` (M3 light/dark) and the `Spacing`/`Radii` constants.
-- Widgets in `lib/ui/widgets/` never import `Session`, the router or `AppConfig` and hardcode no user-visible string.
-- `GoogleSignInButton` follows Google's branding guidelines: its colors and the official logo in `assets/google/`
-  must not be changed.
+- Widgets in `lib/ui/widgets/` never import the session, the router or `AppConfig` and hardcode no user-visible string.
 - Previews in `lib/ui/previews/` use `@VocaPreview` and stay pure UI. Add each new preview function to
   `test/ui/previews_test.dart`.
 
@@ -82,11 +67,13 @@ The layer map is in `docs/architecture.md`. Test fakes and harnesses are in `tes
 - Every failure goes through `presentFailure` (`lib/screens/failure_presentation.dart`), the one mapping from
   `ApiException`s and server codes to localized text and field errors. Screens branch on `FailureKind`, never on code
   strings, and never show server text.
-- Client validation is only empty fields and password confirmation. The password policy, the profile's limits and
-  all normalization stay on the server, and values are sent exactly as typed.
+- Client validation is only empty fields and password confirmation. Every policy, limit and normalization rule
+  stays on the server, and values are sent exactly as typed.
 - Success text for register, forgot and resend is neutral (no account enumeration).
 
 ## Strings
 
 - Add them to `lib/l10n/app_en.arb` with an `@` description. `flutter pub get` (also run by `flutter
   test/run/build`) regenerates the committed `lib/l10n/app_localizations*.dart`. Never edit the generated files.
+- The message for Google sign-in's 409 `account_exists` never mentions a password (the account may have none) and
+  never shows an address.

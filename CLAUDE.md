@@ -45,14 +45,21 @@ flutter build apk --debug --dart-define-from-file=config/dev.json
 
 ## Where the rest lives
 
+Rules say what holds now and load by themselves; decision records say why and are read one at a time.
+`docs/README.md` explains the whole layout.
+
 | File | Content | Loaded |
 |---|---|---|
-| `docs/decisions.md` | Source of truth for security-relevant behavior: reasoning, lock orders, race analyses, deferred work (numbered, newest at the bottom) | read on demand |
-| `docs/architecture.md` | Package and layer map of both parts, client status, topic index of the decisions | read on demand |
-| `.claude/rules/backend.md` | Package rules, API conventions, rate limits, env config, migrations | with `backend/**`, `.env.example` |
-| `.claude/rules/mobile.md` | Build config, structure, token boundary, Google client, UI, screens, strings | with `mobile/**` |
-| `.claude/rules/security.md` | Auth invariants and the Google sign-in contract | with `backend/**`, `mobile/**`, `docs/decisions.md` |
+| `.claude/rules/backend.md` | Package boundaries, a member's own resource, migrations, API conventions | with `backend/**` |
+| `.claude/rules/mobile.md` | Build config, structure, token boundary, UI, screens, strings | with `mobile/**` |
 | `.claude/rules/testing.md` | Test database rules, mobile fakes and harness, enforcement tests | with test files |
+| `.claude/rules/auth.md` | Auth invariants, lock order, limits, email, the client session layer | with the auth files of both sides |
+| `.claude/rules/google-sign-in.md` | The Google sign-in contract | with the Google files of both sides |
+| `.claude/rules/profile.md`, `languages.md` | Each feature's rules, backend and client | with that feature's files |
+| `.claude/rules/config.md` | Environment variables, startup configuration | with `backend/internal/config/**`, `backend/cmd/api/**`, `.env.example` |
+| `docs/architecture.md` | Package and layer map of both parts, client status | read on demand |
+| `docs/decisions.md` | Index of the decision records: by task, by status, what superseded what, deferred work | read on demand |
+| `docs/decisions/NNN-*.md` | One record each: reasoning, lock orders, race analyses, accepted risks. "Decision 017" in code or docs is `docs/decisions/017-*.md` | read the one you need |
 
 A rule loads only when the Read, Write or Edit tool is used on a path it matches; searches and shell commands do
 not trigger it. When planning or answering without having touched such a path, read the relevant rule file first.
@@ -60,9 +67,9 @@ not trigger it. When planning or answering without having touched such a path, r
 ## Architecture boundaries
 
 - Backend dependency direction: `cmd/api/main.go` builds everything → `internal/server` (HTTP only) →
-  `internal/auth` and `internal/profile` (domains; `profile` never imports `auth`); `internal/auth` →
-  `internal/email`, `internal/googleid`. Never the reverse. Only `main` reads configuration; domain packages never
-  read the request context.
+  `internal/auth`, `internal/profile` and `internal/language` (domains; `profile` and `language` import neither
+  `auth` nor each other); `internal/auth` → `internal/email`, `internal/googleid`. Never the reverse. Only `main`
+  reads configuration; domain packages never read the request context.
 - Migrations: add new numbered files in `backend/internal/db/migrations/`; never edit applied ones.
 - Mobile: `main.dart` is the composition root and the only place long-lived objects are built. Pass them down by
   constructor: no provider/riverpod/bloc/get_it, no top-level mutable state.
@@ -71,8 +78,9 @@ not trigger it. When planning or answering without having touched such a path, r
 
 ## Security
 
-- Read the matching entries in `docs/decisions.md` before changing auth, session, token or Google sign-in code, on
-  either side.
+- Before changing auth, session, token or Google sign-in code, on either side, read the rule file for it and the
+  decision records it cites (`docs/decisions.md` lists them by task). Read each record's header first: it says what
+  later records changed.
 - Never log emails, passwords, tokens, token hashes, user agents, IPs or request bodies. Google ID tokens, `sub` and
   the client ID count too.
 - `DATABASE_URL` and `RESEND_API_KEY` are secrets. Everything in `mobile/config/*.json` is compiled into the APK and
@@ -83,10 +91,10 @@ not trigger it. When planning or answering without having touched such a path, r
 
 ## Workflow
 
-- When a change makes or alters a design decision, append a new numbered entry to `docs/decisions.md` in the same
-  style.
+- When a change makes or alters a design decision, add a numbered record in `docs/decisions/` and index it, as
+  `docs/README.md` describes. Never rewrite an earlier record: note the change in its header.
 - Checks for a change: backend `make vet` and `make test` (with the database up); mobile `make mobile-analyze` and
   `make mobile-test`.
 - Do not commit or push: the user reviews and commits.
-- Keep this file short. A new rule goes in the matching `.claude/rules/` file, a description in
-  `docs/architecture.md`, and reasoning in `docs/decisions.md`. Add here only what nearly every session needs.
+- Keep this file short. A new rule goes in the narrowest matching `.claude/rules/` file, a description in
+  `docs/architecture.md`, and reasoning in a decision record. Add here only what nearly every session needs.
