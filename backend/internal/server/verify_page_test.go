@@ -200,7 +200,7 @@ func TestVerifyEmailFormInternalErrorIsOpaque(t *testing.T) {
 // The JSON verify endpoint and the page's form share one bucket; the form gets
 // the page version of the 429. The GET is never limited.
 func TestVerifyEmailFormSharesTokenBucketAndGetsAPage(t *testing.T) {
-	h := New(slog.New(slog.DiscardHandler), nil, nil, Options{IPLimits: IPLimits{Token: tightLimiter()}})
+	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, Options{IPLimits: IPLimits{Token: tightLimiter()}})
 	sendFrom(h, "198.51.100.1", http.MethodPost, verifyPath, "application/json", "{")
 
 	rec := sendFrom(h, "198.51.100.1", http.MethodPost, verifyEmailPath, "application/x-www-form-urlencoded", "")
@@ -219,7 +219,7 @@ func TestVerifyEmailFormSharesTokenBucketAndGetsAPage(t *testing.T) {
 }
 
 func TestVerifyEmailPageMethods(t *testing.T) {
-	handler := New(nil, nil, nil, Options{})
+	handler := New(nil, nil, nil, nil, Options{})
 	for _, method := range []string{http.MethodPut, http.MethodDelete, http.MethodPatch} {
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(method, verifyEmailPath, nil))

@@ -7,6 +7,7 @@ import (
 	"net/netip"
 
 	"vocatogether/backend/internal/auth"
+	"vocatogether/backend/internal/language"
 	"vocatogether/backend/internal/profile"
 	"vocatogether/backend/internal/ratelimit"
 )
@@ -23,7 +24,8 @@ type Options struct {
 }
 
 // New returns the API's router. Dependencies are built by the caller (main).
-func New(logger *slog.Logger, authSvc *auth.Service, profileSvc *profile.Service, opts Options) http.Handler {
+func New(logger *slog.Logger, authSvc *auth.Service, profileSvc *profile.Service, languageSvc *language.Service,
+	opts Options) http.Handler {
 	lim := opts.IPLimits
 	perIP := func(l *ratelimit.Limiter[netip.Prefix]) func(http.Handler) http.Handler {
 		return limitByIP(l, opts.TrustedProxyHops, writeRateLimited)
@@ -63,6 +65,13 @@ func New(logger *slog.Logger, authSvc *auth.Service, profileSvc *profile.Service
 	profileWrites := limitByUser(logger, opts.UserLimits.ProfileWrite)
 	mux.Handle("GET /v1/me/profile", authn(handleGetProfile(logger, profileSvc)))
 	mux.Handle("PUT /v1/me/profile", authn(profileWrites(handlePutProfile(logger, profileSvc))))
+	// The catalog and the caller's own languages (decision 029), under the
+	// same rules: signed-in members only, no id in a route, and the write
+	// behind its own per-user limit.
+	languageWrites := limitByUser(logger, opts.UserLimits.LanguagesWrite)
+	mux.Handle("GET /v1/languages", authn(handleLanguageCatalog(logger, languageSvc)))
+	mux.Handle("GET /v1/me/languages", authn(handleGetLanguages(logger, languageSvc)))
+	mux.Handle("PUT /v1/me/languages", authn(languageWrites(handlePutLanguages(logger, languageSvc))))
 
 	return securityHeaders(opts.HSTS)(requestDeadline(requestTimeout)(mux))
 }

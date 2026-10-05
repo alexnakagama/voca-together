@@ -16,6 +16,7 @@ import (
 	"vocatogether/backend/internal/db"
 	"vocatogether/backend/internal/email"
 	"vocatogether/backend/internal/googleid"
+	"vocatogether/backend/internal/language"
 	"vocatogether/backend/internal/profile"
 	"vocatogether/backend/internal/server"
 )
@@ -62,10 +63,11 @@ func run(logger *slog.Logger) error {
 	// Runs after the server has shut down: lets in-flight emails finish.
 	defer authSvc.Wait()
 	profileSvc := profile.NewService(pool, logger)
+	languageSvc := language.NewService(pool, logger)
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           server.New(logger, authSvc, profileSvc, serverOptions(cfg, logger)),
+		Handler:           server.New(logger, authSvc, profileSvc, languageSvc, serverOptions(cfg, logger)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,

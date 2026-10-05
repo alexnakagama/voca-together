@@ -49,15 +49,18 @@ const maxTrackedUsers = 100_000
 // (decision 027), keyed by the authenticated user's ID. A nil limiter allows
 // everything, so the zero value disables limiting (tests).
 type UserLimits struct {
-	ProfileWrite *ratelimit.Limiter[string] // PUT /v1/me/profile
+	ProfileWrite   *ratelimit.Limiter[string] // PUT /v1/me/profile
+	LanguagesWrite *ratelimit.Limiter[string] // PUT /v1/me/languages
 }
 
 // NewUserLimits returns the production per-user limits. They are far above
-// what editing a profile by hand needs and bound the writes one account can
-// make the database do.
+// what editing a profile or a list of languages by hand needs and bound the
+// writes one account can make the database do. Each route has its own
+// bucket, so one kind of save never uses up another's allowance.
 func NewUserLimits(logger *slog.Logger) UserLimits {
 	return UserLimits{
-		ProfileWrite: ratelimit.New[string]("user_profile_write", 10, 6*time.Second, maxTrackedUsers, logger), // 10/min
+		ProfileWrite:   ratelimit.New[string]("user_profile_write", 10, 6*time.Second, maxTrackedUsers, logger),   // 10/min
+		LanguagesWrite: ratelimit.New[string]("user_languages_write", 10, 6*time.Second, maxTrackedUsers, logger), // 10/min
 	}
 }
 

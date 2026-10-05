@@ -17,6 +17,9 @@ func TestServerOptionsWireEveryRateLimit(t *testing.T) {
 	if opts.UserLimits.ProfileWrite == nil {
 		t.Error("the per-user profile write limit is not wired")
 	}
+	if opts.UserLimits.LanguagesWrite == nil {
+		t.Fatal("the per-user languages write limit is not wired")
+	}
 	ip := opts.IPLimits
 	if ip.Login == nil || ip.Register == nil || ip.Email == nil || ip.Token == nil || ip.Refresh == nil {
 		t.Error("a per-IP limit is not wired")
@@ -25,15 +28,23 @@ func TestServerOptionsWireEveryRateLimit(t *testing.T) {
 		t.Errorf("options = hops %d, HSTS %v; want 2, true", opts.TrustedProxyHops, opts.HSTS)
 	}
 
-	// The wired limits really limit: the profile bucket empties.
-	allowed := 0
+	// The wired limits really limit: each bucket empties, on its own.
+	allowed, languagesAllowed := 0, 0
 	for range 100 {
 		if ok, _ := opts.UserLimits.ProfileWrite.Allow("user"); ok {
 			allowed++
 		}
 	}
+	for range 100 {
+		if ok, _ := opts.UserLimits.LanguagesWrite.Allow("user"); ok {
+			languagesAllowed++
+		}
+	}
 	if allowed != 10 {
 		t.Errorf("profile writes allowed in a burst = %d, want 10", allowed)
+	}
+	if languagesAllowed != 10 {
+		t.Errorf("languages writes allowed in a burst = %d, want 10 of their own", languagesAllowed)
 	}
 	if ok, _ := ip.Login.Allow(netip.MustParsePrefix("198.51.100.1/32")); !ok {
 		t.Error("the first login from an address was refused")

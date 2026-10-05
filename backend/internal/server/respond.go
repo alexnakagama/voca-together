@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"vocatogether/backend/internal/auth"
+	"vocatogether/backend/internal/language"
 	"vocatogether/backend/internal/profile"
 )
 
@@ -100,15 +101,18 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64)
 	return nil
 }
 
-// writeServiceError maps a service error (auth or profile) to a response:
+// writeServiceError maps a service error (auth, profile or language) to a
+// response:
 // validation errors to 422 with their fields, login, refresh, access-token
 // and Google sign-in outcomes to 401/403/409, a missing profile to 404, a
 // spent per-account limit to 429, overload, unavailable Google keys or the
 // request deadline to 503, anything else to an opaque 500 whose details go
-// only to the log. Service errors never contain secrets or profile text.
+// only to the log. Service errors never contain secrets, profile text or a
+// member's languages.
 func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, err error) {
 	var verr *auth.ValidationError
 	var profileErr *profile.ValidationError
+	var languageErr *language.ValidationError
 	var limited *auth.RateLimitedError
 	switch {
 	case errors.As(err, &verr):
@@ -116,6 +120,9 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logg
 		return
 	case errors.As(err, &profileErr):
 		writeValidationFailed(w, fieldErrors(profileErr.Fields))
+		return
+	case errors.As(err, &languageErr):
+		writeValidationFailed(w, fieldErrors(languageErr.Fields))
 		return
 	case errors.As(err, &limited):
 		writeRateLimited(w, limited.RetryAfter)
@@ -136,9 +143,10 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logg
 	case errors.Is(err, profile.ErrNotFound):
 		writeError(w, http.StatusNotFound, codeProfileNotFound)
 		return
-	// profile.ErrUserGone: the user was deleted after authentication, and
-	// their sessions with them, so the credential is dead (decision 016).
-	case errors.Is(err, auth.ErrInvalidAccessToken), errors.Is(err, profile.ErrUserGone):
+	// ErrUserGone: the user was deleted after authentication, and their
+	// sessions with them, so the credential is dead (decision 016).
+	case errors.Is(err, auth.ErrInvalidAccessToken), errors.Is(err, profile.ErrUserGone),
+		errors.Is(err, language.ErrUserGone):
 		// The HTTP Bearer scheme (RFC 6750 3), unlike login's credential form.
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		writeError(w, http.StatusUnauthorized, codeInvalidAccessToken)
@@ -169,7 +177,7 @@ func unavailable(err error) bool {
 
 // fieldErrors converts a domain package's field errors, which all have the
 // same shape, to the response's.
-func fieldErrors[F auth.FieldError | profile.FieldError](in []*F) []fieldError {
+func fieldErrors[F auth.FieldError | profile.FieldError | language.FieldError](in []*F) []fieldError {
 	out := make([]fieldError, len(in))
 	for i, f := range in {
 		out[i] = fieldError(*f)
