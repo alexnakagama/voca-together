@@ -16,10 +16,11 @@ import (
 // read and parse; writes are also limited per user.
 const maxLanguagesBodyBytes = 8 << 10
 
-// errNoLanguagesObject is a body that is valid JSON but not an object
-// (null): it must not pass for the empty selection, which would remove all
-// of a member's languages.
-var errNoLanguagesObject = errors.New("server: languages body is not an object")
+// errIncompleteLanguages is a body that is valid JSON but doesn't say what
+// replaces each list: it is null, or one of its lists is left out or null.
+// It must not pass for an empty selection, which would remove a member's
+// languages because a client forgot a key (decision 029).
+var errIncompleteLanguages = errors.New("server: languages body does not hold both lists")
 
 // languageEntry is one language of a member, in requests and responses.
 type languageEntry struct {
@@ -30,10 +31,20 @@ type languageEntry struct {
 // languagesRequest lists everything a save may set. Anything else in the
 // body or in an entry, an id, a kind or a position included, is an unknown
 // field and the request is refused (decodeJSON), so nothing becomes writable
-// by accident. A list that is absent or null is empty.
+// by accident.
+//
+// Both lists are required: a save replaces the whole selection, so each list
+// must be an array, and only an empty array clears one. The decoder leaves a
+// list nil when its key is absent or null and non-nil for any array, [] too,
+// which is how complete tells them apart.
 type languagesRequest struct {
 	Spoken   []languageEntry `json:"spoken"`
 	Learning []languageEntry `json:"learning"`
+}
+
+// complete reports whether the body gave both lists as arrays.
+func (r *languagesRequest) complete() bool {
+	return r != nil && r.Spoken != nil && r.Learning != nil
 }
 
 // languagesResponse is the caller's own languages. It lists its fields
@@ -122,9 +133,10 @@ func handleGetLanguages(logger *slog.Logger, svc *language.Service) http.Handler
 
 // handlePutLanguages replaces all the authenticated user's languages with
 // the body, in the order given, and answers 200 with them as stored, whether
-// they changed or were already the same. It must run behind
-// requireAccessToken. Whose languages they are comes only from the session;
-// the request can't name another user.
+// they changed or were already the same. The body must hold both lists
+// (languagesRequest); one that doesn't is 400 invalid_request and changes
+// nothing. It must run behind requireAccessToken. Whose languages they are
+// comes only from the session; the request can't name another user.
 func handlePutLanguages(logger *slog.Logger, svc *language.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := identityFrom(r.Context())
@@ -132,11 +144,11 @@ func handlePutLanguages(logger *slog.Logger, svc *language.Service) http.Handler
 			writeServiceError(w, r, logger, errNoIdentity)
 			return
 		}
-		// A pointer, so that a null body is told apart from an empty object.
+		// A pointer, so that a null body is told apart from an object.
 		var req *languagesRequest
 		err := decodeJSON(w, r, &req, maxLanguagesBodyBytes)
-		if err == nil && req == nil {
-			err = errNoLanguagesObject
+		if err == nil && !req.complete() {
+			err = errIncompleteLanguages
 		}
 		if err != nil {
 			writeError(w, http.StatusBadRequest, codeInvalidRequest)

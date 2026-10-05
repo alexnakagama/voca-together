@@ -180,8 +180,8 @@ func TestPutLanguagesSavesThemAndGetReturnsThem(t *testing.T) {
 	}
 }
 
-// PUT replaces the whole selection, in the order sent: a list that is
-// absent, null or empty is cleared.
+// PUT replaces the whole selection, in the order sent, and an empty list is
+// how a list is cleared.
 func TestPutLanguagesReplacesTheWholeSelection(t *testing.T) {
 	api := newTestAPI(t)
 	tokens := api.loggedIn(t, "ana@example.com")
@@ -191,23 +191,66 @@ func TestPutLanguagesReplacesTheWholeSelection(t *testing.T) {
 	requireLanguages(t, api.putLanguages(tokens.AccessToken, reordered), reordered)
 	requireLanguages(t, api.getLanguages(tokens.AccessToken), reordered)
 
-	onlySpoken := languagesJSON(entriesJSON("es", "native"), "[]")
-	for _, body := range []string{
-		`{"spoken":` + entriesJSON("es", "native") + `}`,
-		`{"spoken":` + entriesJSON("es", "native") + `,"learning":null}`,
-		onlySpoken,
+	for name, body := range map[string]string{
+		"learning cleared":            languagesJSON(entriesJSON("es", "native"), "[]"),
+		"spoken cleared":              languagesJSON("[]", entriesJSON("ja", "a2")),
+		"both cleared":                noLanguages,
+		"both cleared, keys reversed": `{"learning":[],"spoken":[]}`,
 	} {
-		requireLanguages(t, api.putLanguages(tokens.AccessToken, anasLanguages), anasLanguages)
-		requireLanguages(t, api.putLanguages(tokens.AccessToken, body), onlySpoken)
-		requireLanguages(t, api.getLanguages(tokens.AccessToken), onlySpoken)
+		t.Run(name, func(t *testing.T) {
+			want := body
+			if name == "both cleared, keys reversed" {
+				want = noLanguages
+			}
+			requireLanguages(t, api.putLanguages(tokens.AccessToken, anasLanguages), anasLanguages)
+			requireLanguages(t, api.putLanguages(tokens.AccessToken, body), want)
+			requireLanguages(t, api.getLanguages(tokens.AccessToken), want)
+		})
 	}
+	requireLanguages(t, api.putLanguages(tokens.AccessToken, anasLanguages), anasLanguages)
+	requireLanguages(t, api.putLanguages(tokens.AccessToken, noLanguages), noLanguages)
+	if n := api.languageCount(t); n != 0 {
+		t.Errorf("%d rows left after clearing both lists, want 0", n)
+	}
+}
 
-	for _, body := range []string{`{}`, `{"spoken":null,"learning":null}`, noLanguages} {
-		requireLanguages(t, api.putLanguages(tokens.AccessToken, anasLanguages), anasLanguages)
-		requireLanguages(t, api.putLanguages(tokens.AccessToken, body), noLanguages)
-		if n := api.languageCount(t); n != 0 {
-			t.Errorf("%s: %d rows left, want 0", body, n)
-		}
+// A full replacement must say what replaces each list. A list that is left
+// out or null is not an empty list: reading it as one would delete a
+// member's languages because a client forgot a key. Such a body is refused
+// whole, and nothing of the member's is touched.
+func TestPutLanguagesNeedsBothListsAndNeverDeletesForAMissingOne(t *testing.T) {
+	api := newTestAPI(t)
+	tokens := api.loggedIn(t, "ana@example.com")
+	requireLanguages(t, api.putLanguages(tokens.AccessToken, anasLanguages), anasLanguages)
+	stored := api.storedLanguages(t, "ana@example.com")
+	es, ja := entriesJSON("es", "native"), entriesJSON("ja", "a2")
+
+	for name, body := range map[string]string{
+		"empty object":                  `{}`,
+		"only spoken":                   `{"spoken":` + es + `}`,
+		"only learning":                 `{"learning":` + ja + `}`,
+		"only an empty spoken":          `{"spoken":[]}`,
+		"only an empty learning":        `{"learning":[]}`,
+		"null learning":                 `{"spoken":` + es + `,"learning":null}`,
+		"null spoken":                   `{"spoken":null,"learning":` + ja + `}`,
+		"null spoken, empty learning":   `{"spoken":null,"learning":[]}`,
+		"both null":                     `{"spoken":null,"learning":null}`,
+		"a list given, then nulled":     `{"spoken":` + es + `,"learning":` + ja + `,"learning":null}`,
+		"the same selection, one null":  `{"spoken":` + entriesJSON("es", "native", "en", "c1") + `,"learning":null}`,
+		"the same selection, one short": `{"spoken":` + entriesJSON("es", "native", "en", "c1") + `}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			requireLoginResponse(t, api.putLanguages(tokens.AccessToken, body), http.StatusBadRequest, invalidRequest)
+			if got := api.storedLanguages(t, "ana@example.com"); !slices.Equal(got, stored) {
+				t.Errorf("stored %v, want the untouched %v", got, stored)
+			}
+		})
+	}
+	requireLanguages(t, api.getLanguages(tokens.AccessToken), anasLanguages)
+
+	api.svc.Wait()
+	if n := strings.Count(api.logs.String(), "languages: saved"); n != 1 {
+		t.Errorf("%d saves logged, want only the first", n)
 	}
 }
 
@@ -375,26 +418,26 @@ func TestPutLanguagesRejectsMalformedRequests(t *testing.T) {
 		"array":                 `[` + noLanguages + `]`,
 		"string":                `"es"`,
 		"number":                `5`,
-		"list as object":        `{"spoken":{"language":"es","level":"native"}}`,
-		"list as string":        `{"spoken":"es"}`,
-		"list as number":        `{"learning":3}`,
-		"item as string":        `{"spoken":["es"]}`,
-		"item as number":        `{"spoken":[1]}`,
-		"item as array":         `{"spoken":[["es","native"]]}`,
-		"number for a language": `{"spoken":[{"language":5,"level":"native"}]}`,
-		"object for a language": `{"spoken":[{"language":{"code":"es"},"level":"native"}]}`,
-		"number for a level":    `{"spoken":[{"language":"es","level":7}]}`,
-		"boolean for a level":   `{"spoken":[{"language":"es","level":true}]}`,
-		"unknown field":         `{"spoken":` + es + `,"native":["es"]}`,
-		"unknown item field":    `{"spoken":[{"language":"es","level":"native","name":"Spanish"}]}`,
-		"kind in an item":       `{"spoken":[{"language":"es","level":"native","kind":"learning"}]}`,
-		"position in an item":   `{"spoken":[{"language":"es","level":"native","position":3}]}`,
-		"code instead":          `{"spoken":[{"code":"es","level":"native"}]}`,
-		"created_at":            `{"spoken":` + es + `,"created_at":"2020-01-01T00:00:00Z"}`,
+		"list as object":        `{"spoken":{"language":"es","level":"native"},"learning":[]}`,
+		"list as string":        `{"spoken":"es","learning":[]}`,
+		"list as number":        `{"spoken":[],"learning":3}`,
+		"item as string":        `{"spoken":["es"],"learning":[]}`,
+		"item as number":        `{"spoken":[1],"learning":[]}`,
+		"item as array":         `{"spoken":[["es","native"]],"learning":[]}`,
+		"number for a language": `{"spoken":[{"language":5,"level":"native"}],"learning":[]}`,
+		"object for a language": `{"spoken":[{"language":{"code":"es"},"level":"native"}],"learning":[]}`,
+		"number for a level":    `{"spoken":[{"language":"es","level":7}],"learning":[]}`,
+		"boolean for a level":   `{"spoken":[{"language":"es","level":true}],"learning":[]}`,
+		"unknown field":         `{"spoken":` + es + `,"native":["es"],"learning":[]}`,
+		"unknown item field":    `{"spoken":[{"language":"es","level":"native","name":"Spanish"}],"learning":[]}`,
+		"kind in an item":       `{"spoken":[{"language":"es","level":"native","kind":"learning"}],"learning":[]}`,
+		"position in an item":   `{"spoken":[{"language":"es","level":"native","position":3}],"learning":[]}`,
+		"code instead":          `{"spoken":[{"code":"es","level":"native"}],"learning":[]}`,
+		"created_at":            `{"spoken":` + es + `,"created_at":"2020-01-01T00:00:00Z","learning":[]}`,
 		"trailing data":         noLanguages + noLanguages,
 		"trailing garbage":      noLanguages + `x`,
-		"deeply nested":         `{"spoken":` + strings.Repeat("[", 4000) + strings.Repeat("]", 4000) + `}`,
-		"oversized":             `{"spoken":[{"language":"es","level":"` + strings.Repeat("a", maxLanguagesBodyBytes) + `"}]}`,
+		"deeply nested":         `{"spoken":` + strings.Repeat("[", 4000) + strings.Repeat("]", 4000) + `,"learning":[]}`,
+		"oversized":             `{"spoken":[{"language":"es","level":"` + strings.Repeat("a", maxLanguagesBodyBytes) + `"}],"learning":[]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			requireLoginResponse(t, api.putLanguages(tokens.AccessToken, body), http.StatusBadRequest, invalidRequest)
@@ -429,23 +472,23 @@ func TestPutLanguagesValidation(t *testing.T) {
 		"non-ASCII lookalike":         {spoken("еs", "a1"), []string{"spoken", "unknown_language"}},
 		"SQL in a code":               {spoken(`es'; DROP TABLE user_languages; --`, "a1"), []string{"spoken", "unknown_language"}},
 		"wildcard code":               {spoken("%", "a1"), []string{"spoken", "unknown_language"}},
-		"control character in a code": {`{"spoken":[{"language":"es\u0000","level":"a1"}]}`, []string{"spoken", "unknown_language"}},
-		"no language":                 {`{"spoken":[{"level":"a1"}]}`, []string{"spoken", "unknown_language"}},
-		"null language":               {`{"spoken":[{"language":null,"level":"a1"}]}`, []string{"spoken", "unknown_language"}},
+		"control character in a code": {`{"spoken":[{"language":"es\u0000","level":"a1"}],"learning":[]}`, []string{"spoken", "unknown_language"}},
+		"no language":                 {`{"spoken":[{"level":"a1"}],"learning":[]}`, []string{"spoken", "unknown_language"}},
+		"null language":               {`{"spoken":[{"language":null,"level":"a1"}],"learning":[]}`, []string{"spoken", "unknown_language"}},
 		"unknown level":               {spoken("es", "fluent"), []string{"spoken", "invalid_level"}},
 		"upper case level":            {spoken("es", "C1"), []string{"spoken", "invalid_level"}},
 		"padded level":                {spoken("es", "c1 "), []string{"spoken", "invalid_level"}},
 		"empty level":                 {spoken("es", ""), []string{"spoken", "invalid_level"}},
 		"level off the scale":         {learning("es", "c3"), []string{"learning", "invalid_level"}},
 		"numeric level as text":       {spoken("es", "7"), []string{"spoken", "invalid_level"}},
-		"no level":                    {`{"learning":[{"language":"es"}]}`, []string{"learning", "invalid_level"}},
-		"null level":                  {`{"learning":[{"language":"es","level":null}]}`, []string{"learning", "invalid_level"}},
+		"no level":                    {`{"spoken":[],"learning":[{"language":"es"}]}`, []string{"learning", "invalid_level"}},
+		"null level":                  {`{"spoken":[],"learning":[{"language":"es","level":null}]}`, []string{"learning", "invalid_level"}},
 		"native while learning":       {learning("es", "native"), []string{"learning", "invalid_level"}},
-		"empty item":                  {`{"spoken":[{}]}`, []string{"spoken", "unknown_language", "spoken", "invalid_level"}},
-		"null item":                   {`{"learning":[null]}`, []string{"learning", "unknown_language", "learning", "invalid_level"}},
+		"empty item":                  {`{"spoken":[{}],"learning":[]}`, []string{"spoken", "unknown_language", "spoken", "invalid_level"}},
+		"null item":                   {`{"spoken":[],"learning":[null]}`, []string{"learning", "unknown_language", "learning", "invalid_level"}},
 		"six spoken":                  {languagesJSON(six, "[]"), []string{"spoken", "too_many"}},
 		"six learning":                {languagesJSON("[]", six), []string{"learning", "too_many"}},
-		"hundreds of items":           {`{"spoken":[` + strings.Repeat(`{},`, 2000) + `{}]}`, []string{"spoken", "too_many", "spoken", "unknown_language", "spoken", "invalid_level"}},
+		"hundreds of items":           {`{"spoken":[` + strings.Repeat(`{},`, 2000) + `{}],"learning":[]}`, []string{"spoken", "too_many", "spoken", "unknown_language", "spoken", "invalid_level"}},
 		"twice in a list":             {languagesJSON(entriesJSON("es", "a1", "es", "b1"), "[]"), []string{"spoken", "duplicate"}},
 		"in both lists":               {languagesJSON(entriesJSON("es", "c1"), entriesJSON("es", "c1")), []string{"learning", "duplicate"}},
 		"everything at once": {languagesJSON(six[:len(six)-1]+`,{"language":"es","level":"x"},{"language":"ES","level":"a1"}]`, entriesJSON("es", "native")),
@@ -850,7 +893,7 @@ func TestLanguagesAreNeverLogged(t *testing.T) {
 	requireLanguages(t, api.getLanguages(tokens.AccessToken), body)
 	rejected := []*httptest.ResponseRecorder{
 		api.putLanguages(tokens.AccessToken, languagesJSON(entriesJSON("MARKERCODE", "MARKERLEVEL"), entriesJSON("yue", "native"))),
-		api.putLanguages(tokens.AccessToken, `{"spoken":[],"marker_field":"MARKERVALUE"}`),
+		api.putLanguages(tokens.AccessToken, `{"spoken":[],"marker_field":"MARKERVALUE","learning":[]}`),
 		api.putLanguages(tokens.AccessToken, `{"spoken":[{"language":"yue","level":"native"`),
 	}
 	for _, rec := range rejected {
