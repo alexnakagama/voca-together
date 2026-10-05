@@ -26,7 +26,7 @@ func tableExists(t *testing.T, pool *pgxpool.Pool, name string) bool {
 func TestMigrationsApplyFromEmptyAndRollBack(t *testing.T) {
 	ctx := context.Background()
 	pool := testutil.DB(t)
-	tables := []string{"users", "user_tokens", "sessions", "user_identities", "profiles"}
+	tables := []string{"users", "user_tokens", "sessions", "user_identities", "profiles", "languages", "user_languages"}
 
 	if err := db.MigrateDownAll(ctx, pool); err != nil {
 		t.Fatalf("down: %v", err)
@@ -186,5 +186,87 @@ func TestMigration00005ProfilesWithExistingRows(t *testing.T) {
 	}
 	if err := insertProfile(pool, ana, "Ana", ""); err != nil {
 		t.Errorf("saving a profile after re-applying: %v", err)
+	}
+}
+
+// 00006 adds the language catalog and members' languages. Up leaves users
+// and profiles as they were, seeds the catalog and gives nobody a language;
+// down removes both tables with whatever they hold and touches nothing else.
+func TestMigration00006LanguagesWithExistingRows(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	// Leave the schema migrated whatever happens here.
+	t.Cleanup(func() {
+		if err := db.Migrate(ctx, pool); err != nil {
+			t.Errorf("restoring the schema: %v", err)
+		}
+	})
+	seeded := countRows(t, pool, `SELECT count(*) FROM languages`)
+
+	// Before 00006: users and profiles exist, neither table does.
+	if err := db.MigrateDownTo(ctx, pool, 5); err != nil {
+		t.Fatalf("down to 00005: %v", err)
+	}
+	for _, tbl := range []string{"languages", "user_languages"} {
+		if tableExists(t, pool, tbl) {
+			t.Fatalf("%s exists before 00006", tbl)
+		}
+	}
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := insertGoogleUser(t, pool, "ben@example.com", "1001")
+	if err := insertProfile(pool, ana, "Ana", "Hi"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Up with users and a profile present: nothing is backfilled.
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("up with users present: %v", err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM languages`); n != seeded || n == 0 {
+		t.Errorf("catalog after migrating = %d languages, want %d", n, seeded)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM user_languages`); n != 0 {
+		t.Errorf("user languages after migrating = %d, want 0: existing users get none", n)
+	}
+	if err := insertUserLanguage(pool, ana, "es", "spoken", 7, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := insertUserLanguage(pool, ana, "ja", "learning", 2, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := insertUserLanguage(pool, ben, "ja", "spoken", 7, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	// Down with languages in use: both tables go, in an order the foreign
+	// key allows, and the users, identities and profiles stay.
+	if err := db.MigrateDownTo(ctx, pool, 5); err != nil {
+		t.Fatalf("down with languages present: %v", err)
+	}
+	for _, tbl := range []string{"languages", "user_languages"} {
+		if tableExists(t, pool, tbl) {
+			t.Errorf("%s still exists after rolling 00006 back", tbl)
+		}
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM users u LEFT JOIN user_identities i ON i.user_id = u.id`); n != 2 {
+		t.Errorf("users after rolling back = %d, want 2", n)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM profiles WHERE display_name = 'Ana' AND bio = 'Hi'`); n != 1 {
+		t.Errorf("ana's profile after rolling back: %d rows, want 1", n)
+	}
+
+	// Up again: the same catalog, nobody has a language, and the same users
+	// can choose some.
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM languages`); n != seeded {
+		t.Errorf("catalog after re-applying = %d languages, want %d", n, seeded)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM user_languages`); n != 0 {
+		t.Errorf("user languages after re-applying = %d, want 0", n)
+	}
+	if err := insertUserLanguage(pool, ana, "es", "spoken", 7, 0); err != nil {
+		t.Errorf("choosing a language after re-applying: %v", err)
 	}
 }

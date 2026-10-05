@@ -12,7 +12,8 @@ import (
 )
 
 // DB returns a pool connected to TEST_DATABASE_URL with the schema migrated
-// and all tables empty. It skips the test if the variable is unset.
+// and all tables empty except the language catalog. It skips the test if the
+// variable is unset.
 //
 // Tests using it share one database, so they must not run in parallel
 // (neither t.Parallel nor concurrent packages: use `go test -p 1`).
@@ -33,7 +34,8 @@ func DB(t *testing.T) *pgxpool.Pool {
 	if err := db.Migrate(ctx, pool); err != nil {
 		t.Fatalf("migrate test db: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `TRUNCATE users, user_tokens, sessions, user_identities, profiles CASCADE`); err != nil {
+	// Not languages: the catalog is seeded by its migration and tests need it.
+	if _, err := pool.Exec(ctx, `TRUNCATE users, user_tokens, sessions, user_identities, profiles, user_languages CASCADE`); err != nil {
 		t.Fatalf("truncate test db: %v", err)
 	}
 	return pool

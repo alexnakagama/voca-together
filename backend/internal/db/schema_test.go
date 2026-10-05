@@ -444,3 +444,217 @@ func TestProfilesBelongToAnExistingUser(t *testing.T) {
 		t.Errorf("profiles of a deleted user = %d, want 0", n)
 	}
 }
+
+func insertLanguage(ctx context.Context, db execer, code, name, endonym string) error {
+	_, err := db.Exec(ctx, `INSERT INTO languages (code, name, endonym) VALUES ($1, $2, $3)`, code, name, endonym)
+	return err
+}
+
+func insertUserLanguage(pool *pgxpool.Pool, userID, code, kind string, level, position int) error {
+	_, err := pool.Exec(context.Background(),
+		`INSERT INTO user_languages (user_id, language_code, kind, level, position) VALUES ($1, $2, $3, $4, $5)`,
+		userID, code, kind, level, position)
+	return err
+}
+
+// The catalog comes with the schema: testutil.DB never empties it.
+func TestLanguagesCatalogIsSeeded(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+
+	if n := countRows(t, pool, `SELECT count(*) FROM languages`); n < 90 {
+		t.Errorf("catalog has %d languages, want about a hundred", n)
+	}
+	for code, want := range map[string][2]string{
+		"en":  {"English", "English"},
+		"es":  {"Spanish", "Español"},
+		"ja":  {"Japanese", "日本語"},
+		"ar":  {"Arabic", "العربية"},
+		"zh":  {"Chinese (Mandarin)", "中文"},
+		"yue": {"Cantonese", "粵語"},
+		"fil": {"Filipino", "Filipino"},
+	} {
+		var name, endonym string
+		err := pool.QueryRow(ctx, `SELECT name, endonym FROM languages WHERE code = $1`, code).Scan(&name, &endonym)
+		if err != nil {
+			t.Errorf("language %s: %v", code, err)
+			continue
+		}
+		if name != want[0] || endonym != want[1] {
+			t.Errorf("language %s = %q, %q; want %q, %q", code, name, endonym, want[0], want[1])
+		}
+	}
+
+	// A two-letter code exists for these, so the three-letter one must not
+	// be used: one language, one code.
+	if n := countRows(t, pool, `SELECT count(*) FROM languages WHERE code IN ('eng', 'spa', 'zho', 'cmn', 'jpn', 'tgl')`); n != 0 {
+		t.Errorf("%d languages use a three-letter code although a two-letter one exists", n)
+	}
+	// Endonyms are not unique by constraint (two languages may share a
+	// name for themselves), but none in the seed list should be the name of
+	// another language.
+	if n := countRows(t, pool, `SELECT count(*) FROM languages a JOIN languages b ON a.endonym = b.name AND a.code <> b.code`); n != 0 {
+		t.Errorf("%d endonyms are another language's English name", n)
+	}
+}
+
+func TestLanguagesConstraints(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	before := countRows(t, pool, `SELECT count(*) FROM languages`)
+
+	for _, code := range []string{"", "x", "abcd", "EN", "En", "e1", "pt-BR", "zh_Hant", " en", "en ", "en\n"} {
+		requirePgError(t, insertLanguage(ctx, pool, code, "Test language", "Test"), checkViolation, "languages_code_format")
+	}
+	requirePgError(t, insertLanguage(ctx, pool, "es", "Other Spanish", "Otro"), uniqueViolation, "languages_pkey")
+	requirePgError(t, insertLanguage(ctx, pool, "zzz", "Spanish", "Otro"), uniqueViolation, "languages_name_key")
+
+	for _, name := range []string{"", " Test", "Test ", strings.Repeat("a", 61)} {
+		requirePgError(t, insertLanguage(ctx, pool, "zzz", name, "Test"), checkViolation, "languages_name_text")
+		requirePgError(t, insertLanguage(ctx, pool, "zzz", "Test language", name), checkViolation, "languages_endonym_text")
+	}
+	_, err := pool.Exec(ctx, `INSERT INTO languages (code, name) VALUES ('zzz', 'Test language')`)
+	requirePgError(t, err, notNullViolation, "")
+
+	// What the rules allow: a three-letter code and 60 characters, counted
+	// as characters. Rolled back, because the catalog is shared by every
+	// test.
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if err := insertLanguage(ctx, tx, "zzz", strings.Repeat("a", 60), strings.Repeat("あ", 60)); err != nil {
+		t.Errorf("valid language rejected: %v", err)
+	}
+	var createdAt time.Time
+	if err := tx.QueryRow(ctx, `SELECT created_at FROM languages WHERE code = 'zzz'`).Scan(&createdAt); err != nil || createdAt.IsZero() {
+		t.Errorf("created_at = %v (%v), want now()", createdAt, err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if after := countRows(t, pool, `SELECT count(*) FROM languages`); after != before {
+		t.Errorf("catalog changed from %d to %d languages", before, after)
+	}
+}
+
+func TestUserLanguagesConstraints(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := mustInsertUser(t, pool, "ben@example.com")
+
+	requirePgError(t, insertUserLanguage(pool, ana, "es", "native", 7, 0), checkViolation, "user_languages_kind_check")
+	requirePgError(t, insertUserLanguage(pool, ana, "es", "", 7, 0), checkViolation, "user_languages_kind_check")
+	requirePgError(t, insertUserLanguage(pool, ana, "es", "spoken", 0, 0), checkViolation, "user_languages_level_range")
+	requirePgError(t, insertUserLanguage(pool, ana, "es", "spoken", 8, 0), checkViolation, "user_languages_level_range")
+	requirePgError(t, insertUserLanguage(pool, ana, "es", "learning", 7, 0), checkViolation, "user_languages_native_is_spoken")
+	requirePgError(t, insertUserLanguage(pool, ana, "es", "spoken", 7, -1), checkViolation, "user_languages_position_range")
+	requirePgError(t, insertUserLanguage(pool, ana, "es", "spoken", 7, 5), checkViolation, "user_languages_position_range")
+	for _, column := range []string{"kind", "level", "position"} {
+		_, err := pool.Exec(ctx, `INSERT INTO user_languages (user_id, language_code, kind, level, position)
+			VALUES ($1, 'es', 'spoken', 7, 0)
+			ON CONFLICT DO NOTHING`, ana)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = pool.Exec(ctx, `UPDATE user_languages SET `+column+` = NULL WHERE user_id = $1`, ana)
+		requirePgError(t, err, notNullViolation, "")
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM user_languages WHERE user_id = $1`, ana); n != 1 {
+		t.Fatalf("ana has %d languages, want the one valid row", n)
+	}
+
+	// Every level of each kind, native only when spoken: ana speaks es
+	// natively (above) and five more at most.
+	requirePgError(t, insertUserLanguage(pool, ana, "es", "learning", 3, 0), uniqueViolation, "user_languages_pkey")
+	requirePgError(t, insertUserLanguage(pool, ana, "en", "spoken", 5, 0), uniqueViolation, "user_languages_position_key")
+	for i, code := range []string{"en", "fr", "de", "it"} {
+		if err := insertUserLanguage(pool, ana, code, "spoken", i+1, i+1); err != nil {
+			t.Errorf("spoken %s at level %d: %v", code, i+1, err)
+		}
+	}
+	// The same positions are free in the other kind, and for another user.
+	for i, code := range []string{"ja", "ko", "zh", "yue", "fil"} {
+		if err := insertUserLanguage(pool, ana, code, "learning", i+2, i); err != nil {
+			t.Errorf("learning %s at level %d: %v", code, i+2, err)
+		}
+	}
+	if err := insertUserLanguage(pool, ben, "es", "learning", 1, 0); err != nil {
+		t.Errorf("another user with the same language and position: %v", err)
+	}
+
+	// Both lists are full: positions 0 to 4 are the only ones, so a sixth
+	// language of a kind has nowhere to go.
+	for position := range 5 {
+		requirePgError(t, insertUserLanguage(pool, ana, "pt", "spoken", 4, position), uniqueViolation, "user_languages_position_key")
+		requirePgError(t, insertUserLanguage(pool, ana, "pt", "learning", 4, position), uniqueViolation, "user_languages_position_key")
+	}
+	requirePgError(t, insertUserLanguage(pool, ana, "pt", "spoken", 4, 5), checkViolation, "user_languages_position_range")
+
+	var createdAt time.Time
+	if err := pool.QueryRow(ctx, `SELECT created_at FROM user_languages WHERE user_id = $1 AND language_code = 'es'`, ana).Scan(&createdAt); err != nil || createdAt.IsZero() {
+		t.Errorf("created_at = %v (%v), want now()", createdAt, err)
+	}
+}
+
+func TestUserLanguagesBelongToAnExistingUserAndLanguage(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	requirePgError(t, insertUserLanguage(pool, "00000000-0000-0000-0000-000000000000", "es", "spoken", 7, 0),
+		foreignKeyViolation, "user_languages_user_id_fkey")
+
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := mustInsertUser(t, pool, "ben@example.com")
+	// Well-formed, but not in the catalog; and a name is not a code.
+	for _, code := range []string{"zzz", "Spanish", "ES", ""} {
+		requirePgError(t, insertUserLanguage(pool, ana, code, "spoken", 7, 0), foreignKeyViolation, "user_languages_language_code_fkey")
+	}
+
+	if err := insertUserLanguage(pool, ana, "es", "spoken", 7, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := insertUserLanguage(pool, ana, "ja", "learning", 2, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := insertUserLanguage(pool, ben, "ja", "spoken", 7, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	// A language somebody has can't leave the catalog or change its code.
+	_, err := pool.Exec(ctx, `DELETE FROM languages WHERE code = 'es'`)
+	requirePgError(t, err, foreignKeyViolation, "user_languages_language_code_fkey")
+	_, err = pool.Exec(ctx, `UPDATE languages SET code = 'spa' WHERE code = 'es'`)
+	requirePgError(t, err, foreignKeyViolation, "user_languages_language_code_fkey")
+	if n := countRows(t, pool, `SELECT count(*) FROM languages WHERE code = 'es'`); n != 1 {
+		t.Fatalf("es is in the catalog %d times, want 1", n)
+	}
+
+	// Deleting a user deletes their languages and nobody else's.
+	if _, err := pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, ana); err != nil {
+		t.Fatal(err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM user_languages WHERE user_id = $1`, ana); n != 0 {
+		t.Errorf("languages of a deleted user = %d, want 0", n)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM user_languages WHERE user_id = $1`, ben); n != 1 {
+		t.Errorf("languages of the other user = %d, want 1", n)
+	}
+}
+
+// The lookup discovery will make (who speaks or learns a language, from a
+// level up) has its index, in that column order.
+func TestUserLanguagesByLanguageIndex(t *testing.T) {
+	pool := testutil.DB(t)
+	var def string
+	err := pool.QueryRow(context.Background(),
+		`SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'user_languages_by_language'`).Scan(&def)
+	if err != nil {
+		t.Fatalf("index user_languages_by_language: %v", err)
+	}
+	if !strings.Contains(def, "(language_code, kind, level)") {
+		t.Errorf("index definition = %q, want (language_code, kind, level)", def)
+	}
+}
