@@ -1,6 +1,9 @@
 package language
 
-import "strings"
+import (
+	"errors"
+	"strings"
+)
 
 // The codes of a FieldError. The field is always a Kind: errors are reported
 // per list, not per item.
@@ -34,3 +37,8 @@ func (e *ValidationError) Error() string {
 	}
 	return "language: invalid input: " + strings.Join(codes, ", ")
 }
+
+// ErrUserGone means the user no longer exists, so no languages can be saved
+// for it. Deleting a user deletes its sessions, so the credential that
+// authenticated the request is dead.
+var ErrUserGone = errors.New("language: user gone")

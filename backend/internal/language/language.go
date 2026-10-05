@@ -4,7 +4,14 @@
 // database: what is stored is converted explicitly (levelFromRank).
 package language
 
-import "slices"
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"slices"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
 
 // Kind says what a language is to a member. Its value is the one stored and
 // the name validation errors give the list.
@@ -41,6 +48,15 @@ func parseCode(s string) (Code, bool) {
 	return Code(s), true
 }
 
+// Language is one language of the catalog. Name is its English name and
+// Endonym the name it gives itself ("Spanish", "Español"); both are data, not
+// localized strings.
+type Language struct {
+	Code    Code
+	Name    string
+	Endonym string
+}
+
 // Entry is one language of a member and how well they know it.
 type Entry struct {
 	Code  Code
@@ -71,4 +87,71 @@ type InputEntry struct {
 type Input struct {
 	Spoken   []InputEntry
 	Learning []InputEntry
+}
+
+// Service implements the language use cases.
+type Service struct {
+	pool   *pgxpool.Pool
+	logger *slog.Logger
+}
+
+// NewService returns the language service.
+func NewService(pool *pgxpool.Pool, logger *slog.Logger) *Service {
+	return &Service{pool: pool, logger: logger}
+}
+
+// Catalog returns every language a member can choose, ordered by name. It is
+// the same for everyone.
+func (s *Service) Catalog(ctx context.Context) ([]Language, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("language: catalog: %w", err)
+	}
+	catalog, err := listCatalog(ctx, s.pool)
+	if err != nil {
+		return nil, fmt.Errorf("language: catalog: %w", err)
+	}
+	return catalog, nil
+}
+
+// Get returns the languages of the user userID; both lists are empty if they
+// haven't chosen any. userID must be the authenticated user: it is the only
+// thing that selects a selection.
+func (s *Service) Get(ctx context.Context, userID string) (Selection, error) {
+	if err := ctx.Err(); err != nil {
+		return Selection{}, fmt.Errorf("language: get: %w", err)
+	}
+	sel, err := findSelection(ctx, s.pool, userID)
+	if err != nil {
+		return Selection{}, fmt.Errorf("language: get: %w", err)
+	}
+	return sel, nil
+}
+
+// Save replaces all the languages of the user userID with in, in the order
+// given, and returns them as stored. Saving two empty lists removes them
+// all. Invalid input, a language that isn't in the catalog included, returns
+// a *ValidationError and writes nothing; a user that no longer exists
+// returns ErrUserGone.
+//
+// The write is one transaction, so it is atomic, and saving is idempotent:
+// saving the selection the user already has writes nothing and logs nothing,
+// which makes any retry safe. Concurrent saves are applied one after the
+// other and the last one wins whole (replaceSelection).
+func (s *Service) Save(ctx context.Context, userID string, in Input) (Selection, error) {
+	want, err := parse(in)
+	if err != nil {
+		return Selection{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return Selection{}, fmt.Errorf("language: save: %w", err)
+	}
+	changed, err := replaceSelection(ctx, s.pool, userID, want)
+	if err != nil {
+		return Selection{}, fmt.Errorf("language: save: %w", err)
+	}
+	if changed {
+		// The user and nothing they chose.
+		s.logger.InfoContext(ctx, "languages: saved", "user_id", userID)
+	}
+	return want, nil
 }
