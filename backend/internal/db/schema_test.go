@@ -472,7 +472,7 @@ func TestLanguagesCatalogIsSeeded(t *testing.T) {
 		"ar":  {"Arabic", "العربية"},
 		"zh":  {"Chinese (Mandarin)", "中文"},
 		"yue": {"Cantonese", "粵語"},
-		"fil": {"Filipino", "Filipino"},
+		"fil": {"Filipino (Tagalog)", "Filipino"},
 	} {
 		var name, endonym string
 		err := pool.QueryRow(ctx, `SELECT name, endonym FROM languages WHERE code = $1`, code).Scan(&name, &endonym)
