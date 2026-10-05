@@ -235,6 +235,172 @@ void main() {
     });
   });
 
+  group('profile', () {
+    final body = {
+      'display_name': 'Ana López',
+      'bio': 'Learning Japanese.',
+      'created_at': '2026-10-01T10:00:00.123456Z',
+      'updated_at': '2026-10-02T08:00:00+02:00',
+    };
+
+    test('parses the profile', () async {
+      server.once('GET', ApiPaths.profile, (_) => jsonResponse(200, body));
+      final profile = await api.profile(accessToken: accessToken('1'));
+      expect(profile!.displayName, 'Ana López');
+      expect(profile.bio, 'Learning Japanese.');
+      expect(profile.createdAt, DateTime.utc(2026, 10, 1, 10, 0, 0, 123, 456));
+      expect(profile.updatedAt, DateTime.utc(2026, 10, 2, 6));
+      final request = server.requests.single;
+      expect(request.headers['Authorization'], 'Bearer ${accessToken('1')}');
+      expect(request.bodyBytes, isEmpty);
+      // What a member wrote is personal data: never in a string.
+      expect('$profile', isNot(contains('Ana')));
+      expect('$profile', isNot(contains('Japanese')));
+    });
+
+    test('an empty bio is a profile', () async {
+      server.once(
+        'GET',
+        ApiPaths.profile,
+        (_) => jsonResponse(200, {...body, 'bio': ''}),
+      );
+      final profile = await api.profile(accessToken: accessToken('1'));
+      expect(profile!.bio, '');
+    });
+
+    test('no profile yet is null, for the backend\'s own 404 only', () async {
+      server.once('GET', ApiPaths.profile, (_) => noProfile());
+      expect(await api.profile(accessToken: accessToken('1')), isNull);
+
+      // A 404 that isn't the backend saying "none saved" (a proxy's page, an
+      // older backend without the route) is an error, not an empty profile.
+      for (final response in [
+        http.Response('Not Found', 404),
+        errorResponse(404, 'not_found'),
+        errorResponse(410, 'profile_not_found'),
+      ]) {
+        server.once('GET', ApiPaths.profile, (_) => response);
+        await expectLater(
+          api.profile(accessToken: accessToken('1')),
+          throwsA(isA<ApiHttpException>()),
+        );
+      }
+    });
+
+    test('rejects a malformed profile', () async {
+      for (final b in [
+        {...body}..remove('display_name'),
+        {...body}..remove('bio'),
+        {...body, 'display_name': ''},
+        {...body, 'display_name': 5},
+        {...body, 'bio': null},
+        {...body, 'created_at': 'yesterday'},
+        {...body, 'updated_at': null},
+        <Object?>[body],
+      ]) {
+        server
+          ..once('GET', ApiPaths.profile, (_) => jsonResponse(200, b))
+          ..once('PUT', ApiPaths.profile, (_) => jsonResponse(200, b));
+        await expectLater(
+          api.profile(accessToken: accessToken('1')),
+          throwsA(_protocol(ProtocolFailure.malformedBody, 200)),
+        );
+        await expectLater(
+          api.saveProfile(
+            accessToken: accessToken('1'),
+            displayName: 'Ana',
+            bio: '',
+          ),
+          throwsA(_protocol(ProtocolFailure.malformedBody, 200)),
+        );
+      }
+    });
+
+    test('saveProfile PUTs exactly the two fields, as typed', () async {
+      server.once('PUT', ApiPaths.profile, (_) => jsonResponse(200, body));
+      final saved = await api.saveProfile(
+        accessToken: accessToken('1'),
+        displayName: '  Ana   López ',
+        bio: 'Learning Japanese.\n',
+      );
+      // The server's normalized text is what comes back.
+      expect(saved.displayName, 'Ana López');
+      final request = server.requests.single;
+      expect(request.method, 'PUT');
+      expect(request.headers['Authorization'], 'Bearer ${accessToken('1')}');
+      expect(_body(request), {
+        'display_name': '  Ana   López ',
+        'bio': 'Learning Japanese.\n',
+      });
+    });
+
+    test('both calls require exactly 200', () async {
+      server
+        ..once('GET', ApiPaths.profile, (_) => jsonResponse(203, body))
+        ..once('PUT', ApiPaths.profile, (_) => jsonResponse(201, body));
+      await expectLater(
+        api.profile(accessToken: accessToken('1')),
+        throwsA(_protocol(ProtocolFailure.unexpectedStatus, 203)),
+      );
+      await expectLater(
+        api.saveProfile(
+          accessToken: accessToken('1'),
+          displayName: 'Ana',
+          bio: '',
+        ),
+        throwsA(_protocol(ProtocolFailure.unexpectedStatus, 201)),
+      );
+    });
+
+    test('saveProfile surfaces validation errors with their fields', () async {
+      server.once(
+        'PUT',
+        ApiPaths.profile,
+        (_) => jsonResponse(422, {
+          'error': {
+            'code': 'validation_failed',
+            'fields': [
+              {'field': 'display_name', 'code': 'too_long'},
+              {'field': 'bio', 'code': 'invalid'},
+            ],
+          },
+        }),
+      );
+      await expectLater(
+        api.saveProfile(
+          accessToken: accessToken('1'),
+          displayName: 'x' * 51,
+          bio: 'y',
+        ),
+        throwsA(
+          isA<ApiHttpException>()
+              .having((e) => e.code, 'code', 'validation_failed')
+              .having(
+                (e) => e.fields.map((f) => '${f.field}:${f.code}'),
+                'fields',
+                ['display_name:too_long', 'bio:invalid'],
+              ),
+        ),
+      );
+    });
+
+    test('refuses a refresh token as bearer', () {
+      expect(
+        () => api.profile(accessToken: refreshToken('1')),
+        throwsArgumentError,
+      );
+      expect(
+        () => api.saveProfile(
+          accessToken: refreshToken('1'),
+          displayName: 'Ana',
+          bio: '',
+        ),
+        throwsArgumentError,
+      );
+      expect(server.requests, isEmpty);
+    });
+  });
+
   group('healthz', () {
     test('sends nothing but the probe', () async {
       server.once('GET', ApiPaths.healthz, (_) => healthy());

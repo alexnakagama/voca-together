@@ -42,6 +42,46 @@ func NewIPLimits(logger *slog.Logger) IPLimits {
 	}
 }
 
+// maxTrackedUsers caps each per-user limiter's memory, like maxTrackedIPs.
+const maxTrackedUsers = 100_000
+
+// UserLimits are the per-user limiters of protected routes that write
+// (decision 027), keyed by the authenticated user's ID. A nil limiter allows
+// everything, so the zero value disables limiting (tests).
+type UserLimits struct {
+	ProfileWrite *ratelimit.Limiter[string] // PUT /v1/me/profile
+}
+
+// NewUserLimits returns the production per-user limits. They are far above
+// what editing a profile by hand needs and bound the writes one account can
+// make the database do.
+func NewUserLimits(logger *slog.Logger) UserLimits {
+	return UserLimits{
+		ProfileWrite: ratelimit.New[string]("user_profile_write", 10, 6*time.Second, maxTrackedUsers, logger), // 10/min
+	}
+}
+
+// limitByUser returns middleware that answers 429 rate_limited once the
+// authenticated user's bucket in l is empty. It must run behind
+// requireAccessToken, and runs before the body is read, so malformed
+// requests cost a token too.
+func limitByUser(logger *slog.Logger, l *ratelimit.Limiter[string]) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			id, ok := identityFrom(r.Context())
+			if !ok {
+				writeServiceError(w, r, logger, errNoIdentity)
+				return
+			}
+			if ok, retryAfter := l.Allow(id.UserID); !ok {
+				writeRateLimited(w, retryAfter)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // limitByIP returns middleware that answers with reject once the client's
 // bucket in l is empty. It runs before the body is read, so malformed
 // requests cost a token too.

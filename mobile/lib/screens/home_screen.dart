@@ -1,9 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../api/me.dart';
 import '../l10n/app_localizations.dart';
+import '../router.dart';
 import '../session.dart';
 import '../ui/theme.dart';
 import '../ui/widgets/auth_scaffold.dart';
@@ -13,7 +15,8 @@ import '../ui/widgets/secondary_button.dart';
 import 'failure_presentation.dart';
 
 /// The signed-in home screen: the account (`GET /v1/me` through
-/// [SessionManager.me]) and logging out (decision 024).
+/// [SessionManager.me]), the way to the user's profile, and logging out
+/// (decisions 024 and 028).
 ///
 /// It never decides access. When the session ends, during a request or by
 /// logging out, the router leaves this screen on its own.
@@ -60,6 +63,9 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() => _error = failure.message);
     }
   }
+
+  // Pushed, so Android back returns here.
+  void _openProfile() => unawaited(context.push(Routes.profile));
 
   Future<void> _logOut() async {
     if (_loggingOut) return;
@@ -135,6 +141,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   content,
                   const SizedBox(height: Spacing.xl),
+                  SecondaryButton(
+                    label: l10n.profileButton,
+                    onPressed: _loggingOut ? null : _openProfile,
+                  ),
+                  const SizedBox(height: Spacing.md),
                   SecondaryButton(
                     label: l10n.logOutButton,
                     onPressed: _logOut,

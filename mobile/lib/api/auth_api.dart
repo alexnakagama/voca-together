@@ -5,9 +5,10 @@ import 'api_client.dart';
 import 'api_exception.dart';
 import 'api_paths.dart';
 import 'me.dart';
+import 'profile.dart';
 
-/// The token-bearing calls: sign-in, refresh, logout, `GET /v1/me` and the
-/// reachability probe.
+/// The token-bearing calls: sign-in, refresh, logout, `GET /v1/me`, the
+/// user's profile and the reachability probe.
 ///
 /// **Internal to the session layer** (decision 023): only `main` builds it
 /// and only `SessionManager` holds it. It returns [AuthTokens] and takes raw
@@ -17,8 +18,8 @@ import 'me.dart';
 ///
 /// Stateless transport: it knows paths, bodies and expected statuses, and
 /// nothing about sessions. Tokens go in only where the backend reads them:
-/// the access token in `Authorization` (logout, me), the refresh token in the
-/// refresh body, the Google ID token in the google body. Nothing is retried;
+/// the access token in `Authorization` (logout, me, profile), the refresh token
+/// in the refresh body, the Google ID token in the google body. Nothing is retried;
 /// failures are [ApiException]s.
 class AuthApi {
   AuthApi(this._client);
@@ -75,6 +76,50 @@ class AuthApi {
     );
     _expectStatus(r, 200);
     return Me.fromJson(r.json);
+  }
+
+  /// `GET /v1/me/profile` with the access token → 200, or null when the user
+  /// hasn't saved a profile (027).
+  ///
+  /// Null only for the backend's own 404 `profile_not_found`. Any other 404
+  /// (a proxy's page, a backend without the route) stays an error, so a
+  /// broken deployment never looks like an empty profile.
+  Future<Profile?> profile({required String accessToken}) async {
+    final ApiResult r;
+    try {
+      r = await _client.send(
+        'GET',
+        ApiPaths.profile,
+        bearer: accessToken,
+        timeout: requestTimeout,
+      );
+    } on ApiHttpException catch (e) {
+      if (e.statusCode == 404 && e.code == 'profile_not_found') return null;
+      rethrow;
+    }
+    _expectStatus(r, 200);
+    return Profile.fromJson(r.json);
+  }
+
+  /// `PUT /v1/me/profile` with the access token → 200 with the profile as
+  /// stored (027). Replaces the whole profile, creating it if there is none.
+  /// The text is sent as given; the backend normalizes and validates it.
+  ///
+  /// Idempotent on the server, so sending the same save twice is harmless.
+  Future<Profile> saveProfile({
+    required String accessToken,
+    required String displayName,
+    required String bio,
+  }) async {
+    final r = await _client.send(
+      'PUT',
+      ApiPaths.profile,
+      json: {'display_name': displayName, 'bio': bio},
+      bearer: accessToken,
+      timeout: requestTimeout,
+    );
+    _expectStatus(r, 200);
+    return Profile.fromJson(r.json);
   }
 
   /// `GET /healthz`: whether the API answers at all. Any 2xx is success.

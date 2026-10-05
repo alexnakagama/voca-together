@@ -1,11 +1,16 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
+
+	"vocatogether/backend/internal/auth"
+	"vocatogether/backend/internal/profile"
 )
 
 // Error responses have the shape
@@ -28,6 +33,8 @@ const (
 	codeInvalidGoogleToken  = "invalid_google_token"
 	codeGoogleEmailUnusable = "google_email_unusable"
 	codeAccountExists       = "account_exists"
+
+	codeProfileNotFound = "profile_not_found"
 
 	codeRateLimited        = "rate_limited"
 	codeServiceUnavailable = "service_unavailable"
@@ -91,4 +98,88 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64)
 		return errors.New("unexpected data after JSON value")
 	}
 	return nil
+}
+
+// writeServiceError maps a service error (auth or profile) to a response:
+// validation errors to 422 with their fields, login, refresh, access-token
+// and Google sign-in outcomes to 401/403/409, a missing profile to 404, a
+// spent per-account limit to 429, overload, unavailable Google keys or the
+// request deadline to 503, anything else to an opaque 500 whose details go
+// only to the log. Service errors never contain secrets or profile text.
+func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, err error) {
+	var verr *auth.ValidationError
+	var profileErr *profile.ValidationError
+	var limited *auth.RateLimitedError
+	switch {
+	case errors.As(err, &verr):
+		writeValidationFailed(w, fieldErrors(verr.Fields))
+		return
+	case errors.As(err, &profileErr):
+		writeValidationFailed(w, fieldErrors(profileErr.Fields))
+		return
+	case errors.As(err, &limited):
+		writeRateLimited(w, limited.RetryAfter)
+		return
+	case unavailable(err):
+		logger.WarnContext(r.Context(), "request unavailable", "route", r.Pattern, "err", err)
+		writeUnavailable(w)
+		return
+	case errors.Is(err, auth.ErrInvalidCredentials):
+		writeError(w, http.StatusUnauthorized, codeInvalidCredentials)
+		return
+	case errors.Is(err, auth.ErrEmailNotVerified):
+		writeError(w, http.StatusForbidden, codeEmailNotVerified)
+		return
+	case errors.Is(err, auth.ErrInvalidRefreshToken):
+		writeError(w, http.StatusUnauthorized, codeInvalidRefreshToken)
+		return
+	case errors.Is(err, profile.ErrNotFound):
+		writeError(w, http.StatusNotFound, codeProfileNotFound)
+		return
+	// profile.ErrUserGone: the user was deleted after authentication, and
+	// their sessions with them, so the credential is dead (decision 016).
+	case errors.Is(err, auth.ErrInvalidAccessToken), errors.Is(err, profile.ErrUserGone):
+		// The HTTP Bearer scheme (RFC 6750 3), unlike login's credential form.
+		w.Header().Set("WWW-Authenticate", "Bearer")
+		writeError(w, http.StatusUnauthorized, codeInvalidAccessToken)
+		return
+	case errors.Is(err, auth.ErrInvalidGoogleToken):
+		// A credential in the body, like login's: no WWW-Authenticate.
+		writeError(w, http.StatusUnauthorized, codeInvalidGoogleToken)
+		return
+	case errors.Is(err, auth.ErrGoogleEmailUnusable):
+		writeError(w, http.StatusForbidden, codeGoogleEmailUnusable)
+		return
+	case errors.Is(err, auth.ErrAccountExists):
+		writeError(w, http.StatusConflict, codeAccountExists)
+		return
+	}
+	logger.ErrorContext(r.Context(), "request failed", "route", r.Pattern, "err", err)
+	writeError(w, http.StatusInternalServerError, codeInternalError)
+}
+
+// unavailable reports whether err means the server couldn't serve the request
+// in time: the argon2 queue was full, Google's signing keys couldn't be
+// fetched, or the request deadline passed (requestDeadline; a client
+// disconnect is Canceled, not DeadlineExceeded).
+func unavailable(err error) bool {
+	return errors.Is(err, auth.ErrOverloaded) || errors.Is(err, auth.ErrGoogleUnavailable) ||
+		errors.Is(err, context.DeadlineExceeded)
+}
+
+// fieldErrors converts a domain package's field errors, which all have the
+// same shape, to the response's.
+func fieldErrors[F auth.FieldError | profile.FieldError](in []*F) []fieldError {
+	out := make([]fieldError, len(in))
+	for i, f := range in {
+		out[i] = fieldError(*f)
+	}
+	return out
+}
+
+// writeValidationFailed answers 422 validation_failed with every failing
+// field.
+func writeValidationFailed(w http.ResponseWriter, fields []fieldError) {
+	writeJSON(w, http.StatusUnprocessableEntity,
+		errorResponse{Error: errorBody{Code: codeValidationFailed, Fields: fields}})
 }

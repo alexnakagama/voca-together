@@ -15,6 +15,7 @@ import (
 
 	"vocatogether/backend/internal/auth"
 	"vocatogether/backend/internal/email"
+	"vocatogether/backend/internal/profile"
 	"vocatogether/backend/internal/testutil"
 )
 
@@ -30,6 +31,12 @@ type testAPI struct {
 
 func newTestAPI(t *testing.T) testAPI {
 	t.Helper()
+	return newTestAPIWith(t, Options{})
+}
+
+// newTestAPIWith is newTestAPI with the given server options.
+func newTestAPIWith(t *testing.T, opts Options) testAPI {
+	t.Helper()
 	pool := testutil.DB(t)
 	rec := &email.Recorder{}
 	logs := &bytes.Buffer{}
@@ -37,7 +44,7 @@ func newTestAPI(t *testing.T) testAPI {
 	base, _ := url.Parse("https://api.example.com")
 	svc := auth.NewService(pool, rec, base, logger, auth.AccountLimits{}, nil)
 	t.Cleanup(svc.Wait)
-	return testAPI{handler: New(logger, svc, Options{}), svc: svc, pool: pool, emails: rec, logs: logs}
+	return testAPI{handler: New(logger, svc, profile.NewService(pool, logger), opts), svc: svc, pool: pool, emails: rec, logs: logs}
 }
 
 func (a testAPI) post(body string) *httptest.ResponseRecorder {
@@ -158,7 +165,7 @@ func TestRegisterInternalErrorIsOpaque(t *testing.T) {
 
 func TestRegisterRejectsOtherMethods(t *testing.T) {
 	rec := httptest.NewRecorder()
-	New(slog.New(slog.DiscardHandler), nil, Options{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, registerPath, nil))
+	New(slog.New(slog.DiscardHandler), nil, nil, Options{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, registerPath, nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want 405", rec.Code)
 	}

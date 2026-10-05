@@ -249,6 +249,22 @@ Map<String, Object?> meBody({
   'created_at': createdAt,
 };
 
+/// A `GET`/`PUT /v1/me/profile` 200 body.
+Map<String, Object?> profileBody({
+  String displayName = 'Ana',
+  String bio = '',
+  String createdAt = '2026-03-15T12:00:00Z',
+  String? updatedAt,
+}) => {
+  'display_name': displayName,
+  'bio': bio,
+  'created_at': createdAt,
+  'updated_at': updatedAt ?? createdAt,
+};
+
+/// The 404 of a user who hasn't saved a profile.
+http.Response noProfile() => errorResponse(404, 'profile_not_found');
+
 /// A responder for a connection that fails (DNS, refused, reset).
 http.Response networkFailure(http.Request _) =>
     throw http.ClientException('connection failed');

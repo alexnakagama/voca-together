@@ -252,4 +252,53 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get errorAccountExists =>
       'There’s already a VocaTogether account for this Google account’s email. Log in the way that account was set up.';
+
+  @override
+  String get profileButton => 'Profile';
+
+  @override
+  String get profileTitle => 'Your profile';
+
+  @override
+  String get profileLoading => 'Loading your profile';
+
+  @override
+  String get profileCreateHeading => 'Create your profile';
+
+  @override
+  String get profileEditHeading => 'Edit your profile';
+
+  @override
+  String get profileVisibilityNotice =>
+      'Other members will be able to see your name and what you write about yourself. Your email address stays private.';
+
+  @override
+  String get displayNameLabel => 'Name';
+
+  @override
+  String get bioLabel => 'About you (optional)';
+
+  @override
+  String get profileSaveButton => 'Save';
+
+  @override
+  String get profileSaved => 'Profile saved.';
+
+  @override
+  String get displayNameRequired => 'Enter your name';
+
+  @override
+  String get errorDisplayNameTooLong =>
+      'This name is too long. Use a shorter one.';
+
+  @override
+  String get errorDisplayNameInvalid =>
+      'This name can’t be used. It needs at least one letter or number and can’t contain hidden or special control characters.';
+
+  @override
+  String get errorBioTooLong => 'This text is too long. Make it shorter.';
+
+  @override
+  String get errorBioInvalid =>
+      'This text contains characters that can’t be used. Remove them and try again.';
 }

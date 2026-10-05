@@ -114,12 +114,29 @@ void main() {
       expect(sent, isEmpty);
     });
 
-    test('rejects methods other than GET and POST', () {
+    test('rejects methods other than GET, POST and PUT', () {
       final api = clientAnswering((_) => healthy());
-      expect(
-        () => api.send('DELETE', '/v1/me', timeout: _timeout),
-        throwsArgumentError,
+      for (final method in ['DELETE', 'PATCH', 'HEAD', 'put']) {
+        expect(
+          () => api.send(method, '/v1/me', timeout: _timeout),
+          throwsArgumentError,
+          reason: method,
+        );
+      }
+    });
+
+    test('sends PUT with its JSON body', () async {
+      final api = clientAnswering((_) => healthy());
+      await api.send(
+        'PUT',
+        '/v1/me/profile',
+        json: {'display_name': 'Ana'},
+        timeout: _timeout,
       );
+      expect(sent.single.method, 'PUT');
+      expect(sent.single.url.path, '/v1/me/profile');
+      expect(sent.single.headers['Content-Type'], 'application/json');
+      expect(sent.single.body, '{"display_name":"Ana"}');
     });
   });
 

@@ -62,6 +62,8 @@ final class FailurePresentation {
     this.message,
     this.emailError,
     this.passwordError,
+    this.displayNameError,
+    this.bioError,
   });
 
   final FailureKind kind;
@@ -73,6 +75,10 @@ final class FailurePresentation {
   /// Errors for the email and password fields (422 `fields`).
   final String? emailError;
   final String? passwordError;
+
+  /// Errors for the profile's name and "about you" fields (422 `fields`).
+  final String? displayNameError;
+  final String? bioError;
 }
 
 /// The app's one mapping from a failed call to what the user is told
@@ -131,7 +137,9 @@ FailurePresentation _fromHttp(ApiHttpException e, AppLocalizations l10n) {
         FailureKind.sessionInvalid,
         message: l10n.errorSessionInvalid,
       );
-    case 'internal_error' || 'invalid_request':
+    // profile_not_found never reaches a screen: the session answers "no
+    // profile" instead (027).
+    case 'internal_error' || 'invalid_request' || 'profile_not_found':
       return _unexpected(l10n);
     // Google sign-in (020). The server didn't accept what Google returned;
     // the next attempt asks Google again.
@@ -166,6 +174,8 @@ FailurePresentation _fromHttp(ApiHttpException e, AppLocalizations l10n) {
 FailurePresentation _validation(ApiHttpException e, AppLocalizations l10n) {
   String? email;
   String? password;
+  String? displayName;
+  String? bio;
   var unshown = e.fields.isEmpty;
   for (final f in e.fields) {
     final text = switch ((f.field, f.code)) {
@@ -175,14 +185,26 @@ FailurePresentation _validation(ApiHttpException e, AppLocalizations l10n) {
       ('password', 'too_long') => l10n.errorPasswordTooLong,
       ('password', 'too_common') => l10n.errorPasswordTooCommon,
       ('password', 'same_as_email') => l10n.errorPasswordSameAsEmail,
+      ('display_name', 'required') => l10n.displayNameRequired,
+      ('display_name', 'too_long') => l10n.errorDisplayNameTooLong,
+      ('display_name', 'invalid') => l10n.errorDisplayNameInvalid,
+      ('bio', 'too_long') => l10n.errorBioTooLong,
+      ('bio', 'invalid') => l10n.errorBioInvalid,
       _ => null,
     };
     if (text == null) {
       unshown = true;
-    } else if (f.field == 'email') {
-      email ??= text;
-    } else {
-      password ??= text;
+      continue;
+    }
+    switch (f.field) {
+      case 'email':
+        email ??= text;
+      case 'password':
+        password ??= text;
+      case 'display_name':
+        displayName ??= text;
+      case 'bio':
+        bio ??= text;
     }
   }
   return FailurePresentation(
@@ -190,6 +212,8 @@ FailurePresentation _validation(ApiHttpException e, AppLocalizations l10n) {
     message: unshown ? l10n.errorCheckInput : null,
     emailError: email,
     passwordError: password,
+    displayNameError: displayName,
+    bioError: bio,
   );
 }
 

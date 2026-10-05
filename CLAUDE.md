@@ -60,8 +60,9 @@ not trigger it. When planning or answering without having touched such a path, r
 ## Architecture boundaries
 
 - Backend dependency direction: `cmd/api/main.go` builds everything → `internal/server` (HTTP only) →
-  `internal/auth` (domain) → `internal/email`, `internal/googleid`. Never the reverse. Only `main` reads
-  configuration; domain packages never read the request context.
+  `internal/auth` and `internal/profile` (domains; `profile` never imports `auth`); `internal/auth` →
+  `internal/email`, `internal/googleid`. Never the reverse. Only `main` reads configuration; domain packages never
+  read the request context.
 - Migrations: add new numbered files in `backend/internal/db/migrations/`; never edit applied ones.
 - Mobile: `main.dart` is the composition root and the only place long-lived objects are built. Pass them down by
   constructor: no provider/riverpod/bloc/get_it, no top-level mutable state.

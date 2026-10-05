@@ -102,6 +102,16 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
     ..once('GET', ApiPaths.me, (_) => _echo(500))
     ..once('GET', ApiPaths.me, (_) => jsonResponse(200, meBody(email: _email)))
     ..once('POST', ApiPaths.logout, (_) => _echo(500))
+    // The profile: an echoing load failure, none saved, an echoing refusal
+    // of the save, then saved.
+    ..once('GET', ApiPaths.profile, (_) => _echo(500))
+    ..once('GET', ApiPaths.profile, (_) => noProfile())
+    ..once('PUT', ApiPaths.profile, (_) => _echo(422))
+    ..once(
+      'PUT',
+      ApiPaths.profile,
+      (_) => jsonResponse(200, profileBody(displayName: 'Ana', bio: 'Hi')),
+    )
     // Google: an echoing 409, an echoing 500, then a session.
     ..once(
       'POST',
@@ -179,6 +189,33 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
   await tapAndSettle(tester, find.widgetWithText(FilledButton, l10n.tryAgain));
   record();
   _checkScreen(tester, emailAllowed: true);
+
+  // The profile: its route names nobody, and neither the account's email
+  // nor anything a server echoes is shown on it.
+  await tapAndSettle(
+    tester,
+    find.widgetWithText(OutlinedButton, l10n.profileButton),
+  );
+  record();
+  expect(app.location(tester), '/profile');
+  _checkScreen(tester);
+  await tapAndSettle(tester, find.widgetWithText(FilledButton, l10n.tryAgain));
+  _checkScreen(tester);
+  final save = find.widgetWithText(FilledButton, l10n.profileSaveButton);
+  await tester.enterText(field(l10n.displayNameLabel), 'Ana');
+  await tester.enterText(field(l10n.bioLabel), 'Hi');
+  await tapAndSettle(tester, save);
+  record();
+  _checkScreen(tester);
+  await tapAndSettle(tester, save);
+  record();
+  _checkScreen(tester);
+  expect(find.text(l10n.profileSaved), findsOneWidget);
+  await tester.pageBack();
+  await tester.pumpAndSettle();
+  record();
+  expect(app.location(tester), '/home');
+
   await tapAndSettle(
     tester,
     find.widgetWithText(OutlinedButton, l10n.logOutButton),

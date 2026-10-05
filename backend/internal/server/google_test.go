@@ -19,6 +19,7 @@ import (
 	"vocatogether/backend/internal/auth"
 	"vocatogether/backend/internal/email"
 	"vocatogether/backend/internal/googleid"
+	"vocatogether/backend/internal/profile"
 	"vocatogether/backend/internal/ratelimit"
 	"vocatogether/backend/internal/testutil"
 )
@@ -65,7 +66,7 @@ func newGoogleTestAPI(t *testing.T, limits auth.AccountLimits) googleAPI {
 	svc := auth.NewService(pool, rec, base, logger, limits, verifier)
 	t.Cleanup(svc.Wait)
 	return googleAPI{
-		testAPI:  testAPI{handler: New(logger, svc, Options{}), svc: svc, pool: pool, emails: rec, logs: logs},
+		testAPI:  testAPI{handler: New(logger, svc, profile.NewService(pool, logger), Options{}), svc: svc, pool: pool, emails: rec, logs: logs},
 		verifier: verifier,
 	}
 }
@@ -298,7 +299,7 @@ func TestGoogleSignInEndpointUnusableTokensAreIdentical(t *testing.T) {
 	base, _ := url.Parse("https://api.example.com")
 	discard := slog.New(slog.DiscardHandler)
 	notConfigured := testAPI{handler: New(discard,
-		auth.NewService(api.pool, &email.Recorder{}, base, discard, auth.AccountLimits{}, nil), Options{})}
+		auth.NewService(api.pool, &email.Recorder{}, base, discard, auth.AccountLimits{}, nil), nil, Options{})}
 
 	responses := map[string]*httptest.ResponseRecorder{
 		"unknown":        api.google(googleBody("eyJhbGciOiJSUzI1NiJ9.unknown.token")),
@@ -478,7 +479,7 @@ func TestGoogleSignInEndpointLogsNoSecrets(t *testing.T) {
 }
 
 func TestGoogleSignInEndpointIsPostOnly(t *testing.T) {
-	h := New(slog.New(slog.DiscardHandler), nil, Options{})
+	h := New(slog.New(slog.DiscardHandler), nil, nil, Options{})
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(method, googlePath, nil))

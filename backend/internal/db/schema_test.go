@@ -240,7 +240,10 @@ func TestSessionsExpiriesWithinAbsoluteLifetime(t *testing.T) {
 	requirePgError(t, insert(hash(5), hash(6), "15 minutes", "91 days"), checkViolation, "sessions_expiry_order")
 }
 
-const foreignKeyViolation = "23503"
+const (
+	foreignKeyViolation = "23503"
+	notNullViolation    = "23502"
+)
 
 // insertGoogleUser creates a passwordless user and its Google identity in one
 // transaction, the only way such a user can be committed (decision 020).
@@ -354,4 +357,90 @@ func countRows(t *testing.T, pool *pgxpool.Pool, query string, args ...any) int 
 		t.Fatal(err)
 	}
 	return n
+}
+
+func insertProfile(pool *pgxpool.Pool, userID, displayName, bio string) error {
+	_, err := pool.Exec(context.Background(),
+		`INSERT INTO profiles (user_id, display_name, bio) VALUES ($1, $2, $3)`, userID, displayName, bio)
+	return err
+}
+
+func TestProfilesDefaults(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	uid := mustInsertUser(t, pool, "ana@example.com")
+	if _, err := pool.Exec(ctx, `INSERT INTO profiles (user_id, display_name) VALUES ($1, 'Ana')`, uid); err != nil {
+		t.Fatal(err)
+	}
+
+	var bio *string
+	var createdAt, updatedAt time.Time
+	err := pool.QueryRow(ctx, `SELECT bio, created_at, updated_at FROM profiles WHERE user_id = $1`, uid).
+		Scan(&bio, &createdAt, &updatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bio == nil || *bio != "" {
+		t.Errorf("bio = %v, want the empty string (never NULL)", bio)
+	}
+	if createdAt.IsZero() || updatedAt.IsZero() {
+		t.Error("timestamps must default to now()")
+	}
+
+	_, err = pool.Exec(ctx, `UPDATE profiles SET bio = NULL WHERE user_id = $1`, uid)
+	requirePgError(t, err, notNullViolation, "")
+}
+
+// The primary key is the user: a second profile for the same user is refused.
+func TestProfilesOnePerUser(t *testing.T) {
+	pool := testutil.DB(t)
+	uid := mustInsertUser(t, pool, "ana@example.com")
+	if err := insertProfile(pool, uid, "Ana", ""); err != nil {
+		t.Fatal(err)
+	}
+	requirePgError(t, insertProfile(pool, uid, "Ana again", ""), uniqueViolation, "profiles_pkey")
+}
+
+func TestProfilesDisplayNameConstraints(t *testing.T) {
+	pool := testutil.DB(t)
+	uid := mustInsertUser(t, pool, "ana@example.com")
+
+	requirePgError(t, insertProfile(pool, uid, "", ""), checkViolation, "profiles_display_name_length")
+	requirePgError(t, insertProfile(pool, uid, strings.Repeat("a", 51), ""), checkViolation, "profiles_display_name_length")
+	requirePgError(t, insertProfile(pool, uid, " Ana", ""), checkViolation, "profiles_display_name_trimmed")
+	requirePgError(t, insertProfile(pool, uid, "Ana ", ""), checkViolation, "profiles_display_name_trimmed")
+
+	// The limit counts characters, not bytes: 50 three-byte characters fit.
+	if err := insertProfile(pool, uid, strings.Repeat("あ", 50), ""); err != nil {
+		t.Errorf("50-character name rejected: %v", err)
+	}
+}
+
+func TestProfilesBioLength(t *testing.T) {
+	pool := testutil.DB(t)
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := mustInsertUser(t, pool, "ben@example.com")
+
+	requirePgError(t, insertProfile(pool, ana, "Ana", strings.Repeat("a", 501)), checkViolation, "profiles_bio_length")
+	if err := insertProfile(pool, ben, "Ben", strings.Repeat("あ", 500)); err != nil {
+		t.Errorf("500-character bio rejected: %v", err)
+	}
+}
+
+func TestProfilesBelongToAnExistingUser(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	requirePgError(t, insertProfile(pool, "00000000-0000-0000-0000-000000000000", "Nobody", ""),
+		foreignKeyViolation, "profiles_user_id_fkey")
+
+	uid := mustInsertUser(t, pool, "ana@example.com")
+	if err := insertProfile(pool, uid, "Ana", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, uid); err != nil {
+		t.Fatal(err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM profiles`); n != 0 {
+		t.Errorf("profiles of a deleted user = %d, want 0", n)
+	}
 }

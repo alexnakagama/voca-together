@@ -310,5 +310,65 @@
   "errorAccountExists": "There’s already a VocaTogether account for this Google account’s email. Log in the way that account was set up.",
   "@errorAccountExists": {
     "description": "Error when signing in with Google and the Google account's email address already belongs to a VocaTogether account that isn't connected to this Google account. Must not mention a password: that account may have none."
+  },
+  "profileButton": "Profile",
+  "@profileButton": {
+    "description": "Button on the home screen that opens the user’s own profile."
+  },
+  "profileTitle": "Your profile",
+  "@profileTitle": {
+    "description": "Title of the screen where the user edits their own profile."
+  },
+  "profileLoading": "Loading your profile",
+  "@profileLoading": {
+    "description": "Accessibility label of the progress indicator while the user’s profile loads."
+  },
+  "profileCreateHeading": "Create your profile",
+  "@profileCreateHeading": {
+    "description": "Heading of the profile form when the user hasn’t saved a profile yet."
+  },
+  "profileEditHeading": "Edit your profile",
+  "@profileEditHeading": {
+    "description": "Heading of the profile form when the user already has a profile."
+  },
+  "profileVisibilityNotice": "Other members will be able to see your name and what you write about yourself. Your email address stays private.",
+  "@profileVisibilityNotice": {
+    "description": "Notice on the profile form saying which information other members will see."
+  },
+  "displayNameLabel": "Name",
+  "@displayNameLabel": {
+    "description": "Label of the field for the name shown to other members."
+  },
+  "bioLabel": "About you (optional)",
+  "@bioLabel": {
+    "description": "Label of the optional multi-line field where the user introduces themselves."
+  },
+  "profileSaveButton": "Save",
+  "@profileSaveButton": {
+    "description": "Button that saves the profile form."
+  },
+  "profileSaved": "Profile saved.",
+  "@profileSaved": {
+    "description": "Confirmation shown after the profile was saved."
+  },
+  "displayNameRequired": "Enter your name",
+  "@displayNameRequired": {
+    "description": "Error when the profile form is submitted without a name."
+  },
+  "errorDisplayNameTooLong": "This name is too long. Use a shorter one.",
+  "@errorDisplayNameTooLong": {
+    "description": "Error when the server finds the name too long. Must not state a number."
+  },
+  "errorDisplayNameInvalid": "This name can’t be used. It needs at least one letter or number and can’t contain hidden or special control characters.",
+  "@errorDisplayNameInvalid": {
+    "description": "Error when the server refuses the name because of its characters."
+  },
+  "errorBioTooLong": "This text is too long. Make it shorter.",
+  "@errorBioTooLong": {
+    "description": "Error when the server finds the “about you” text too long. Must not state a number."
+  },
+  "errorBioInvalid": "This text contains characters that can’t be used. Remove them and try again.",
+  "@errorBioInvalid": {
+    "description": "Error when the server refuses the “about you” text because of its characters."
   }
 }

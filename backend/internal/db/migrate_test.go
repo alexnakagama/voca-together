@@ -26,7 +26,7 @@ func tableExists(t *testing.T, pool *pgxpool.Pool, name string) bool {
 func TestMigrationsApplyFromEmptyAndRollBack(t *testing.T) {
 	ctx := context.Background()
 	pool := testutil.DB(t)
-	tables := []string{"users", "user_tokens", "sessions", "user_identities"}
+	tables := []string{"users", "user_tokens", "sessions", "user_identities", "profiles"}
 
 	if err := db.MigrateDownAll(ctx, pool); err != nil {
 		t.Fatalf("down: %v", err)
@@ -123,5 +123,68 @@ func TestMigrationDownRefusesToDropPasswordlessUsers(t *testing.T) {
 	}
 	if err := db.Migrate(ctx, pool); err != nil {
 		t.Fatalf("up after the failed rollback: %v", err)
+	}
+}
+
+// 00005 adds profiles. Up leaves users as they were and gives nobody a
+// profile; down removes the table with whatever profiles it holds and
+// touches nothing else, so users survive a rollback and a re-apply.
+func TestMigration00005ProfilesWithExistingRows(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	// Leave the schema migrated whatever happens here.
+	t.Cleanup(func() {
+		if err := db.Migrate(ctx, pool); err != nil {
+			t.Errorf("restoring the schema: %v", err)
+		}
+	})
+
+	// Before 00005: users exist, there is no profiles table.
+	if err := db.MigrateDownTo(ctx, pool, 4); err != nil {
+		t.Fatalf("down to 00004: %v", err)
+	}
+	if tableExists(t, pool, "profiles") {
+		t.Fatal("profiles exists before 00005")
+	}
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := insertGoogleUser(t, pool, "ben@example.com", "1001")
+
+	// Up with users present: nothing is backfilled.
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("up with users present: %v", err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM profiles`); n != 0 {
+		t.Errorf("profiles after migrating = %d, want 0: existing users get none", n)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM users`); n != 2 {
+		t.Errorf("users after migrating = %d, want 2", n)
+	}
+	if err := insertProfile(pool, ana, "Ana", "Hi"); err != nil {
+		t.Fatal(err)
+	}
+	if err := insertProfile(pool, ben, "Ben", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// Down with profiles present: they go, the users and their identities stay.
+	if err := db.MigrateDownTo(ctx, pool, 4); err != nil {
+		t.Fatalf("down with profiles present: %v", err)
+	}
+	if tableExists(t, pool, "profiles") {
+		t.Error("profiles still exists after rolling 00005 back")
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM users u LEFT JOIN user_identities i ON i.user_id = u.id`); n != 2 {
+		t.Errorf("users after rolling back = %d, want 2", n)
+	}
+
+	// Up again: an empty table, and the same users can save a profile.
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM profiles`); n != 0 {
+		t.Errorf("profiles after re-applying = %d, want 0", n)
+	}
+	if err := insertProfile(pool, ana, "Ana", ""); err != nil {
+		t.Errorf("saving a profile after re-applying: %v", err)
 	}
 }

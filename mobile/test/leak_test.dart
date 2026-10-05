@@ -22,6 +22,8 @@ const _email = 'leak.email@example.com';
 const _password = 'LEAK-password-123';
 const _idToken = 'LEAKidtoken.payload.signature';
 const _idToken2 = 'LEAKidtokenTwo.payload.signature';
+const _displayName = 'LEAK-display-name';
+const _bio = 'LEAK-bio about me';
 
 const _markers = ['LEAK', 'leak.email'];
 
@@ -167,6 +169,36 @@ Future<FakeServer> _runEveryFlow(List<String> strings) async {
     );
   await record(() => manager.me());
 
+  // The profile (027): none yet, saved with marked text that the server
+  // returns, then refused with a body that echoes it.
+  server
+    ..once('GET', ApiPaths.profile, (_) => noProfile())
+    ..once(
+      'PUT',
+      ApiPaths.profile,
+      (_) =>
+          jsonResponse(200, profileBody(displayName: _displayName, bio: _bio)),
+    )
+    ..once(
+      'GET',
+      ApiPaths.profile,
+      (_) =>
+          jsonResponse(200, profileBody(displayName: _displayName, bio: _bio)),
+    )
+    ..once(
+      'PUT',
+      ApiPaths.profile,
+      (_) => http.Response(
+        '{"error":{"code":"validation_failed","detail":"$_displayName $_bio"}}',
+        422,
+        headers: {'content-type': 'application/json'},
+      ),
+    );
+  await record(() => manager.profile());
+  await record(() => manager.saveProfile(displayName: _displayName, bio: _bio));
+  await record(() => manager.profile());
+  await record(() => manager.saveProfile(displayName: _displayName, bio: _bio));
+
   // Programming errors are refused without echoing the value.
   await record(() async => api.refresh(refreshToken: _access2));
   await record(() async => api.logout(accessToken: _refresh2));
@@ -229,12 +261,17 @@ void _checkPlacement(List<http.Request> requests) {
   final allowed = <String, Set<_Place>>{
     _access1: {
       (ApiPaths.me, 'authorization'),
+      (ApiPaths.profile, 'authorization'),
       (ApiPaths.logout, 'authorization'),
     },
     _access2: {
       (ApiPaths.me, 'authorization'),
+      (ApiPaths.profile, 'authorization'),
       (ApiPaths.logout, 'authorization'),
     },
+    // What a member writes goes only into the body of their own save.
+    _displayName: {(ApiPaths.profile, 'body')},
+    _bio: {(ApiPaths.profile, 'body')},
     _refresh1: {(ApiPaths.refresh, 'body')},
     _refresh2: {(ApiPaths.refresh, 'body')},
     _idToken: {(ApiPaths.google, 'body')},
@@ -272,7 +309,7 @@ void _checkPlacement(List<http.Request> requests) {
       expect(r.bodyBytes, isEmpty);
     }
     if (r.headers['Authorization'] case final auth?) {
-      expect(path, anyOf(ApiPaths.me, ApiPaths.logout));
+      expect(path, anyOf(ApiPaths.me, ApiPaths.profile, ApiPaths.logout));
       expect(isAccessToken(auth.replaceFirst('Bearer ', '')), isTrue);
     }
   }
@@ -280,6 +317,9 @@ void _checkPlacement(List<http.Request> requests) {
   // The flows above really exercised each allowed place.
   expect(seen[_access2], contains((ApiPaths.me, 'authorization')));
   expect(seen[_access1], contains((ApiPaths.logout, 'authorization')));
+  expect(seen[_access2], contains((ApiPaths.profile, 'authorization')));
+  expect(seen[_displayName], contains((ApiPaths.profile, 'body')));
+  expect(seen[_bio], contains((ApiPaths.profile, 'body')));
   expect(seen[_refresh1], contains((ApiPaths.refresh, 'body')));
   expect(seen[_refresh2], contains((ApiPaths.refresh, 'body')));
   expect(seen[_idToken], contains((ApiPaths.google, 'body')));

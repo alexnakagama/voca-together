@@ -35,15 +35,19 @@ The layer map is in `docs/architecture.md`. Test fakes and harnesses are in `tes
 - Screens (`lib/screens/`) never read or change session state or decide access: they call
   `SessionManager`/`AccountApi` and the redirect reacts. `SessionStatus`, `.status` and `authRedirect` are forbidden
   in `lib/screens/`.
+- Signed-in routes are `Routes.signedInRoutes` (`/home`, `/profile`); `authRedirect` stays a function of the session
+  status and the path only. `/profile` is always the caller's own (decision 028).
 - Never put a token or email in a route.
 
 ## Networking and session (decision 023, read it before touching auth code)
 
-- `ApiClient` holds no auth state, never retries, never follows redirects and never logs.
+- `ApiClient` holds no auth state, never retries, never follows redirects and never logs. It sends GET, POST and
+  PUT; use PUT only for writes the backend makes idempotent, because `_authorized` resends once after a 401 (028).
 - `SessionManager` holds the only in-memory tokens and owns refresh (single flight, generation check, `/healthz`
   probe first, the 014/018 failure matrix in 023) and logout.
 - **Token boundary:** screens may use only `AccountApi` (register/resend/forgot, token-free) and `SessionManager`'s
-  public API, which takes and returns no token (`signIn`/`signInWithGoogle()`/`logout` → `void`, `me()` → `Me`).
+  public API, which takes and returns no token (`signIn`/`signInWithGoogle()`/`logout` → `void`, `me()` → `Me`,
+  `profile()` → `Profile?`, `saveProfile()` → `Profile`).
 - `AuthApi` (returns `AuthTokens`, takes raw tokens) is built only in `main` and held only by `SessionManager`. The
   generic request wrapper `_authorized` stays private; each new protected route gets a typed `SessionManager` method.
 - `SecureTokenStore` (one `flutter_secure_storage` key, explicit `AndroidOptions`) is the only place tokens persist.
@@ -78,8 +82,8 @@ The layer map is in `docs/architecture.md`. Test fakes and harnesses are in `tes
 - Every failure goes through `presentFailure` (`lib/screens/failure_presentation.dart`), the one mapping from
   `ApiException`s and server codes to localized text and field errors. Screens branch on `FailureKind`, never on code
   strings, and never show server text.
-- Client validation is only empty fields and password confirmation. The password policy and normalization stay on
-  the server, and values are sent exactly as typed.
+- Client validation is only empty fields and password confirmation. The password policy, the profile's limits and
+  all normalization stay on the server, and values are sent exactly as typed.
 - Success text for register, forgot and resend is neutral (no account enumeration).
 
 ## Strings

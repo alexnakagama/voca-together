@@ -1,0 +1,354 @@
+package profile
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"vocatogether/backend/internal/testutil"
+)
+
+type fixture struct {
+	pool *pgxpool.Pool
+	svc  *Service
+	logs *bytes.Buffer
+}
+
+func newFixture(t *testing.T) fixture {
+	t.Helper()
+	pool := testutil.DB(t)
+	logs := &bytes.Buffer{}
+	return fixture{pool: pool, svc: NewService(pool, slog.New(slog.NewJSONHandler(logs, nil))), logs: logs}
+}
+
+func (f fixture) user(t *testing.T, addr string) string {
+	t.Helper()
+	var id string
+	err := f.pool.QueryRow(context.Background(),
+		`INSERT INTO users (email, password_hash, email_verified_at) VALUES ($1, 'x', now()) RETURNING id`, addr).Scan(&id)
+	if err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	return id
+}
+
+func (f fixture) count(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM profiles`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestGetBeforeAnythingWasSaved(t *testing.T) {
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	if _, err := f.svc.Get(context.Background(), ana); !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestSaveCreatesTheProfile(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+
+	saved, err := f.svc.Save(ctx, ana, Input{DisplayName: "  Ana  López ", Bio: "Hi\r\nthere "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.DisplayName != "Ana López" || saved.Bio != "Hi\nthere" {
+		t.Errorf("saved = %+v, want the normalized text", saved)
+	}
+	if saved.CreatedAt.IsZero() || !saved.UpdatedAt.Equal(saved.CreatedAt) {
+		t.Errorf("timestamps = %v, %v", saved.CreatedAt, saved.UpdatedAt)
+	}
+
+	got, err := f.svc.Get(ctx, ana)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != saved {
+		t.Errorf("Get = %+v, want what Save returned %+v", got, saved)
+	}
+}
+
+func TestSaveReplacesTheWholeProfile(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	first, err := f.svc.Save(ctx, ana, Input{DisplayName: "Ana", Bio: "First"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// No bio in the second save: it is cleared, not kept.
+	second, err := f.svc.Save(ctx, ana, Input{DisplayName: "Ana L."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.DisplayName != "Ana L." || second.Bio != "" {
+		t.Errorf("second = %+v", second)
+	}
+	if !second.CreatedAt.Equal(first.CreatedAt) {
+		t.Errorf("created_at changed: %v → %v", first.CreatedAt, second.CreatedAt)
+	}
+	if !second.UpdatedAt.After(first.UpdatedAt) {
+		t.Errorf("updated_at = %v, want after %v", second.UpdatedAt, first.UpdatedAt)
+	}
+	if n := f.count(t); n != 1 {
+		t.Errorf("profiles = %d, want 1", n)
+	}
+}
+
+// rowVersion identifies the stored row version: it changes whenever the row
+// is rewritten, even with the same values.
+func (f fixture) rowVersion(t *testing.T, userID string) string {
+	t.Helper()
+	var v string
+	err := f.pool.QueryRow(context.Background(),
+		`SELECT xmin::text || '/' || ctid::text FROM profiles WHERE user_id = $1`, userID).Scan(&v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// A retried save (a lost response, a 503 after the commit) is a no-op: the
+// same answer, the same updated_at, no new row version and no log line, even
+// when the retry is typed differently but normalizes to the same text.
+func TestSaveIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	first, err := f.svc.Save(ctx, ana, Input{DisplayName: "Ana", Bio: "Hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	version := f.rowVersion(t, ana)
+
+	for _, in := range []Input{{DisplayName: "Ana", Bio: "Hi"}, {DisplayName: " Ana ", Bio: "Hi\n"}} {
+		again, err := f.svc.Save(ctx, ana, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if again != first {
+			t.Errorf("replay of %+v = %+v, want %+v unchanged", in, again, first)
+		}
+	}
+	if got := f.rowVersion(t, ana); got != version {
+		t.Errorf("an unchanged save rewrote the row: %s → %s", version, got)
+	}
+	if n := strings.Count(f.logs.String(), "profile: saved"); n != 1 {
+		t.Errorf("%d saves logged, want 1: the replays changed nothing", n)
+	}
+
+	// A real change still writes, moves updated_at and is logged.
+	changed, err := f.svc.Save(ctx, ana, Input{DisplayName: "Ana", Bio: "Hi!"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed.UpdatedAt.After(first.UpdatedAt) || !changed.CreatedAt.Equal(first.CreatedAt) {
+		t.Errorf("after a change: %+v, first %+v", changed, first)
+	}
+	if f.rowVersion(t, ana) == version {
+		t.Error("a changed save did not write")
+	}
+	if n := strings.Count(f.logs.String(), "profile: saved"); n != 2 {
+		t.Errorf("%d saves logged, want 2", n)
+	}
+}
+
+// Several identical first saves at once (a client retrying while its first
+// request is still running): all succeed with the same profile, one row.
+func TestConcurrentIdenticalSavesAllSucceed(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+
+	const n = 16
+	results := make([]Profile, n)
+	errs := make([]error, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			<-start
+			results[i], errs[i] = f.svc.Save(ctx, ana, Input{DisplayName: "Ana", Bio: "Hi"})
+		})
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("save %d: %v", i, err)
+		}
+		if results[i] != results[0] {
+			t.Errorf("save %d returned %+v, save 0 %+v", i, results[i], results[0])
+		}
+	}
+	if got := f.count(t); got != 1 {
+		t.Errorf("profiles = %d, want 1", got)
+	}
+	if n := strings.Count(f.logs.String(), "profile: saved"); n != 1 {
+		t.Errorf("%d saves logged, want 1: only one of them changed anything", n)
+	}
+}
+
+func TestSaveRejectsInvalidInputWithoutWriting(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	if _, err := f.svc.Save(ctx, ana, Input{DisplayName: "Ana", Bio: "Kept"}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := f.svc.Save(ctx, ana, Input{DisplayName: "", Bio: strings.Repeat("a", BioMaxLength+1)})
+	var verr *ValidationError
+	if !errors.As(err, &verr) || len(verr.Fields) != 2 {
+		t.Fatalf("err = %v, want both fields rejected", err)
+	}
+	got, err := f.svc.Get(ctx, ana)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DisplayName != "Ana" || got.Bio != "Kept" {
+		t.Errorf("profile changed by a rejected save: %+v", got)
+	}
+}
+
+// Each user's profile is keyed by the ID the caller passes and nothing else.
+func TestProfilesAreSeparatePerUser(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	ben := f.user(t, "ben@example.com")
+	if _, err := f.svc.Save(ctx, ana, Input{DisplayName: "Ana", Bio: "Ana's"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.svc.Get(ctx, ben); !errors.Is(err, ErrNotFound) {
+		t.Errorf("ben's profile before he saved one: %v, want ErrNotFound", err)
+	}
+	if _, err := f.svc.Save(ctx, ben, Input{DisplayName: "Ben"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.svc.Get(ctx, ana)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DisplayName != "Ana" || got.Bio != "Ana's" {
+		t.Errorf("ana's profile after ben saved his: %+v", got)
+	}
+}
+
+func TestSaveForADeletedUser(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	if _, err := f.pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, ana); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := f.svc.Save(ctx, ana, Input{DisplayName: "Ana"}); !errors.Is(err, ErrUserGone) {
+		t.Errorf("err = %v, want ErrUserGone", err)
+	}
+	if n := f.count(t); n != 0 {
+		t.Errorf("profiles = %d, want 0", n)
+	}
+}
+
+func TestSaveWithAnEndedContextWritesNothing(t *testing.T) {
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := f.svc.Save(ctx, ana, Input{DisplayName: "Ana"}); !errors.Is(err, context.Canceled) {
+		t.Errorf("Save err = %v, want context.Canceled", err)
+	}
+	if _, err := f.svc.Get(ctx, ana); !errors.Is(err, context.Canceled) {
+		t.Errorf("Get err = %v, want context.Canceled", err)
+	}
+	if n := f.count(t); n != 0 {
+		t.Errorf("profiles = %d, want 0", n)
+	}
+}
+
+// Concurrent saves, including the very first ones, all succeed and leave one
+// row holding one request's name and bio together, never a mix of two.
+func TestConcurrentSavesLeaveOneWholeProfile(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+
+	const n = 16
+	errs := make([]error, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			<-start
+			_, errs[i] = f.svc.Save(ctx, ana, Input{DisplayName: fmt.Sprintf("Name %d", i), Bio: fmt.Sprintf("Bio %d", i)})
+		})
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("save %d: %v", i, err)
+		}
+	}
+	if got := f.count(t); got != 1 {
+		t.Fatalf("profiles = %d, want 1", got)
+	}
+	got, err := f.svc.Get(ctx, ana)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var a, b int
+	if _, err := fmt.Sscanf(got.DisplayName, "Name %d", &a); err != nil {
+		t.Fatalf("display name %q: %v", got.DisplayName, err)
+	}
+	if _, err := fmt.Sscanf(got.Bio, "Bio %d", &b); err != nil {
+		t.Fatalf("bio %q: %v", got.Bio, err)
+	}
+	if a != b {
+		t.Errorf("profile mixes two saves: %+v", got)
+	}
+	if got.UpdatedAt.Before(got.CreatedAt) {
+		t.Errorf("updated_at %v before created_at %v", got.UpdatedAt, got.CreatedAt)
+	}
+}
+
+// What a member writes about themselves never reaches the logs.
+func TestLogsNameTheUserButNeverTheProfile(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	if _, err := f.svc.Save(ctx, ana, Input{DisplayName: "MARKERNAME", Bio: "MARKERBIO"}); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.svc.Save(ctx, ana, Input{DisplayName: "MARKERNAME\x00", Bio: "MARKERBIO"})
+	if _, err := f.svc.Get(ctx, ana); err != nil {
+		t.Fatal(err)
+	}
+
+	logs := f.logs.String()
+	if !strings.Contains(logs, "profile: saved") || !strings.Contains(logs, ana) {
+		t.Errorf("no save logged for the user: %s", logs)
+	}
+	if strings.Contains(logs, "MARKER") {
+		t.Errorf("logs contain profile text: %s", logs)
+	}
+}

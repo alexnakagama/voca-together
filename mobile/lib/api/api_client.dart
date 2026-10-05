@@ -63,7 +63,8 @@ class ApiClient {
     String? bearer,
     required Duration timeout,
   }) async {
-    if (method != 'GET' && method != 'POST') {
+    // PUT is only for idempotent replacements (the profile, 027).
+    if (method != 'GET' && method != 'POST' && method != 'PUT') {
       throw ArgumentError.value(method, 'method', 'unsupported');
     }
     final url = _url(path);

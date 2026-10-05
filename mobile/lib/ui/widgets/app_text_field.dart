@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../../l10n/app_localizations.dart';
 
-/// A single-line form field for an email address or a password.
+/// A form field: an email address, a password, a line of text (a name) or
+/// several lines of free text.
 ///
 /// Presentation only: it neither trims nor validates. Pass [errorText] to show
 /// an error for this field (e.g. one returned by the server); it wins over any
@@ -38,9 +39,38 @@ class AppTextField extends StatefulWidget {
     this.newPassword = false,
   }) : _kind = _Kind.password;
 
+  /// A single line of ordinary text, such as a person's name: capitalized
+  /// words, the name keyboard, no autofill.
+  const AppTextField.text({
+    super.key,
+    required String this.label,
+    this.controller,
+    this.errorText,
+    this.enabled = true,
+    this.textInputAction,
+    this.onSubmitted,
+    this.focusNode,
+  }) : _kind = _Kind.text,
+       newPassword = false;
+
+  /// Several lines of free text: it starts three lines tall, grows with its
+  /// content, and the keyboard's action key inserts a line break.
+  const AppTextField.multiline({
+    super.key,
+    required String this.label,
+    this.controller,
+    this.errorText,
+    this.enabled = true,
+    this.focusNode,
+  }) : _kind = _Kind.multiline,
+       newPassword = false,
+       textInputAction = TextInputAction.newline,
+       onSubmitted = null;
+
   final TextEditingController? controller;
 
-  /// Replaces the default label ("Email" or "Password").
+  /// Replaces the default label ("Email" or "Password"). Text and multiline
+  /// fields have no default and always take one.
   final String? label;
 
   final String? errorText;
@@ -55,7 +85,7 @@ class AppTextField extends StatefulWidget {
   State<AppTextField> createState() => _AppTextFieldState();
 }
 
-enum _Kind { email, password }
+enum _Kind { email, password, text, multiline }
 
 class _AppTextFieldState extends State<AppTextField> {
   bool _obscured = true;
@@ -110,6 +140,36 @@ class _AppTextFieldState extends State<AppTextField> {
           smartQuotesType: SmartQuotesType.disabled,
           textInputAction: widget.textInputAction,
           onFieldSubmitted: widget.onSubmitted,
+        );
+      case _Kind.text:
+        return TextFormField(
+          controller: widget.controller,
+          focusNode: widget.focusNode,
+          enabled: widget.enabled,
+          forceErrorText: widget.errorText,
+          decoration: InputDecoration(labelText: widget.label),
+          keyboardType: TextInputType.name,
+          textCapitalization: TextCapitalization.words,
+          // Not the account holder's legal name: nothing to autofill.
+          autofillHints: const [],
+          textInputAction: widget.textInputAction,
+          onFieldSubmitted: widget.onSubmitted,
+        );
+      case _Kind.multiline:
+        return TextFormField(
+          controller: widget.controller,
+          focusNode: widget.focusNode,
+          enabled: widget.enabled,
+          forceErrorText: widget.errorText,
+          decoration: InputDecoration(
+            labelText: widget.label,
+            alignLabelWithHint: true,
+          ),
+          keyboardType: TextInputType.multiline,
+          textCapitalization: TextCapitalization.sentences,
+          minLines: 3,
+          maxLines: null,
+          textInputAction: widget.textInputAction,
         );
     }
   }

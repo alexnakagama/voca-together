@@ -16,24 +16,25 @@ The backend is a modular monolith: one Go service, one PostgreSQL database, stdl
 ### Startup (`cmd/api/main.go`)
 
 `main` builds all dependencies in this order: config → email sender (`newEmailSender`) → Google verifier
-(`newGoogleVerifier`, before the DB so bad config exits at once) → pool → migrations → rate limiters → services →
-router. It runs the hourly retention cleanup (`authSvc.RunCleanup`) and handles graceful shutdown, after which
+(`newGoogleVerifier`, before the DB so bad config exits at once) → pool → migrations → rate limiters → services
+(`auth`, `profile`) → router. It runs the hourly retention cleanup (`authSvc.RunCleanup`) and handles graceful shutdown, after which
 `authSvc.Wait()` drains background emails.
 
 ### Packages (`backend/internal/`)
 
 | Package | Role |
 |---|---|
-| `server` | HTTP layer only: routing (`server.go`, `Options`), JSON decode/encode and error codes (`respond.go`), the `requireAccessToken` middleware (`authn.go`), per-IP limits and client IP (`limits.go`, `clientip.go`), security headers and the request deadline (`middleware.go`), and the HTML pages that emailed links open (`pages.go`, templates embedded from `pages/`: `/verify-email` and `/reset-password`). |
+| `server` | HTTP layer only: routing (`server.go`, `Options`), JSON decode/encode and error codes (`respond.go`), the `requireAccessToken` middleware (`authn.go`), per-IP and per-user limits and client IP (`limits.go`, `clientip.go`), security headers and the request deadline (`middleware.go`), the profile routes (`profile.go`), and the HTML pages that emailed links open (`pages.go`, templates embedded from `pages/`: `/verify-email` and `/reset-password`). |
 | `config` | Reads the environment into `Config` (validation per `ENV`; secrets held as `config.Secret`). |
 | `auth` | The domain: `Service` (business logic, argon2 slot limiter with a queue timeout, bounded best-effort background email sending), Google sign-in (`google.go`), per-account limits (`limits.go`), retention cleanup (`cleanup.go`), `store.go` (SQL), tokens, password policy/hashing, email content (text, plus HTML from `templates/` for link emails), typed errors (`errors.go`). |
+| `profile` | The profile domain: `Service` (`Get`, `Save`), normalization and validation (`validate.go`), `store.go` (SQL), typed errors. Imports neither `auth` nor `server`. |
 | `googleid` | Verifies Google ID tokens locally (stdlib RS256 + Google's key set, `Verifier` interface, `Fake` for tests). |
 | `email` | Delivery only: `Sender` interface; `ResendSender` for production (stdlib HTTP client); `LogSender` for dev/test; `Recorder` for unit tests. |
 | `ratelimit` | In-process per-key token bucket. |
 | `db` | Pool + goose migrations embedded from `migrations/*.sql`, applied on every startup. |
 | `testutil` | `testutil.DB(t)`: the shared test database. |
 
-Dependency direction: `main` → `server` → `auth` → `email`, `googleid`.
+Dependency direction: `main` → `server` → `auth`, `profile`; `auth` → `email`, `googleid`.
 
 Handlers read `auth.Identity` from the request context via `identityFrom` and pass `UserID` explicitly to services,
 so domain packages never read the request context.
@@ -51,7 +52,7 @@ which hands each screen only what it uses.
 | `lib/app.dart` | Owns and disposes the `GoRouter`. |
 | `lib/session.dart` | `SessionManager`, the `ChangeNotifier` session (`unknown`/`signedOut`/`signedIn`) that the router listens to. |
 | `lib/router.dart` | `Routes` and `authRedirect`, the only navigation policy. |
-| `lib/api/` | `ApiClient` over `http.Client`. |
+| `lib/api/` | `ApiClient` over `http.Client`, the API classes, and the models screens may see (`Me`, `Profile`). |
 | `lib/auth/` | `TokenStore`/`SecureTokenStore`, `AuthApi`, `GoogleIdentity`/`PluginGoogleIdentity`. |
 | `lib/screens/` | The screens and `failure_presentation.dart` (`presentFailure`). |
 | `lib/ui/` | `theme.dart` (`AppTheme`, `Spacing`, `Radii`), `widgets/`, `previews/`. |
@@ -63,7 +64,8 @@ which hands each screen only what it uses.
 
 `SessionManager` holds the only in-memory tokens and owns refresh and logout. Tokens persist only in
 `SecureTokenStore` (one `flutter_secure_storage` key). Screens reach the backend through `SessionManager`'s
-token-free public API and through `AccountApi` (register, resend, forgot).
+token-free public API (`me()`, `profile()`, `saveProfile()`, sign-in, logout) and through `AccountApi` (register,
+resend, forgot).
 
 ### Google sign-in
 
@@ -73,9 +75,10 @@ token-free public API and through `AccountApi` (register, resend, forgot).
 
 ### Client status
 
-The client is at roadmap stage 6: app shell, routing, design system, API client, secure token storage, session
+The client is at roadmap stage 7: app shell, routing, design system, API client, secure token storage, session
 management, the email/password auth screens (log in, register, forgot password, inline resend verification), a home
-screen with `/v1/me` and logout, and Google sign-in on log in and register.
+screen with `/v1/me` and logout, Google sign-in on log in and register, and the user's own profile (create and
+edit, from home).
 
 ## Decisions by topic
 
@@ -89,4 +92,5 @@ screen with `/v1/me` and logout, and Google sign-in on log in and register.
 | Email pages and delivery | 006, 007, 019 |
 | Hardening, rate limits, retention | 018 |
 | Google sign-in (backend) | 020, 026 |
-| Flutter client | 021 (shell, routing), 022 (design system, l10n), 023 (networking, session), 024 (screens), 025 (Google) |
+| User profile | 027 (backend), 028 (client) |
+| Flutter client | 021 (shell, routing), 022 (design system, l10n), 023 (networking, session), 024 (screens), 025 (Google), 028 (profile) |

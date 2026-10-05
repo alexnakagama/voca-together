@@ -22,8 +22,8 @@ import (
 // session is revoked and the client logs in again, as after any lost refresh
 // response, decision 014), google (a retry, with the same ID token or a new
 // one, finds the account and creates another session; the orphaned one
-// expires),
-// and logout (idempotent).
+// expires), logout (idempotent) and saving a profile (idempotent: the retry
+// stores the same text and changes nothing, decision 027).
 const requestTimeout = 10 * time.Second
 
 // requestDeadline gives each request's context a deadline of d.

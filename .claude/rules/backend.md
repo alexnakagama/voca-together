@@ -15,7 +15,10 @@ The package map and startup order are in `docs/architecture.md`. Auth invariants
   services.
 - `internal/config` is used only by `main`; `auth` and `server` read no configuration. Secrets are held as
   `config.Secret`.
-- `internal/auth` owns the domain. Its errors are typed (`errors.go`) and mapped to HTTP in `server`.
+- `internal/auth` owns the auth domain. Its errors are typed (`errors.go`) and mapped to HTTP in `server`.
+- `internal/profile` owns profiles (decision 027) and imports neither `auth` nor `server`. A profile is selected
+  only by the authenticated `UserID` the handler passes: never add an id to its routes, query or bodies. Never log
+  a display name or a bio.
 - `internal/googleid` knows nothing about users, the DB or HTTP routes. `server` never imports it, and only `main`
   constructs the verifier (`nil` = disabled, outside production only).
 - `internal/email` handles delivery only; `auth → email`, never the reverse. `ResendSender` does no retries and
@@ -39,6 +42,8 @@ The package map and startup order are in `docs/architecture.md`. Auth invariants
 - Rate limits → 429 `rate_limited` with `Retry-After` (nothing was done; retry is safe). Argon2 queue timeout, Google
   keys unavailable, or the 10 s request deadline → 503 `service_unavailable` with `Retry-After` (work may have
   committed; see 018 for which endpoints are safely retriable, 020 for Google).
+- Protected routes that write get a per-user limit (`UserLimits`, `limitByUser`) inside `authn`, so only the user's
+  own authenticated requests spend it (027).
 - New public routes that do real work get a per-IP limit in `server.New`; per-account checks run after validation and
   before any DB/argon2 work, keyed by the normalized address whether or not the account exists. Google sign-in is the
   exception: it shares `ip_login`, and its `account_login` key is `google:` + the verified `sub` (known only after

@@ -5,6 +5,7 @@ import 'api/account_api.dart';
 import 'screens/forgot_password_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
+import 'screens/profile_screen.dart';
 import 'screens/register_screen.dart';
 import 'screens/splash_screen.dart';
 import 'session.dart';
@@ -17,9 +18,14 @@ abstract final class Routes {
   static const register = '/register';
   static const forgotPassword = '/forgot-password';
   static const home = '/home';
+  static const profile = '/profile';
 
   /// The routes a signed-out user may visit.
   static const authRoutes = {login, register, forgotPassword};
+
+  /// The routes a signed-in user may visit. The profile is the user's own:
+  /// no route names another member.
+  static const signedInRoutes = {home, profile};
 }
 
 /// Where a user with [status] may be when navigating to [location]: `null` to
@@ -36,7 +42,7 @@ String? authRedirect(SessionStatus status, Uri location) {
     case SessionStatus.signedOut:
       return Routes.authRoutes.contains(path) ? null : Routes.login;
     case SessionStatus.signedIn:
-      return path == Routes.home ? null : Routes.home;
+      return Routes.signedInRoutes.contains(path) ? null : Routes.home;
   }
 }
 
@@ -73,6 +79,10 @@ GoRouter createRouter(SessionManager session, AccountApi accountApi) {
       GoRoute(
         path: Routes.home,
         builder: (context, state) => HomeScreen(session: session),
+      ),
+      GoRoute(
+        path: Routes.profile,
+        builder: (context, state) => ProfileScreen(session: session),
       ),
     ],
   );

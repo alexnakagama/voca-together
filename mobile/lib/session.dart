@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'api/api_exception.dart';
 import 'api/auth_api.dart';
 import 'api/me.dart';
+import 'api/profile.dart';
 import 'auth/auth_clock.dart';
 import 'auth/auth_tokens.dart';
 import 'auth/google_identity.dart';
@@ -228,6 +229,32 @@ class SessionManager extends ChangeNotifier {
   Future<Me> me() {
     _checkNotDisposed();
     return _authorized((token) => _api.me(accessToken: token));
+  }
+
+  /// The signed-in user's own profile (`GET /v1/me/profile`), or null if
+  /// they haven't saved one. Token handling and failures as for [me].
+  Future<Profile?> profile() {
+    _checkNotDisposed();
+    return _authorized((token) => _api.profile(accessToken: token));
+  }
+
+  /// Saves the signed-in user's whole profile (`PUT /v1/me/profile`),
+  /// creating it if there is none, and returns it as the server stored it.
+  /// The text is sent as typed. Token handling and failures as for [me];
+  /// the resend after a 401 is safe because the save is idempotent (027).
+  /// Nothing else is retried.
+  Future<Profile> saveProfile({
+    required String displayName,
+    required String bio,
+  }) {
+    _checkNotDisposed();
+    return _authorized(
+      (token) => _api.saveProfile(
+        accessToken: token,
+        displayName: displayName,
+        bio: bio,
+      ),
+    );
   }
 
   /// Runs [call] with a valid access token and returns its result.

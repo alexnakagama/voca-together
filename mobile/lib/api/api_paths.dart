@@ -12,4 +12,5 @@ abstract final class ApiPaths {
   static const refresh = '/v1/auth/refresh';
   static const logout = '/v1/auth/logout';
   static const me = '/v1/me';
+  static const profile = '/v1/me/profile';
 }

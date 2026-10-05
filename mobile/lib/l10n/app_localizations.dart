@@ -465,6 +465,96 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'There’s already a VocaTogether account for this Google account’s email. Log in the way that account was set up.'**
   String get errorAccountExists;
+
+  /// Button on the home screen that opens the user’s own profile.
+  ///
+  /// In en, this message translates to:
+  /// **'Profile'**
+  String get profileButton;
+
+  /// Title of the screen where the user edits their own profile.
+  ///
+  /// In en, this message translates to:
+  /// **'Your profile'**
+  String get profileTitle;
+
+  /// Accessibility label of the progress indicator while the user’s profile loads.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading your profile'**
+  String get profileLoading;
+
+  /// Heading of the profile form when the user hasn’t saved a profile yet.
+  ///
+  /// In en, this message translates to:
+  /// **'Create your profile'**
+  String get profileCreateHeading;
+
+  /// Heading of the profile form when the user already has a profile.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit your profile'**
+  String get profileEditHeading;
+
+  /// Notice on the profile form saying which information other members will see.
+  ///
+  /// In en, this message translates to:
+  /// **'Other members will be able to see your name and what you write about yourself. Your email address stays private.'**
+  String get profileVisibilityNotice;
+
+  /// Label of the field for the name shown to other members.
+  ///
+  /// In en, this message translates to:
+  /// **'Name'**
+  String get displayNameLabel;
+
+  /// Label of the optional multi-line field where the user introduces themselves.
+  ///
+  /// In en, this message translates to:
+  /// **'About you (optional)'**
+  String get bioLabel;
+
+  /// Button that saves the profile form.
+  ///
+  /// In en, this message translates to:
+  /// **'Save'**
+  String get profileSaveButton;
+
+  /// Confirmation shown after the profile was saved.
+  ///
+  /// In en, this message translates to:
+  /// **'Profile saved.'**
+  String get profileSaved;
+
+  /// Error when the profile form is submitted without a name.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter your name'**
+  String get displayNameRequired;
+
+  /// Error when the server finds the name too long. Must not state a number.
+  ///
+  /// In en, this message translates to:
+  /// **'This name is too long. Use a shorter one.'**
+  String get errorDisplayNameTooLong;
+
+  /// Error when the server refuses the name because of its characters.
+  ///
+  /// In en, this message translates to:
+  /// **'This name can’t be used. It needs at least one letter or number and can’t contain hidden or special control characters.'**
+  String get errorDisplayNameInvalid;
+
+  /// Error when the server finds the “about you” text too long. Must not state a number.
+  ///
+  /// In en, this message translates to:
+  /// **'This text is too long. Make it shorter.'**
+  String get errorBioTooLong;
+
+  /// Error when the server refuses the “about you” text because of its characters.
+  ///
+  /// In en, this message translates to:
+  /// **'This text contains characters that can’t be used. Remove them and try again.'**
+  String get errorBioInvalid;
 }
 
 class _AppLocalizationsDelegate

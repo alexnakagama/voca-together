@@ -156,6 +156,60 @@ void main() {
     });
   });
 
+  group('profile', () {
+    // (field, code) → (name error, bio error).
+    final cases = <(String, String), (String?, String?)>{
+      ('display_name', 'required'): (l10n.displayNameRequired, null),
+      ('display_name', 'too_long'): (l10n.errorDisplayNameTooLong, null),
+      ('display_name', 'invalid'): (l10n.errorDisplayNameInvalid, null),
+      ('bio', 'too_long'): (null, l10n.errorBioTooLong),
+      ('bio', 'invalid'): (null, l10n.errorBioInvalid),
+    };
+    cases.forEach((input, expected) {
+      test('${input.$1}:${input.$2} goes on its field, with no banner', () {
+        final p = _present(
+          _http(422, 'validation_failed', [FieldError(input.$1, input.$2)]),
+        );
+        expect(p.kind, FailureKind.invalidInput);
+        expect(p.message, isNull);
+        expect(p.displayNameError, expected.$1);
+        expect(p.bioError, expected.$2);
+        expect(p.emailError, isNull);
+        expect(p.passwordError, isNull);
+      });
+    });
+
+    test('both fields at once', () {
+      final p = _present(
+        _http(422, 'validation_failed', [
+          const FieldError('display_name', 'too_long'),
+          const FieldError('bio', 'invalid'),
+        ]),
+      );
+      expect(p.message, isNull);
+      expect(p.displayNameError, l10n.errorDisplayNameTooLong);
+      expect(p.bioError, l10n.errorBioInvalid);
+    });
+
+    test('a code this app doesn\'t know adds the generic banner', () {
+      final p = _present(
+        _http(422, 'validation_failed', [
+          const FieldError('display_name', 'taken'),
+        ]),
+      );
+      expect(p.message, l10n.errorCheckInput);
+      expect(p.displayNameError, isNull);
+    });
+
+    // The session layer turns it into "no profile"; if it ever reaches a
+    // screen it is an ordinary unexpected failure, never server text.
+    test('profile_not_found is unexpected', () {
+      final p = _present(_http(404, 'profile_not_found'));
+      expect(p.kind, FailureKind.unexpected);
+      expect(p.message, l10n.errorUnexpected);
+    });
+  });
+
   group('status fallback for missing or unknown codes', () {
     final cases = <int, (FailureKind, String)>{
       400: (FailureKind.unexpected, l10n.errorUnexpected),

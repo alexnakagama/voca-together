@@ -95,4 +95,51 @@ void main() {
     await expectLater(tester, meetsGuideline(labeledTapTargetGuideline));
     handle.dispose();
   });
+
+  testWidgets('text field: one line, labelled, for a name', (tester) async {
+    await pumpUi(tester, const AppTextField.text(label: 'Name'));
+
+    final field = _field(tester);
+    expect(field.maxLines, 1);
+    expect(field.obscureText, isFalse);
+    expect(field.keyboardType, TextInputType.name);
+    expect(field.textCapitalization, TextCapitalization.words);
+    expect(field.autofillHints, isEmpty);
+    expect(find.text('Name'), findsOneWidget);
+  });
+
+  testWidgets('multiline field grows with its text and takes line breaks', (
+    tester,
+  ) async {
+    await pumpUi(tester, const AppTextField.multiline(label: 'About you'));
+
+    final field = _field(tester);
+    expect(field.maxLines, isNull);
+    expect(field.minLines, 3);
+    expect(field.keyboardType, TextInputType.multiline);
+    expect(field.textInputAction, TextInputAction.newline);
+    expect(field.textCapitalization, TextCapitalization.sentences);
+    expect(find.text('About you'), findsOneWidget);
+  });
+
+  testWidgets('text and multiline fields show a given error and disable', (
+    tester,
+  ) async {
+    for (final field in [
+      const AppTextField.text(
+        label: 'Name',
+        errorText: 'Too long',
+        enabled: false,
+      ),
+      const AppTextField.multiline(
+        label: 'About you',
+        errorText: 'Too long',
+        enabled: false,
+      ),
+    ]) {
+      await pumpUi(tester, field);
+      expect(find.text('Too long'), findsOneWidget);
+      expect(_field(tester).enabled, isFalse);
+    }
+  });
 }

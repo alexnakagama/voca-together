@@ -131,6 +131,7 @@ void main() {
         'api/account_api.dart',
         'api/api_exception.dart',
         'api/me.dart',
+        'api/profile.dart',
         // Only the failure Google sign-in can end with; it holds no data.
         'auth/google_identity_exception.dart',
         'session.dart',
@@ -207,7 +208,15 @@ void main() {
       declarations.map(
         (l) => RegExp(r' (\w+)[({]? ?(?:=>|\(|\{)').firstMatch(l)?.group(1),
       ),
-      containsAll(['restore', 'signIn', 'signInWithGoogle', 'me', 'logout']),
+      containsAll([
+        'restore',
+        'signIn',
+        'signInWithGoogle',
+        'me',
+        'profile',
+        'saveProfile',
+        'logout',
+      ]),
     );
     expect(
       body,

@@ -7,21 +7,23 @@ import (
 	"net/netip"
 
 	"vocatogether/backend/internal/auth"
+	"vocatogether/backend/internal/profile"
 	"vocatogether/backend/internal/ratelimit"
 )
 
 // Options configures New. The zero value (used by tests) trusts no proxy,
-// sends no HSTS and applies no per-IP limits.
+// sends no HSTS and applies no per-IP or per-user limits.
 type Options struct {
 	// TrustedProxyHops is config.Config.TrustedProxyHops (see clientKey).
 	TrustedProxyHops int
 	// HSTS sends Strict-Transport-Security (production).
-	HSTS     bool
-	IPLimits IPLimits
+	HSTS       bool
+	IPLimits   IPLimits
+	UserLimits UserLimits
 }
 
 // New returns the API's router. Dependencies are built by the caller (main).
-func New(logger *slog.Logger, authSvc *auth.Service, opts Options) http.Handler {
+func New(logger *slog.Logger, authSvc *auth.Service, profileSvc *profile.Service, opts Options) http.Handler {
 	lim := opts.IPLimits
 	perIP := func(l *ratelimit.Limiter[netip.Prefix]) func(http.Handler) http.Handler {
 		return limitByIP(l, opts.TrustedProxyHops, writeRateLimited)
@@ -55,6 +57,12 @@ func New(logger *slog.Logger, authSvc *auth.Service, opts Options) http.Handler 
 	// require a token and a route can't become public by accident of order.
 	authn := requireAccessToken(logger, authSvc)
 	mux.Handle("GET /v1/me", authn(handleMe(logger, authSvc)))
+	// The caller's own profile (decision 027): no id in the route, the
+	// session decides whose it is. Writes are limited per user, after
+	// authentication, so only the user's own requests spend their allowance.
+	profileWrites := limitByUser(logger, opts.UserLimits.ProfileWrite)
+	mux.Handle("GET /v1/me/profile", authn(handleGetProfile(logger, profileSvc)))
+	mux.Handle("PUT /v1/me/profile", authn(profileWrites(handlePutProfile(logger, profileSvc))))
 
 	return securityHeaders(opts.HSTS)(requestDeadline(requestTimeout)(mux))
 }

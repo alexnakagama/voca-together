@@ -48,6 +48,32 @@ Future<void> _openRegister(WidgetTester tester) =>
 Future<void> _openForgot(WidgetTester tester) =>
     tapAndSettle(tester, find.text(l10n.forgotPasswordLink));
 
+Future<void> _openProfile(WidgetTester tester) => tapAndSettle(
+  tester,
+  find.widgetWithText(OutlinedButton, l10n.profileButton),
+);
+
+Future<void> _saveProfile(WidgetTester tester) async {
+  await _openProfile(tester);
+  await tester.enterText(field(l10n.displayNameLabel), 'Ana López');
+  await tester.enterText(
+    field(l10n.bioLabel),
+    'I’m learning Japanese.\n\nEvenings work best for me.',
+  );
+  // Typing makes the field scroll its caret into view a moment later. Let
+  // that finish before scrolling to the button, as it has by the time a
+  // person does: on a device the form scrolls to Save with the keyboard
+  // open and stays there, so this orders the test, it hides no layout fault.
+  await tester.pumpAndSettle();
+  await tapAndSettle(
+    tester,
+    find.widgetWithText(FilledButton, l10n.profileSaveButton),
+  );
+}
+
+void _home(FakeServer s) =>
+    s.once('GET', ApiPaths.me, (_) => jsonResponse(200, meBody()));
+
 final _cases = <_Case>[
   _Case('login', action: l10n.logInButton),
   _Case(
@@ -174,6 +200,99 @@ final _cases = <_Case>[
     signedIn: true,
     script: (s) => s.once('GET', ApiPaths.me, networkFailure),
     action: l10n.logOutButton,
+  ),
+  _Case(
+    'home, profile entry',
+    signedIn: true,
+    script: _home,
+    action: l10n.profileButton,
+  ),
+  _Case(
+    'profile, new',
+    signedIn: true,
+    script: (s) {
+      _home(s);
+      s.once('GET', ApiPaths.profile, (_) => noProfile());
+    },
+    drive: _openProfile,
+    action: l10n.profileSaveButton,
+  ),
+  _Case(
+    'profile, load failed',
+    signedIn: true,
+    script: (s) {
+      _home(s);
+      s.once('GET', ApiPaths.profile, networkFailure);
+    },
+    drive: _openProfile,
+    action: l10n.tryAgain,
+  ),
+  _Case(
+    'profile, saved',
+    signedIn: true,
+    script: (s) {
+      _home(s);
+      s
+        ..once(
+          'GET',
+          ApiPaths.profile,
+          (_) => jsonResponse(200, profileBody(displayName: 'Ana')),
+        )
+        ..once(
+          'PUT',
+          ApiPaths.profile,
+          (_) => jsonResponse(
+            200,
+            profileBody(
+              displayName: 'Ana López',
+              bio: 'I’m learning Japanese.\n\nEvenings work best for me.',
+            ),
+          ),
+        );
+    },
+    drive: _saveProfile,
+    action: l10n.profileSaveButton,
+  ),
+  _Case(
+    'profile, field errors',
+    signedIn: true,
+    script: (s) {
+      _home(s);
+      s
+        ..once('GET', ApiPaths.profile, (_) => noProfile())
+        ..once(
+          'PUT',
+          ApiPaths.profile,
+          (_) => jsonResponse(422, {
+            'error': {
+              'code': 'validation_failed',
+              'fields': [
+                {'field': 'display_name', 'code': 'invalid'},
+                {'field': 'bio', 'code': 'too_long'},
+              ],
+            },
+          }),
+        );
+    },
+    drive: _saveProfile,
+    action: l10n.profileSaveButton,
+  ),
+  _Case(
+    'profile, save failed',
+    signedIn: true,
+    script: (s) {
+      _home(s);
+      s
+        ..once('GET', ApiPaths.profile, (_) => noProfile())
+        ..once(
+          'PUT',
+          ApiPaths.profile,
+          (_) =>
+              errorResponse(429, 'rate_limited', headers: {'retry-after': '6'}),
+        );
+    },
+    drive: _saveProfile,
+    action: l10n.profileSaveButton,
   ),
 ];
 
