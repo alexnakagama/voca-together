@@ -825,3 +825,188 @@ func TestMigration00007PublicIDWithExistingRows(t *testing.T) {
 		t.Errorf("distinct public ids after re-applying = %d, want %d", n, len(users)+1)
 	}
 }
+
+func insertAvatar(pool *pgxpool.Pool, userID string, image, sourceHash []byte) error {
+	_, err := pool.Exec(context.Background(),
+		`INSERT INTO avatars (user_id, image, source_sha256) VALUES ($1, $2, $3)`, userID, image, sourceHash)
+	return err
+}
+
+func TestAvatarsDefaultsAndNotNull(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	uid := mustInsertUser(t, pool, "ana@example.com")
+	if err := insertAvatar(pool, uid, []byte("jpeg"), hash(1)); err != nil {
+		t.Fatal(err)
+	}
+
+	var createdAt, updatedAt time.Time
+	if err := pool.QueryRow(ctx, `SELECT created_at, updated_at FROM avatars WHERE user_id = $1`, uid).
+		Scan(&createdAt, &updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if createdAt.IsZero() || updatedAt.IsZero() {
+		t.Error("timestamps must default to now()")
+	}
+	for _, column := range []string{"image", "source_sha256", "created_at", "updated_at"} {
+		_, err := pool.Exec(ctx, `UPDATE avatars SET `+column+` = NULL WHERE user_id = $1`, uid)
+		requirePgError(t, err, notNullViolation, "")
+	}
+}
+
+// The primary key is the user: a second picture for the same user is refused.
+// A picture needs no profile.
+func TestAvatarsOnePerUser(t *testing.T) {
+	pool := testutil.DB(t)
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := mustInsertUser(t, pool, "ben@example.com")
+	if err := insertAvatar(pool, ana, []byte("one"), hash(1)); err != nil {
+		t.Fatal(err)
+	}
+	requirePgError(t, insertAvatar(pool, ana, []byte("two"), hash(2)), uniqueViolation, "avatars_pkey")
+
+	// Two members may upload the same file: the hash is not a key.
+	if err := insertAvatar(pool, ben, []byte("one"), hash(1)); err != nil {
+		t.Errorf("another user with the same picture: %v", err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM profiles`); n != 0 {
+		t.Errorf("profiles = %d, want 0: a picture needs none", n)
+	}
+}
+
+func TestAvatarsImageSize(t *testing.T) {
+	pool := testutil.DB(t)
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := mustInsertUser(t, pool, "ben@example.com")
+	cho := mustInsertUser(t, pool, "cho@example.com")
+	const limit = 512 << 10
+
+	requirePgError(t, insertAvatar(pool, ana, []byte{}, hash(1)), checkViolation, "avatars_image_size")
+	requirePgError(t, insertAvatar(pool, ana, bytes.Repeat([]byte{0xFF}, limit+1), hash(1)), checkViolation, "avatars_image_size")
+	if err := insertAvatar(pool, ben, []byte{0xFF}, hash(1)); err != nil {
+		t.Errorf("one-byte image rejected: %v", err)
+	}
+	// The limit counts bytes, zero bytes included.
+	if err := insertAvatar(pool, cho, make([]byte, limit), hash(1)); err != nil {
+		t.Errorf("image of exactly the limit rejected: %v", err)
+	}
+}
+
+func TestAvatarsSourceHashMustBe32Bytes(t *testing.T) {
+	pool := testutil.DB(t)
+	uid := mustInsertUser(t, pool, "ana@example.com")
+	for _, h := range [][]byte{{}, []byte("too-short"), bytes.Repeat([]byte{1}, 31), bytes.Repeat([]byte{1}, 33)} {
+		requirePgError(t, insertAvatar(pool, uid, []byte("jpeg"), h), checkViolation, "avatars_source_sha256_length")
+	}
+	if err := insertAvatar(pool, uid, []byte("jpeg"), hash(1)); err != nil {
+		t.Errorf("32-byte hash rejected: %v", err)
+	}
+}
+
+func TestAvatarsBelongToAnExistingUser(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	requirePgError(t, insertAvatar(pool, "00000000-0000-0000-0000-000000000000", []byte("jpeg"), hash(1)),
+		foreignKeyViolation, "avatars_user_id_fkey")
+
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := mustInsertUser(t, pool, "ben@example.com")
+	if err := insertAvatar(pool, ana, []byte("ana"), hash(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := insertAvatar(pool, ben, []byte("ben"), hash(2)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Deleting a user deletes their picture and nobody else's.
+	if _, err := pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, ana); err != nil {
+		t.Fatal(err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM avatars WHERE user_id = $1`, ana); n != 0 {
+		t.Errorf("pictures of a deleted user = %d, want 0", n)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM avatars WHERE user_id = $1 AND image = 'ben'`, ben); n != 1 {
+		t.Errorf("pictures of the other user = %d, want 1", n)
+	}
+}
+
+// testutil.DB empties the table like every table of user data.
+func TestAvatarsAreTruncatedBetweenTests(t *testing.T) {
+	pool := testutil.DB(t)
+	uid := mustInsertUser(t, pool, "ana@example.com")
+	if err := insertAvatar(pool, uid, []byte("jpeg"), hash(1)); err != nil {
+		t.Fatal(err)
+	}
+	pool = testutil.DB(t)
+	if n := countRows(t, pool, `SELECT count(*) FROM avatars`); n != 0 {
+		t.Errorf("avatars after testutil.DB = %d, want 0", n)
+	}
+}
+
+// 00008 adds avatars. Up leaves users and profiles as they were and gives
+// nobody a picture; down removes the table with whatever pictures it holds
+// and touches nothing else.
+func TestMigration00008AvatarsWithExistingRows(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	// Leave the schema migrated whatever happens here.
+	t.Cleanup(func() {
+		if err := db.Migrate(ctx, pool); err != nil {
+			t.Errorf("restoring the schema: %v", err)
+		}
+	})
+
+	// Before 00008: users and profiles exist, the table does not.
+	if err := db.MigrateDownTo(ctx, pool, 7); err != nil {
+		t.Fatalf("down to 00007: %v", err)
+	}
+	if columnExists(t, pool, "avatars", "user_id") {
+		t.Fatal("avatars exists before 00008")
+	}
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := insertGoogleUser(t, pool, "ben@example.com", "1001")
+	if err := insertProfile(pool, ana, "Ana", "Hi"); err != nil {
+		t.Fatal(err)
+	}
+	anaID := publicID(t, pool, ana)
+
+	// Up with users and a profile present: nothing is backfilled.
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("up with users present: %v", err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM avatars`); n != 0 {
+		t.Errorf("avatars after migrating = %d, want 0: existing users get none", n)
+	}
+	if err := insertAvatar(pool, ana, []byte("ana"), hash(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := insertAvatar(pool, ben, []byte("ben"), hash(2)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Down with pictures present: they go; users, identities and the profile
+	// with its public id stay.
+	if err := db.MigrateDownTo(ctx, pool, 7); err != nil {
+		t.Fatalf("down with pictures present: %v", err)
+	}
+	if columnExists(t, pool, "avatars", "user_id") {
+		t.Error("avatars still exists after rolling 00008 back")
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM users u LEFT JOIN user_identities i ON i.user_id = u.id`); n != 2 {
+		t.Errorf("users after rolling back = %d, want 2", n)
+	}
+	if got := publicID(t, pool, ana); got != anaID {
+		t.Errorf("ana's public id after rolling back: %s, want %s", got, anaID)
+	}
+
+	// Up again: an empty table, and the same users can set a picture.
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM avatars`); n != 0 {
+		t.Errorf("avatars after re-applying = %d, want 0", n)
+	}
+	if err := insertAvatar(pool, ana, []byte("ana"), hash(1)); err != nil {
+		t.Errorf("setting a picture after re-applying: %v", err)
+	}
+}

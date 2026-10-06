@@ -26,7 +26,7 @@ func tableExists(t *testing.T, pool *pgxpool.Pool, name string) bool {
 func TestMigrationsApplyFromEmptyAndRollBack(t *testing.T) {
 	ctx := context.Background()
 	pool := testutil.DB(t)
-	tables := []string{"users", "user_tokens", "sessions", "user_identities", "profiles", "languages", "user_languages"}
+	tables := []string{"users", "user_tokens", "sessions", "user_identities", "profiles", "languages", "user_languages", "avatars"}
 
 	if err := db.MigrateDownAll(ctx, pool); err != nil {
 		t.Fatalf("down: %v", err)
