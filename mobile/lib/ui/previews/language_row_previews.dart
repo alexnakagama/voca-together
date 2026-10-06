@@ -14,7 +14,11 @@ Widget languageRow() => const LanguageRow(
   level: 'Native',
   levelSemanticLabel: 'Spanish, level Native',
   removeLabel: 'Remove Spanish',
+  moveUpLabel: 'Move Spanish up',
+  moveDownLabel: 'Move Spanish down',
   onLevelPressed: _noop,
+  onMoveUp: _noop,
+  onMoveDown: _noop,
   onRemove: _noop,
 );
 
@@ -29,7 +33,26 @@ Widget languageRowSameName() => const LanguageRow(
   level: 'C1',
   levelSemanticLabel: 'English, level C1',
   removeLabel: 'Remove English',
+  moveUpLabel: 'Move English up',
+  moveDownLabel: 'Move English down',
   onLevelPressed: _noop,
+  onMoveUp: _noop,
+  onMoveDown: _noop,
+  onRemove: _noop,
+);
+
+@VocaPreview(group: _group, name: 'First in its list')
+Widget languageRowFirst() => const LanguageRow(
+  name: 'Portuguese',
+  endonym: 'Português',
+  level: 'B1',
+  levelSemanticLabel: 'Portuguese, level B1',
+  removeLabel: 'Remove Portuguese',
+  moveUpLabel: 'Move Portuguese up',
+  moveDownLabel: 'Move Portuguese down',
+  onLevelPressed: _noop,
+  onMoveUp: null,
+  onMoveDown: _noop,
   onRemove: _noop,
 );
 
@@ -40,7 +63,11 @@ Widget languageRowDisabled() => const LanguageRow(
   level: 'A2',
   levelSemanticLabel: 'Japanese, level A2',
   removeLabel: 'Remove Japanese',
+  moveUpLabel: 'Move Japanese up',
+  moveDownLabel: 'Move Japanese down',
   onLevelPressed: null,
+  onMoveUp: null,
+  onMoveDown: null,
   onRemove: null,
 );
 
@@ -56,6 +83,10 @@ Widget languageRowLargeText() => const LanguageRow(
   level: 'Native',
   levelSemanticLabel: 'Scottish Gaelic, level Native',
   removeLabel: 'Remove Scottish Gaelic',
+  moveUpLabel: 'Move Scottish Gaelic up',
+  moveDownLabel: 'Move Scottish Gaelic down',
   onLevelPressed: _noop,
+  onMoveUp: _noop,
+  onMoveDown: _noop,
   onRemove: _noop,
 );

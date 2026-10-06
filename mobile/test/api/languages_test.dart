@@ -295,6 +295,50 @@ void main() {
       expect(languages.learning.clear, throwsUnsupportedError);
     });
 
+    // What the editor compares to know whether anything changed (030).
+    group('equality', () {
+      const es = UserLanguage('es', LanguageLevel.native);
+      const en = UserLanguage('en', LanguageLevel.c1);
+      const ja = UserLanguage('ja', LanguageLevel.a2);
+
+      test('an entry is its code and its level', () {
+        final same = UserLanguage('e${'s'}', LanguageLevel.native);
+        expect(same, es);
+        expect(same.hashCode, es.hashCode);
+        expect(es, isNot(const UserLanguage('es', LanguageLevel.c2)));
+        expect(es, isNot(const UserLanguage('en', LanguageLevel.native)));
+      });
+
+      test('equal selections are equal, with equal hashes', () {
+        final a = UserLanguages(spoken: const [es, en], learning: const [ja]);
+        final b = UserLanguages(spoken: [es, en], learning: [ja]);
+        expect(a, b);
+        expect(a.hashCode, b.hashCode);
+        final none = UserLanguages(spoken: const [], learning: const []);
+        expect(none, UserLanguages(spoken: const [], learning: const []));
+      });
+
+      test('a level, the order, the list or an entry makes a difference', () {
+        final base = UserLanguages(
+          spoken: const [es, en],
+          learning: const [ja],
+        );
+        for (final other in [
+          UserLanguages(
+            spoken: const [es, UserLanguage('en', LanguageLevel.c2)],
+            learning: const [ja],
+          ),
+          UserLanguages(spoken: const [en, es], learning: const [ja]),
+          UserLanguages(spoken: const [es], learning: const [en, ja]),
+          UserLanguages(spoken: const [es, en], learning: const []),
+          UserLanguages(spoken: const [es, en, ja], learning: const []),
+          UserLanguages(spoken: const [ja], learning: const [es, en]),
+        ]) {
+          expect(other, isNot(base));
+        }
+      });
+    });
+
     // A member's languages are personal data: never in a string.
     test('toString is redacted', () {
       const entry = UserLanguage('yue', LanguageLevel.native);

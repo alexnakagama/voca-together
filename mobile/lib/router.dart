@@ -4,6 +4,7 @@ import 'api/account_api.dart';
 
 import 'screens/forgot_password_screen.dart';
 import 'screens/home_screen.dart';
+import 'screens/languages_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/register_screen.dart';
@@ -20,12 +21,16 @@ abstract final class Routes {
   static const home = '/home';
   static const profile = '/profile';
 
+  /// The editor of the user's own languages. Like the profile it names
+  /// nobody, and it carries no language (decision 030).
+  static const languages = '/profile/languages';
+
   /// The routes a signed-out user may visit.
   static const authRoutes = {login, register, forgotPassword};
 
-  /// The routes a signed-in user may visit. The profile is the user's own:
-  /// no route names another member.
-  static const signedInRoutes = {home, profile};
+  /// The routes a signed-in user may visit. The profile and the languages
+  /// are the user's own: no route names another member.
+  static const signedInRoutes = {home, profile, languages};
 }
 
 /// Where a user with [status] may be when navigating to [location]: `null` to
@@ -83,6 +88,10 @@ GoRouter createRouter(SessionManager session, AccountApi accountApi) {
       GoRoute(
         path: Routes.profile,
         builder: (context, state) => ProfileScreen(session: session),
+      ),
+      GoRoute(
+        path: Routes.languages,
+        builder: (context, state) => LanguagesScreen(session: session),
       ),
     ],
   );

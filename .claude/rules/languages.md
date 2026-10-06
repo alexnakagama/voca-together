@@ -18,9 +18,9 @@ paths:
 
 # Languages rules (`GET /v1/languages`, `GET`/`PUT /v1/me/languages`, both sides)
 
-Records: 029 (backend, in force), 030 (client, **draft**: its data, API and session layer, its widgets and the
-Profile summary are implemented, its editor is not). The general rules for a member's own resource are in
-`backend.md`.
+Records: 029 (backend, in force), 030 (client, **draft**: everything in it is implemented, the editor included; the
+final pass over the documents and the emulator run are pending). The general rules for a member's own resource are
+in `backend.md`.
 
 ## Backend (implemented)
 
@@ -47,6 +47,8 @@ language cases of `presentFailure` (in `lib/screens/failure_presentation.dart`).
 - `UserLanguages` is the member's complete selection, never one list or a change to one. Its `toJson` always emits
   both `spoken` and `learning` as arrays (`[]` when empty, never `null`, never left out), and it is the whole body
   of the PUT: put nothing between it and the request that could drop a key. Its lists are unmodifiable copies.
+- `UserLanguage` and `UserLanguages` have value equality, and the order of a list counts: the editor's "anything
+  changed?" is this comparison. Keep `==` and `hashCode` in step with the fields.
 - No rule of the server is repeated in the client: no minimum (either list, or both, may be empty), no maximum, no
   duplicate check, no "`native` only for spoken", no code format. The selection is sent as given.
 - Parsing checks the shape only, and strictly: both lists must be arrays, every code a non-empty string, every
@@ -66,30 +68,46 @@ language cases of `presentFailure` (in `lib/screens/failure_presentation.dart`).
 ## Client: widgets and the Profile summary (implemented)
 
 `lib/ui/widgets/language_chip.dart` and `language_row.dart`, `lib/screens/language_labels.dart`
-(`languageLevelLabel`) and `lib/screens/profile_languages_section.dart` (`ProfileLanguagesSection`, mounted by
-`ProfileScreen` below its form).
+(`languageLevelLabel`, `languageLevelDescription`) and `lib/screens/profile_languages_section.dart`
+(`ProfileLanguagesSection`, mounted by `ProfileScreen` below its form).
 
 - The two widgets are pure UI and take every text as a string: they import neither the models nor the
-  localizations. A level becomes text only through `languageLevelLabel`, in `lib/screens/`.
-- `LanguageRow` is for the editor; no screen uses it yet.
-- The summary is read-only and calls only `languageCatalog()` and `languages()`, together, once when Profile
-  opens. It never saves and holds no selection for a save.
+  localizations. A level becomes text only through `languageLevelLabel` and `languageLevelDescription`, in
+  `lib/screens/`.
+- `LanguageRow` is the editor's row. Its buttons wrap under the name, and among themselves, when they don't fit:
+  keep both `Wrap`s, and every button a 48 dp target.
+- The summary is read-only and calls only `languageCatalog()` and `languages()`, together: when Profile opens, and
+  again each time the member comes back from the editor, saved or not. It never saves and holds no selection for
+  a save.
+- Its "Edit languages" button is shown only with a loaded selection (none chosen included). It pushes
+  `Routes.languages` and passes nothing; before the reload on return the old selection is dropped, so a failed
+  reload shows the error, never languages that may no longer be stored.
 - Its state is its own: a failed load shows an error and a retry inside the section, and the profile form, its
   save and its banners don't depend on it. Don't merge the two loads or their errors.
 - The load fails whole: if either request fails, no language is shown (never a partial list, never "none yet").
 - A code the catalog doesn't name is shown as the code, so every language the member has stays visible.
 - A list with no language gets no heading; with both empty, one "none yet" text.
 
-## Client: the editor (not implemented)
+## Client: the editor (implemented)
 
-There is no editor, no `/profile/languages` route and no control on Profile that opens one yet. These are the
-approved requirements (030). When they exist, update `mobile.md`'s `signedInRoutes`, add the new screen files to
-this file's `paths` if their names don't already match, and remove "draft" here and in 030.
+`lib/screens/languages_screen.dart` (`LanguagesScreen`, at `Routes.languages` = `/profile/languages`) and
+`lib/screens/language_picker_sheet.dart` (`showLanguagePicker`, `showLanguageLevelPicker`).
 
-- No minimum in the editor: add no "at least one" check, and saving two empty lists clears the selection.
-- The editor always saves the complete selection, both lists, whichever one was edited.
-- Languages are edited on their own screen at `/profile/languages`; Profile shows a read-only summary. The route
-  names nobody and carries no language code.
-- Languages are public by intent: the app says so before the member saves, on the editor, where the save is. The
-  summary saves nothing and carries no notice.
-- After the editor saves, the summary on Profile must show the new selection (it loads only when it is created).
+- No minimum and no maximum in the editor: add no "at least one" check and never disable "Add a language"; saving
+  two empty lists clears the selection. Nothing is checked before a save.
+- The editor always saves the complete selection, both lists, whichever one was edited, built in one place
+  (`_selection`). Its working lists start as copies of what was loaded, so a save drops only what the member
+  removed; a code the catalog doesn't name is shown as the code and kept.
+- The route names nobody and carries no language code. A picked language or level travels as the sheet's result,
+  never through the router.
+- Languages are public by intent: the notice is on the editor, above the lists, where the save is. The summary
+  carries no notice.
+- The pickers offer less, they check nothing: a language already in either list is not offered, and "Native" is
+  not offered under "I'm learning" (030). Don't turn either into a check on save.
+- "Changed" is the selection on screen differing from the one loaded, never a flag. Save is available only then.
+- Cancel, the app bar's back and the system's back all go through `_requestLeave`: at once when nothing changed,
+  after the discard question otherwise, and not at all while a save runs. Leaving after a save or a "Discard" uses
+  `context.pop()`, which `PopScope` doesn't hold back.
+- A failed save keeps both lists. A list's errors show under that list, anything else above the notice; any edit
+  clears them all, under both lists.
+- Moving is within one list. A language changes list by being removed and added.

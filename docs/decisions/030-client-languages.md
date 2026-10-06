@@ -1,14 +1,15 @@
 # 030: Languages in the profile (client stage 8, draft)
 
-> **Status:** draft, partly implemented. The data, API and session layer, the language widgets and the read-only
-> summary on Profile exist and are tested; the editor does not (see the first bullet).
+> **Status:** draft, implemented. The data, API and session layer, the language widgets, the summary on Profile and
+> the editor exist and are tested. Still pending before it is in force: the final pass over the documents and
+> verification on the emulator (see the first bullet).
 >
 > **Backend side:** 029. **Changes** 023: `SessionManager` gained `languageCatalog()`, `languages()` and
 > `saveLanguages()`.
 >
 > **Current rules:** `.claude/rules/languages.md`.
 
-- **Status: draft, in three parts.** The decisions below were approved before any client code was written. The
+- **Status: draft, built in three parts.** The decisions below were approved before any client code was written. The
   backend this builds on is complete and described by 029, which this entry does not change.
   - **Implemented (the data, API and session layer):** `lib/api/languages.dart` (`LanguageLevel`, `Language`,
     `UserLanguage`, `UserLanguages`), `ApiPaths.languages` and `ApiPaths.myLanguages`, `AuthApi.languageCatalog`,
@@ -19,12 +20,12 @@
     `languageLevelLabel` and its seven strings, and `ProfileLanguagesSection`, the read-only Languages summary
     that `ProfileScreen` shows below its form. A member sees their languages; described under "What the summary
     does" below.
-  - **Not implemented (the editor):** the editor screen, its route `/profile/languages` and the button on Profile
-    that opens it. `router.dart` knows nothing about languages, nothing calls `saveLanguages()`, `LanguageRow` is
-    used by no screen, and a member can't change their languages in the app.
-  - **Pending after the editor:** completing this entry (the editor's states and tests, deferred work), the final
-    pass over the architecture map and the rule files, and verification on the emulator. The word "draft" is
-    removed then.
+  - **Implemented (the editor):** `LanguagesScreen` at `/profile/languages`, the picker and the level choice
+    (`lib/screens/language_picker_sheet.dart`), the "Edit languages" button of the summary, value equality on
+    `UserLanguage` and `UserLanguages`, and the move buttons of `LanguageRow`. A member can change their
+    languages in the app; described under "What the editor does" below.
+  - **Pending:** the final pass over the architecture map and the rule files, and verification on the emulator.
+    The word "draft" is removed then.
 - **Scope:** the signed-in user reads the catalog and reads and replaces their own languages, over the contract of
   029. Nothing about other members.
 - **No minimum in the client.** `spoken` may be empty, `learning` may be empty, and both may be empty. The app
@@ -129,9 +130,10 @@
     member's order. A list with no language gets no heading.
   - *A code the catalog doesn't name is shown as the code.* It can't happen against one server (029's foreign
     key), and hiding the entry would show the member fewer languages than they have.
-  - *Read-only, and for now without a way in to the editor.* The button that opens the editor is added with the
-    editor and its route: a button to a route that doesn't exist would send the member back to home. Until then
-    the "none chosen" sentence states the fact and invites nothing.
+  - *Read-only, with the way in to the editor.* An "Edit languages" button below the languages, shown whenever
+    the selection is (none chosen included) and not while it is loading or failed to load. It pushes the editor
+    over the profile, so text typed in the profile form is kept, and when the member comes back, saved or not,
+    the section asks for the catalog and the selection again (see "What the editor does").
   - *Widgets.* `LanguageChip` and `LanguageRow` take every text as a string and import neither the models nor the
     localizations; `languageLevelLabel` (in `lib/screens/`) is the one place a level becomes text. The chip is not
     a control and is read as one item. The row's level button is labelled with the language as well as the level,
@@ -144,6 +146,64 @@
     leaving, reopening); and the profile's accessibility and privacy runs with the section in them.
 - **The visibility notice goes on the editor.** That is where the member saves, so that is where "before they
   save" is; the summary saves nothing and shows only what the member already chose, and the profile form's notice
-  (028) keeps speaking for the name and the text alone. Its wording and exact place are settled with the editor.
-- **Not decided here:** the layout of the editor and the names of its screen and states. They are settled in the
-  editor step and written here then.
+  (028) keeps speaking for the name and the text alone. It is the first thing under the editor's title, above
+  both lists: "Other members will be able to see the languages you speak and are learning, and your level in
+  each."
+- **What the editor does** (`lib/screens/languages_screen.dart`, `language_picker_sheet.dart`):
+  - *One screen with its own state, like the profile's.* It asks for the catalog and the selection together when
+    it opens; the load is whole (loading, or an error with "Try again", or both lists), a late answer is dropped,
+    and a session that ended shows nothing. It edits copies of the two loaded lists, so a save can only drop a
+    language the member removed. No object outlives the screen, and it shares nothing with the summary.
+  - *Layout:* a failed save's message; the notice; "I speak" and "I'm learning", each with its heading, the
+    server's error for that list, its `LanguageRow`s and "Add a language"; Save; Cancel.
+  - *Adding:* a sheet with a search field over the catalog (name, own name and code, whatever the case), then a
+    sheet with the levels, each with a one-line description; the language goes last in its list. Closing either
+    sheet adds nothing. The choice is the sheet's result, never part of a route.
+  - *Languages already chosen, in either list, are not offered.* A language is in one list only (029), so
+    offering it again leads only to a `duplicate` the member must undo. This is not a check: nothing is verified
+    on save, and the server's `duplicate` is still shown if it comes.
+  - *"Native" is not offered for a language being learned.* The level choice under "I'm learning" is A1 to C2.
+    The models and the save still repeat no rule of the server: nothing is checked, and an entry that held
+    `native` there would be shown and sent as it is. Offering it would let the member pick a level that is never
+    valid and then meet "one of these levels can't be used here", which names neither the entry nor the reason.
+    The maximum per list is not treated this way: "Add a language" never disables, because the limit is a number
+    the server may change (028, 029).
+  - *Ordering.* Each row has "move up" and "move down", which swap it with its neighbour in the same list; the
+    first can't go up and the last can't go down. The stage plan had left reordering out ("the order is the
+    order added"); it was added with the editor because the first language of a list is the primary one (029)
+    and changing it would otherwise mean removing and re-adding languages, levels included. Buttons rather than
+    dragging: a list has a handful of rows, a drag competes with the screen's own scrolling, and buttons are
+    ordinary labelled 48 dp targets. A language doesn't move between the lists: remove it and add it to the
+    other.
+  - *Whether anything changed is a comparison.* `UserLanguage` and `UserLanguages` have value equality, with the
+    order counting, and "changed" is "the selection on screen differs from the one loaded". A flag set by every
+    edit would stay set after an edit is undone. `toString` stays redacted.
+  - *Save* is available only when something changed. It sends the complete selection in one request and, on
+    200, leaves for the profile. While it runs every control is disabled and back is ignored: leaving then would
+    let the summary load before the save is stored. There is no client validation, so no "required" text.
+  - *A failed save keeps both lists.* The server's errors for a list (`too_many`, `unknown_language`,
+    `invalid_level`, `duplicate`) show under that list and the first is scrolled to; anything else is one message
+    above the notice. Any edit clears them all, under both lists, because a language in both is reported on
+    `learning` and may be fixed in `spoken`. Retrying sends the same body, safely (the save is idempotent, 029).
+  - *Leaving.* Cancel, the app bar's back and the system's back are one path: at once when nothing changed,
+    otherwise after "Discard changes?" ("Keep editing" / "Discard"). The profile form has no such question (028);
+    the editor holds more work, several taps per language. A session ending is a redirect, not a pop: nothing is
+    asked, and an open sheet or dialog goes with the screen.
+  - *The summary loads again on every return, not only after a save.* A save whose answer was lost may have been
+    stored, after which the member cancels; only a load shows what is stored. It also means the editor passes
+    nothing back. If that load fails the summary shows the failure, not the selection it had before. The cost is
+    two small requests and a brief spinner after a cancel.
+  - *A code the catalog doesn't name* is shown as the code, can be levelled, moved and removed, and is saved
+    unless removed. Once removed it can't be added again, since the picker lists the catalog; it cannot occur
+    against one server (029's foreign key).
+  - *The row at narrow widths.* `LanguageRow`'s four buttons take about 230 dp, so beside a longer name on a
+    phone they sit on a second line under it, and at large text they wrap again among themselves. Every button
+    stays a 48 dp target.
+  - *Tests:* the editor (`test/screens/languages_screen_test.dart`: loading and each failed load, adding, search,
+    languages not offered, a catalog of 120 with the keyboard open, levels, ordering, removing, the exact body of
+    the save in each case, availability of Save, a double tap, a save that gets no answer, every failure, the
+    three ways of leaving with and without each kind of change, the session ending with a sheet or the question
+    open, the location, large text at 320 dp); the summary's button and reload; the redirect table; equality of
+    the models; the row and its previews; and the accessibility and privacy runs with the editor's states.
+- **Deferred:** a catalog cache (two requests per open and per return); dragging to reorder; moving a language
+  between the lists in one step; telling the member the limits before a save; per-locale language names.

@@ -79,7 +79,7 @@ complete yet, and its row says which part exists).
 | [027](decisions/027-profile-backend.md) | User profile | backend | in force |
 | [028](decisions/028-client-profile-screen.md) | Profile screen | client | in force |
 | [029](decisions/029-languages-backend.md) | Languages: catalog and a member's own languages | backend | in force |
-| [030](decisions/030-client-languages.md) | Languages in the profile | client | draft: data, API and session layer, widgets and the Profile summary implemented; the editor not |
+| [030](decisions/030-client-languages.md) | Languages in the profile | client | draft: implemented, the editor included; the final pass over the documents and the emulator run pending |
 
 ## What later records changed
 

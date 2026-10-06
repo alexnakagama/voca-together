@@ -35,8 +35,9 @@ load with that feature's files: `auth.md` (session internals), `google-sign-in.m
 - Screens (`lib/screens/`) never read or change session state or decide access: they call
   `SessionManager`/`AccountApi` and the redirect reacts. `SessionStatus`, `.status` and `authRedirect` are forbidden
   in `lib/screens/`.
-- Signed-in routes are `Routes.signedInRoutes` (`/home`, `/profile`); `authRedirect` stays a function of the session
-  status and the path only. `/profile` is always the caller's own (decision 028).
+- Signed-in routes are `Routes.signedInRoutes` (`/home`, `/profile`, `/profile/languages`); `authRedirect` stays a
+  function of the session status and the path only. `/profile` and `/profile/languages` are always the caller's own
+  (decisions 028, 030).
 - Never put a token or email in a route.
 
 ## Networking and the token boundary (decision 023)
@@ -47,7 +48,7 @@ load with that feature's files: `auth.md` (session internals), `google-sign-in.m
 - **Token boundary:** screens may use only `AccountApi` (register/resend/forgot, token-free) and `SessionManager`'s
   public API, which takes and returns no token (`signIn`/`signInWithGoogle()`/`logout` → `void`, `me()` → `Me`,
   `profile()` → `Profile?`, `saveProfile()` → `Profile`, `languageCatalog()` → `List<Language>`, `languages()` and
-  `saveLanguages()` → `UserLanguages`). No screen calls `saveLanguages()` yet (`languages.md`).
+  `saveLanguages()` → `UserLanguages`). Only the languages editor calls `saveLanguages()` (`languages.md`).
 - Adding a protected route: a path in `ApiPaths`, a call in `AuthApi` (which takes the raw access token and is held
   only by `SessionManager`), and a typed, token-free `SessionManager` method that makes one `_authorized` call.
   `_authorized` stays private. A model screens may import is added to the allowlist in `test/architecture_test.dart`.

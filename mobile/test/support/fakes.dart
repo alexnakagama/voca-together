@@ -274,6 +274,21 @@ Map<String, Object?> catalogBody() => {
   ],
 };
 
+/// A `GET /v1/languages` 200 body with [count] languages, "Language 000"
+/// onwards, ordered by name: more than a screen of them.
+Map<String, Object?> largeCatalogBody([int count = 120]) => {
+  'languages': [
+    for (var i = 0; i < count; i++)
+      {
+        'code':
+            'x${String.fromCharCode(97 + i ~/ 26)}'
+            '${String.fromCharCode(97 + i % 26)}',
+        'name': 'Language ${'$i'.padLeft(3, '0')}',
+        'endonym': 'Endonym ${'$i'.padLeft(3, '0')}',
+      },
+  ],
+};
+
 /// A `GET`/`PUT /v1/me/languages` 200 body. Each entry is (code, level);
 /// both lists are always arrays, as the backend sends them.
 Map<String, Object?> languagesBody({

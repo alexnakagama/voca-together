@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:vocatogether/api/api_paths.dart';
 import 'package:vocatogether/auth/google_identity_exception.dart';
+import 'package:vocatogether/ui/widgets/form_error_banner.dart';
 import 'package:vocatogether/ui/widgets/google_sign_in_button.dart';
 
 import '../support/fakes.dart';
@@ -124,6 +125,37 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
         languagesBody(spoken: [('es', 'native')], learning: [('xx', 'a2')]),
       ),
     )
+    // The languages editor: loaded, an echoing refusal of the save, then
+    // saved, and the profile's section loading what was stored.
+    ..once(
+      'GET',
+      ApiPaths.myLanguages,
+      (_) => jsonResponse(
+        200,
+        languagesBody(spoken: [('es', 'native')], learning: [('xx', 'a2')]),
+      ),
+    )
+    ..once('PUT', ApiPaths.myLanguages, (_) => _echo(422))
+    ..once(
+      'PUT',
+      ApiPaths.myLanguages,
+      (request) => http.Response(
+        request.body,
+        200,
+        headers: {'content-type': 'application/json'},
+      ),
+    )
+    ..once(
+      'GET',
+      ApiPaths.myLanguages,
+      (_) => jsonResponse(
+        200,
+        languagesBody(
+          spoken: [('es', 'native'), ('ja', 'b1')],
+          learning: [('xx', 'a2')],
+        ),
+      ),
+    )
     // Google: an echoing 409, an echoing 500, then a session.
     ..once(
       'POST',
@@ -235,6 +267,57 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
   record();
   _checkScreen(tester);
   expect(find.text(l10n.profileSaved), findsOneWidget);
+
+  // The languages editor: its route names nobody and holds no language,
+  // whatever is picked, refused or saved on it.
+  void onEditor() {
+    record();
+    expect(app.location(tester), '/profile/languages');
+    _checkScreen(tester);
+  }
+
+  await tapAndSettle(
+    tester,
+    find.widgetWithText(OutlinedButton, l10n.languagesEditButton),
+  );
+  onEditor();
+  expect(find.text(l10n.languagesVisibilityNotice), findsOneWidget);
+  await tapAndSettle(tester, find.text(l10n.languagesAddButton).first);
+  onEditor();
+  await tapAndSettle(tester, find.text('Japanese'));
+  onEditor();
+  await tapAndSettle(tester, find.text(l10n.languageLevelB1));
+  onEditor();
+  final saveLanguages = find.widgetWithText(
+    FilledButton,
+    l10n.languagesSaveButton,
+  );
+  await tapAndSettle(tester, saveLanguages);
+  onEditor();
+  expect(find.byType(FormErrorBanner), findsOneWidget);
+  await tester.pageBack();
+  await tester.pumpAndSettle();
+  onEditor();
+  expect(find.text(l10n.languagesDiscardTitle), findsOneWidget);
+  await tapAndSettle(tester, find.text(l10n.languagesDiscardKeep));
+  await tapAndSettle(tester, saveLanguages);
+  record();
+  expect(app.location(tester), '/profile');
+  _checkScreen(tester);
+  expect(find.text('Japanese'), findsOneWidget);
+  // A member's languages travel only in the body of their own save.
+  final saves = [
+    for (final r in server.requests)
+      if (r.body.contains('"language"')) r,
+  ];
+  expect(saves, hasLength(2));
+  for (final r in saves) {
+    expect(r.method, 'PUT');
+    expect(r.url.path, ApiPaths.myLanguages);
+    expect(r.url.hasQuery, isFalse);
+    expect(r.body, contains('"ja"'));
+  }
+
   await tester.pageBack();
   await tester.pumpAndSettle();
   record();

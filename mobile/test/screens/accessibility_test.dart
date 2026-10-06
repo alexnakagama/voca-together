@@ -88,6 +88,44 @@ void _languages(
     (_) => jsonResponse(200, languagesBody(spoken: spoken, learning: learning)),
   );
 
+/// A signed-in member with a profile and [spoken] and [learning] stored,
+/// for the languages editor: the profile's section and the editor each
+/// load the catalog and the selection.
+void _editor(
+  FakeServer s, {
+  List<(String, String)> spoken = const [],
+  List<(String, String)> learning = const [],
+}) {
+  _home(s);
+  s
+    ..once(
+      'GET',
+      ApiPaths.profile,
+      (_) => jsonResponse(200, profileBody(displayName: 'Ana')),
+    )
+    ..always('GET', ApiPaths.languages, (_) => jsonResponse(200, catalogBody()))
+    ..always(
+      'GET',
+      ApiPaths.myLanguages,
+      (_) =>
+          jsonResponse(200, languagesBody(spoken: spoken, learning: learning)),
+    );
+}
+
+Future<void> _openEditor(WidgetTester tester) async {
+  await _openProfile(tester);
+  await tapAndSettle(
+    tester,
+    find.widgetWithText(OutlinedButton, l10n.languagesEditButton),
+  );
+}
+
+/// Opens the picker of "I speak".
+Future<void> _openPicker(WidgetTester tester) async {
+  await _openEditor(tester);
+  await tapAndSettle(tester, find.text(l10n.languagesAddButton).first);
+}
+
 final _cases = <_Case>[
   _Case('login', action: l10n.logInButton),
   _Case(
@@ -349,6 +387,115 @@ final _cases = <_Case>[
     drive: _openProfile,
     action: l10n.tryAgain,
   ),
+  _Case(
+    'languages editor, load failed',
+    signedIn: true,
+    script: (s) {
+      _editor(s);
+      s
+        ..once(
+          'GET',
+          ApiPaths.myLanguages,
+          (_) => jsonResponse(200, languagesBody()),
+        )
+        ..once('GET', ApiPaths.myLanguages, networkFailure);
+    },
+    drive: _openEditor,
+    action: l10n.tryAgain,
+  ),
+  _Case(
+    'languages editor, none chosen',
+    signedIn: true,
+    script: _editor,
+    drive: _openEditor,
+    action: l10n.languagesAddButton,
+  ),
+  _Case(
+    'languages editor, languages',
+    signedIn: true,
+    script: (s) => _editor(
+      s,
+      spoken: [('es', 'native'), ('en', 'c1')],
+      learning: [('ja', 'a2')],
+    ),
+    drive: _openEditor,
+    action: l10n.languagesCancelButton,
+  ),
+  _Case(
+    'languages editor, picker',
+    signedIn: true,
+    script: (s) => _editor(s, learning: [('ja', 'a2')]),
+    drive: _openPicker,
+    action: 'Spanish',
+  ),
+  _Case(
+    'languages editor, picker without a match',
+    signedIn: true,
+    script: _editor,
+    drive: (t) async {
+      await _openPicker(t);
+      await t.enterText(
+        find.widgetWithText(TextField, l10n.languagePickerSearchLabel),
+        'klingon',
+      );
+      await t.pumpAndSettle();
+    },
+    action: l10n.languagePickerNoMatch,
+  ),
+  _Case(
+    'languages editor, level choice',
+    signedIn: true,
+    script: (s) => _editor(s, spoken: [('es', 'b2')]),
+    drive: (t) async {
+      await _openEditor(t);
+      await tapAndSettle(t, find.text(l10n.languageLevelB2));
+    },
+    action: l10n.languageLevelNative,
+  ),
+  _Case(
+    'languages editor, save failed',
+    signedIn: true,
+    script: (s) {
+      _editor(s, spoken: [('es', 'native'), ('en', 'c1')]);
+      s.once(
+        'PUT',
+        ApiPaths.myLanguages,
+        (_) => jsonResponse(422, {
+          'error': {
+            'code': 'validation_failed',
+            'fields': [
+              {'field': 'spoken', 'code': 'too_many'},
+              {'field': 'learning', 'code': 'duplicate'},
+              {'field': 'kind', 'code': 'unknown'},
+            ],
+          },
+        }),
+      );
+    },
+    drive: (t) async {
+      await _openEditor(t);
+      await tapAndSettle(t, find.byTooltip(l10n.languageMoveUp('English')));
+      await tapAndSettle(
+        t,
+        find.widgetWithText(FilledButton, l10n.languagesSaveButton),
+      );
+    },
+    action: l10n.languagesSaveButton,
+  ),
+  _Case(
+    'languages editor, discard question',
+    signedIn: true,
+    script: (s) => _editor(s, spoken: [('es', 'native'), ('en', 'c1')]),
+    drive: (t) async {
+      await _openEditor(t);
+      await tapAndSettle(t, find.byTooltip(l10n.languageRemove('English')));
+      await tapAndSettle(
+        t,
+        find.widgetWithText(OutlinedButton, l10n.languagesCancelButton),
+      );
+    },
+    action: l10n.languagesDiscardConfirm,
+  ),
 ];
 
 Future<void> _reach(
@@ -422,6 +569,66 @@ void main() {
       });
     });
   }
+
+  // A state that never settles, so it can't go through the cases above.
+  group('languages editor, loading', () {
+    Future<void> reach(
+      WidgetTester tester, {
+      Size? size,
+      double textScale = 1,
+      Brightness brightness = Brightness.light,
+    }) async {
+      final server = FakeServer();
+      _editor(server);
+      await pumpApp(
+        tester,
+        server: server,
+        signedIn: true,
+        size: size,
+        textScale: textScale,
+        brightness: brightness,
+      );
+      await _openProfile(tester);
+      server.once('GET', ApiPaths.myLanguages, neverAnswers);
+      final edit = find.widgetWithText(
+        OutlinedButton,
+        l10n.languagesEditButton,
+      );
+      await tester.ensureVisible(edit);
+      await tester.pumpAndSettle();
+      await tester.tap(edit);
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.bySemanticsLabel(l10n.languagesLoading), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    }
+
+    for (final brightness in Brightness.values) {
+      testWidgets('meets the tap-target, label and contrast guidelines '
+          '(${brightness.name})', (tester) async {
+        final handle = tester.ensureSemantics();
+        await reach(tester, brightness: brightness);
+        await expectLater(tester, meetsGuideline(androidTapTargetGuideline));
+        await expectLater(tester, meetsGuideline(labeledTapTargetGuideline));
+        await expectLater(tester, meetsGuideline(textContrastGuideline));
+        handle.dispose();
+        // Lets the request time out, so no timer outlives the test.
+        await tester.pump(const Duration(seconds: 16));
+        await tester.pumpAndSettle();
+      });
+    }
+
+    testWidgets('large text on a small screen', (tester) async {
+      final handle = tester.ensureSemantics();
+      await reach(tester, size: const Size(320, 480), textScale: 2);
+      // The way back is there while it loads.
+      expect(find.byType(BackButton).hitTestable(), findsOneWidget);
+      handle.dispose();
+      await tester.pump(const Duration(seconds: 16));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+  });
 
   group('semantics', () {
     testWidgets('screen titles are headers', (tester) async {

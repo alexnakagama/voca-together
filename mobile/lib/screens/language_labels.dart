@@ -14,3 +14,17 @@ String languageLevelLabel(LanguageLevel level, AppLocalizations l10n) {
     LanguageLevel.native => l10n.languageLevelNative,
   };
 }
+
+/// The localized one-line description of [level], shown beside its short
+/// name where a level is chosen: "Upper intermediate".
+String languageLevelDescription(LanguageLevel level, AppLocalizations l10n) {
+  return switch (level) {
+    LanguageLevel.a1 => l10n.languageLevelDescriptionA1,
+    LanguageLevel.a2 => l10n.languageLevelDescriptionA2,
+    LanguageLevel.b1 => l10n.languageLevelDescriptionB1,
+    LanguageLevel.b2 => l10n.languageLevelDescriptionB2,
+    LanguageLevel.c1 => l10n.languageLevelDescriptionC1,
+    LanguageLevel.c2 => l10n.languageLevelDescriptionC2,
+    LanguageLevel.native => l10n.languageLevelDescriptionNative,
+  };
+}

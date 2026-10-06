@@ -103,6 +103,13 @@ final class UserLanguage {
   Map<String, Object?> toJson() => {'language': code, 'level': level.wire};
 
   @override
+  bool operator ==(Object other) =>
+      other is UserLanguage && other.code == code && other.level == level;
+
+  @override
+  int get hashCode => Object.hash(code, level);
+
+  @override
   String toString() => 'UserLanguage(<redacted>)';
 }
 
@@ -154,8 +161,29 @@ final class UserLanguages {
     'learning': [for (final language in learning) language.toJson()],
   };
 
+  /// Two selections are equal when both lists hold the same languages at
+  /// the same levels in the same order: the order is the member's, and part
+  /// of what a save stores.
+  @override
+  bool operator ==(Object other) =>
+      other is UserLanguages &&
+      _sameList(other.spoken, spoken) &&
+      _sameList(other.learning, learning);
+
+  @override
+  int get hashCode =>
+      Object.hash(Object.hashAll(spoken), Object.hashAll(learning));
+
   @override
   String toString() => 'UserLanguages(<redacted>)';
+}
+
+bool _sameList(List<UserLanguage> a, List<UserLanguage> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }
 
 const _malformed = ApiProtocolException(

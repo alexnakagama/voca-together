@@ -353,4 +353,91 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get languageLevelNative => 'Native';
+
+  @override
+  String get languagesEditButton => 'Edit languages';
+
+  @override
+  String get languagesEditorTitle => 'Your languages';
+
+  @override
+  String get languagesVisibilityNotice =>
+      'Other members will be able to see the languages you speak and are learning, and your level in each.';
+
+  @override
+  String get languagesAddButton => 'Add a language';
+
+  @override
+  String get languagesSaveButton => 'Save';
+
+  @override
+  String get languagesCancelButton => 'Cancel';
+
+  @override
+  String get languagesDiscardTitle => 'Discard changes?';
+
+  @override
+  String get languagesDiscardMessage =>
+      'Your changes to your languages haven’t been saved.';
+
+  @override
+  String get languagesDiscardConfirm => 'Discard';
+
+  @override
+  String get languagesDiscardKeep => 'Keep editing';
+
+  @override
+  String get languagePickerTitle => 'Choose a language';
+
+  @override
+  String get languagePickerSearchLabel => 'Search';
+
+  @override
+  String get languagePickerNoMatch => 'No language matches your search.';
+
+  @override
+  String languageLevelPickerTitle(String name) {
+    return 'Your level in $name';
+  }
+
+  @override
+  String languageLevelSemantics(String name, String level) {
+    return '$name, level $level';
+  }
+
+  @override
+  String languageRemove(String name) {
+    return 'Remove $name';
+  }
+
+  @override
+  String languageMoveUp(String name) {
+    return 'Move $name up';
+  }
+
+  @override
+  String languageMoveDown(String name) {
+    return 'Move $name down';
+  }
+
+  @override
+  String get languageLevelDescriptionA1 => 'Beginner';
+
+  @override
+  String get languageLevelDescriptionA2 => 'Elementary';
+
+  @override
+  String get languageLevelDescriptionB1 => 'Intermediate';
+
+  @override
+  String get languageLevelDescriptionB2 => 'Upper intermediate';
+
+  @override
+  String get languageLevelDescriptionC1 => 'Advanced';
+
+  @override
+  String get languageLevelDescriptionC2 => 'Proficient';
+
+  @override
+  String get languageLevelDescriptionNative => 'Native speaker';
 }

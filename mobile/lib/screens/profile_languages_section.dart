@@ -1,9 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../api/languages.dart';
 import '../l10n/app_localizations.dart';
+import '../router.dart';
 import '../session.dart';
 import '../ui/theme.dart';
 import '../ui/widgets/form_error_banner.dart';
@@ -18,7 +20,9 @@ import 'language_labels.dart';
 ///
 /// It loads by itself, the catalog (for the names) and the selection
 /// together, and keeps its own state: a failure here shows a retry in the
-/// section and leaves the profile form alone. Nothing is changed from here.
+/// section and leaves the profile form alone. Nothing is changed from here:
+/// its button opens the editor, and the section loads again when the member
+/// comes back.
 class ProfileLanguagesSection extends StatefulWidget {
   const ProfileLanguagesSection({super.key, required this.session});
 
@@ -43,6 +47,9 @@ class _ProfileLanguagesSectionState extends State<ProfileLanguagesSection> {
   /// Identifies the latest load; answers to earlier ones are dropped.
   int _request = 0;
 
+  /// The editor was opened from here and hasn't been left yet.
+  bool _editorOpen = false;
+
   @override
   void initState() {
     super.initState();
@@ -53,6 +60,26 @@ class _ProfileLanguagesSectionState extends State<ProfileLanguagesSection> {
     setState(() {
       _loading = true;
       _loadError = null;
+    });
+    unawaited(_load());
+  }
+
+  /// Opens the editor on top of the profile, and on coming back, saved or
+  /// not, loads what the server has: a save whose answer was lost may still
+  /// have been stored.
+  Future<void> _openEditor() async {
+    // A second tap before the editor covers the button would push it twice.
+    if (_editorOpen) return;
+    _editorOpen = true;
+    await context.push<void>(Routes.languages);
+    _editorOpen = false;
+    if (!mounted) return;
+    setState(() {
+      _loading = true;
+      _loadError = null;
+      // What was shown may no longer be what is stored: if this load fails,
+      // the section shows the failure, not the old selection.
+      _languages = null;
     });
     unawaited(_load());
   }
@@ -144,6 +171,13 @@ class _ProfileLanguagesSectionState extends State<ProfileLanguagesSection> {
         ),
         const SizedBox(height: Spacing.md),
         ...content,
+        if (!_loading && languages != null) ...[
+          const SizedBox(height: Spacing.lg),
+          SecondaryButton(
+            label: l10n.languagesEditButton,
+            onPressed: () => unawaited(_openEditor()),
+          ),
+        ],
       ],
     );
   }

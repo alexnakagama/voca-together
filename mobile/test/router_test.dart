@@ -42,6 +42,12 @@ void main() {
       '/profile?x=1': [s, l, null],
       '/profile/': [s, l, h],
       '/profile/other-user': [s, l, h],
+      // The languages editor is the caller's own too, and no language is
+      // ever part of a path (030).
+      '/profile/languages': [s, l, null],
+      '/profile/languages?x=1': [s, l, null],
+      '/profile/languages/': [s, l, h],
+      '/profile/languages/es': [s, l, h],
       '/login/': [s, l, h],
       '/home/': [s, l, h],
       '/nope': [s, l, h],

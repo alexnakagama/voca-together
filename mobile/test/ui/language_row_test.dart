@@ -9,49 +9,77 @@ Widget _row({
   String endonym = 'Español',
   String level = 'B2',
   VoidCallback? onLevelPressed,
+  VoidCallback? onMoveUp,
+  VoidCallback? onMoveDown,
   VoidCallback? onRemove,
 }) => LanguageRow(
   name: name,
   endonym: endonym,
   level: level,
   levelSemanticLabel: '$name, level $level',
+  moveUpLabel: 'Move $name up',
+  moveDownLabel: 'Move $name down',
   removeLabel: 'Remove $name',
   onLevelPressed: onLevelPressed,
+  onMoveUp: onMoveUp,
+  onMoveDown: onMoveDown,
   onRemove: onRemove,
 );
 
+/// A row with every button enabled.
+Widget _enabled({
+  String name = 'Spanish',
+  String endonym = 'Español',
+  String level = 'B2',
+}) => _row(
+  name: name,
+  endonym: endonym,
+  level: level,
+  onLevelPressed: () {},
+  onMoveUp: () {},
+  onMoveDown: () {},
+  onRemove: () {},
+);
+
+/// The icon button whose tooltip is [tooltip], at its full tap-target size.
+Finder _button(String tooltip) => find.ancestor(
+  of: find.byTooltip(tooltip),
+  matching: find.byType(IconButton),
+);
+
+Finder get _up => _button('Move Spanish up');
+Finder get _down => _button('Move Spanish down');
+Finder get _remove => _button('Remove Spanish');
+
 void main() {
   testWidgets('shows the name, the endonym and the level', (tester) async {
-    await pumpUi(tester, _row(onLevelPressed: () {}, onRemove: () {}));
+    await pumpUi(tester, _enabled());
     expect(find.text('Spanish'), findsOneWidget);
     expect(find.text('Español'), findsOneWidget);
     expect(find.text('B2'), findsOneWidget);
   });
 
   testWidgets('an endonym equal to the name is shown once', (tester) async {
-    await pumpUi(
-      tester,
-      _row(
-        name: 'English',
-        endonym: 'English',
-        onLevelPressed: () {},
-        onRemove: () {},
-      ),
-    );
+    await pumpUi(tester, _enabled(name: 'English', endonym: 'English'));
     expect(find.text('English'), findsOneWidget);
   });
 
   testWidgets('each button calls its own callback', (tester) async {
-    var level = 0;
-    var removed = 0;
+    final calls = <String>[];
     await pumpUi(
       tester,
-      _row(onLevelPressed: () => level++, onRemove: () => removed++),
+      _row(
+        onLevelPressed: () => calls.add('level'),
+        onMoveUp: () => calls.add('up'),
+        onMoveDown: () => calls.add('down'),
+        onRemove: () => calls.add('remove'),
+      ),
     );
     await tester.tap(find.text('B2'));
-    expect((level, removed), (1, 0));
-    await tester.tap(find.byTooltip('Remove Spanish'));
-    expect((level, removed), (1, 1));
+    await tester.tap(_up);
+    await tester.tap(_down);
+    await tester.tap(_remove);
+    expect(calls, ['level', 'up', 'down', 'remove']);
   });
 
   for (final brightness in Brightness.values) {
@@ -59,18 +87,24 @@ void main() {
       tester,
     ) async {
       final handle = tester.ensureSemantics();
-      await pumpUi(
-        tester,
-        _row(onLevelPressed: () {}, onRemove: () {}),
-        brightness: brightness,
-      );
+      await pumpUi(tester, _enabled(), brightness: brightness);
       expect(
         tester.getSize(find.byType(TextButton)).height,
         greaterThanOrEqualTo(48),
       );
-      final remove = tester.getSize(find.byType(IconButton));
-      expect(remove.width, greaterThanOrEqualTo(48));
-      expect(remove.height, greaterThanOrEqualTo(48));
+      for (final button in [_up, _down, _remove]) {
+        final size = tester.getSize(button);
+        expect(size.width, greaterThanOrEqualTo(48));
+        expect(size.height, greaterThanOrEqualTo(48));
+      }
+      // Each icon button says what it does, and to which language.
+      for (final label in [
+        'Move Spanish up',
+        'Move Spanish down',
+        'Remove Spanish',
+      ]) {
+        expect(tester.getSemantics(_button(label)).tooltip, label);
+      }
       // The level alone doesn't say whose it is.
       expect(
         tester.getSemantics(find.byType(TextButton)),
@@ -95,10 +129,12 @@ void main() {
     final handle = tester.ensureSemantics();
     await pumpUi(tester, _row());
     expect(tester.widget<TextButton>(find.byType(TextButton)).enabled, isFalse);
-    expect(
-      tester.widget<IconButton>(find.byType(IconButton)).onPressed,
-      isNull,
-    );
+    for (final button in tester.widgetList<IconButton>(
+      find.byType(IconButton),
+    )) {
+      expect(button.onPressed, isNull);
+    }
+    expect(find.byType(IconButton), findsNWidgets(3));
     expect(
       tester.getSemantics(find.byType(TextButton)),
       isSemantics(
@@ -114,44 +150,66 @@ void main() {
   testWidgets('a long name wraps at large text on small screens', (
     tester,
   ) async {
+    final calls = <String>[];
     await pumpUi(
       tester,
       _row(
         name: 'Scottish Gaelic',
         endonym: 'Gàidhlig',
         level: 'Native',
-        onLevelPressed: () {},
-        onRemove: () {},
+        onLevelPressed: () => calls.add('level'),
+        onMoveUp: () => calls.add('up'),
+        onMoveDown: () => calls.add('down'),
+        onRemove: () => calls.add('remove'),
       ),
       size: const Size(320, 480),
       textScale: 2,
     );
     expect(tester.takeException(), isNull);
+    // Nothing is pushed off the screen, and every button takes its tap.
+    final row = tester.getRect(find.byType(LanguageRow));
+    for (final button in [
+      find.byType(TextButton),
+      ...[
+        'Move Scottish Gaelic up',
+        'Move Scottish Gaelic down',
+      ].map(find.byTooltip),
+      find.byTooltip('Remove Scottish Gaelic'),
+    ]) {
+      final rect = tester.getRect(button);
+      expect(rect.left, greaterThanOrEqualTo(row.left));
+      expect(rect.right, lessThanOrEqualTo(row.right));
+      await tester.tap(button);
+    }
+    expect(calls, ['level', 'up', 'down', 'remove']);
     // The buttons moved below the name, which keeps the full width.
     expect(
       tester.getTopLeft(find.byType(TextButton)).dy,
       greaterThanOrEqualTo(tester.getBottomLeft(find.text('Gàidhlig')).dy),
     );
-    expect(tester.getSize(find.byType(IconButton)).height, 48 * 1.0);
+    expect(tester.getSize(_button('Remove Scottish Gaelic')).height, 48 * 1.0);
   });
 
-  testWidgets('at normal sizes the buttons sit on the right of the name', (
+  testWidgets('with room, the buttons sit on the right of the name', (
     tester,
   ) async {
     await pumpUi(
       tester,
-      SizedBox(
-        width: 328,
-        child: _row(onLevelPressed: () {}, onRemove: () {}),
-      ),
-      size: const Size(360, 640),
+      SizedBox(width: 448, child: _enabled()),
+      size: const Size(480, 640),
     );
     final row = tester.getRect(find.byType(LanguageRow));
     expect(tester.getTopLeft(find.text('Spanish')).dx, row.left);
-    expect(tester.getTopRight(find.byType(IconButton)).dx, row.right);
+    expect(tester.getTopRight(_remove).dx, row.right);
+    for (final button in [_up, _down, _remove]) {
+      expect(tester.getCenter(button).dy, moreOrLessEquals(row.center.dy));
+    }
+    // In the order they read: level, up, down, remove.
     expect(
-      tester.getCenter(find.byType(IconButton)).dy,
-      moreOrLessEquals(row.center.dy),
+      tester.getCenter(find.byType(TextButton)).dx,
+      lessThan(tester.getCenter(_up).dx),
     );
+    expect(tester.getCenter(_up).dx, lessThan(tester.getCenter(_down).dx));
+    expect(tester.getCenter(_down).dx, lessThan(tester.getCenter(_remove).dx));
   });
 }

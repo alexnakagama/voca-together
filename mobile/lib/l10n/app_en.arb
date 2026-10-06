@@ -434,5 +434,139 @@
   "languageLevelNative": "Native",
   "@languageLevelNative": {
     "description": "Short name of the level of a native language, shown next to a language the user speaks."
+  },
+  "languagesEditButton": "Edit languages",
+  "@languagesEditButton": {
+    "description": "Button in the languages section of the profile that opens the screen where the user edits their languages."
+  },
+  "languagesEditorTitle": "Your languages",
+  "@languagesEditorTitle": {
+    "description": "Title of the screen where the user edits the languages they speak and are learning."
+  },
+  "languagesVisibilityNotice": "Other members will be able to see the languages you speak and are learning, and your level in each.",
+  "@languagesVisibilityNotice": {
+    "description": "Notice at the top of the languages editor saying that the user’s languages and levels will be visible to other members."
+  },
+  "languagesAddButton": "Add a language",
+  "@languagesAddButton": {
+    "description": "Button under a list of the user’s languages (spoken or learning) that opens the language picker."
+  },
+  "languagesSaveButton": "Save",
+  "@languagesSaveButton": {
+    "description": "Button that saves the user’s languages."
+  },
+  "languagesCancelButton": "Cancel",
+  "@languagesCancelButton": {
+    "description": "Button that leaves the languages editor without saving."
+  },
+  "languagesDiscardTitle": "Discard changes?",
+  "@languagesDiscardTitle": {
+    "description": "Title of the dialog shown when the user leaves the languages editor with unsaved changes."
+  },
+  "languagesDiscardMessage": "Your changes to your languages haven’t been saved.",
+  "@languagesDiscardMessage": {
+    "description": "Text of the dialog shown when the user leaves the languages editor with unsaved changes."
+  },
+  "languagesDiscardConfirm": "Discard",
+  "@languagesDiscardConfirm": {
+    "description": "Dialog button that leaves the languages editor and drops the unsaved changes."
+  },
+  "languagesDiscardKeep": "Keep editing",
+  "@languagesDiscardKeep": {
+    "description": "Dialog button that closes the dialog and stays in the languages editor."
+  },
+  "languagePickerTitle": "Choose a language",
+  "@languagePickerTitle": {
+    "description": "Title of the sheet where the user picks a language to add."
+  },
+  "languagePickerSearchLabel": "Search",
+  "@languagePickerSearchLabel": {
+    "description": "Label of the search field of the language picker."
+  },
+  "languagePickerNoMatch": "No language matches your search.",
+  "@languagePickerNoMatch": {
+    "description": "Text of the language picker when the search finds no language."
+  },
+  "languageLevelPickerTitle": "Your level in {name}",
+  "@languageLevelPickerTitle": {
+    "description": "Title of the sheet where the user chooses their level in a language.",
+    "placeholders": {
+      "name": {
+        "type": "String",
+        "example": "Spanish"
+      }
+    }
+  },
+  "languageLevelSemantics": "{name}, level {level}",
+  "@languageLevelSemantics": {
+    "description": "Accessibility label of the button that shows a language’s level and changes it.",
+    "placeholders": {
+      "name": {
+        "type": "String",
+        "example": "Spanish"
+      },
+      "level": {
+        "type": "String",
+        "example": "B2"
+      }
+    }
+  },
+  "languageRemove": "Remove {name}",
+  "@languageRemove": {
+    "description": "Tooltip and accessibility label of the button that removes a language from a list.",
+    "placeholders": {
+      "name": {
+        "type": "String",
+        "example": "Spanish"
+      }
+    }
+  },
+  "languageMoveUp": "Move {name} up",
+  "@languageMoveUp": {
+    "description": "Tooltip and accessibility label of the button that moves a language one place up its list.",
+    "placeholders": {
+      "name": {
+        "type": "String",
+        "example": "Spanish"
+      }
+    }
+  },
+  "languageMoveDown": "Move {name} down",
+  "@languageMoveDown": {
+    "description": "Tooltip and accessibility label of the button that moves a language one place down its list.",
+    "placeholders": {
+      "name": {
+        "type": "String",
+        "example": "Spanish"
+      }
+    }
+  },
+  "languageLevelDescriptionA1": "Beginner",
+  "@languageLevelDescriptionA1": {
+    "description": "One-line description of the level A1, shown next to its short name where the user chooses a level."
+  },
+  "languageLevelDescriptionA2": "Elementary",
+  "@languageLevelDescriptionA2": {
+    "description": "One-line description of the level A2, shown next to its short name where the user chooses a level."
+  },
+  "languageLevelDescriptionB1": "Intermediate",
+  "@languageLevelDescriptionB1": {
+    "description": "One-line description of the level B1, shown next to its short name where the user chooses a level."
+  },
+  "languageLevelDescriptionB2": "Upper intermediate",
+  "@languageLevelDescriptionB2": {
+    "description": "One-line description of the level B2, shown next to its short name where the user chooses a level."
+  },
+  "languageLevelDescriptionC1": "Advanced",
+  "@languageLevelDescriptionC1": {
+    "description": "One-line description of the level C1, shown next to its short name where the user chooses a level."
+  },
+  "languageLevelDescriptionC2": "Proficient",
+  "@languageLevelDescriptionC2": {
+    "description": "One-line description of the level C2, shown next to its short name where the user chooses a level."
+  },
+  "languageLevelDescriptionNative": "Native speaker",
+  "@languageLevelDescriptionNative": {
+    "description": "One-line description of the level Native, shown next to its short name where the user chooses a level."
   }
 }

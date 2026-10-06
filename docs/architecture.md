@@ -68,7 +68,8 @@ which hands each screen only what it uses.
 `SecureTokenStore` (one `flutter_secure_storage` key). Screens reach the backend through `SessionManager`'s
 token-free public API (`me()`, `profile()`, `saveProfile()`, `languageCatalog()`, `languages()`, `saveLanguages()`,
 sign-in, logout) and through `AccountApi` (register, resend, forgot). Of the three language methods, the Profile
-screen's languages section calls `languageCatalog()` and `languages()`; nothing calls `saveLanguages()` yet.
+screen's languages section calls `languageCatalog()` and `languages()`, and the languages editor calls all three:
+it is the only caller of `saveLanguages()`.
 
 ### Google sign-in
 
@@ -84,16 +85,15 @@ screen with `/v1/me` and logout, Google sign-in on log in and register, and the 
 edit, from home).
 
 Stage 8 (languages) is done on the backend: the three routes of decision 029 (`GET /v1/languages`, `GET` and
-`PUT /v1/me/languages`) are served and tested. On the client it is partly done:
+`PUT /v1/me/languages`) are served and tested. On the client it is built:
 
 | Part | State |
 |---|---|
 | Data, API and session layer: the models in `lib/api/languages.dart`, the two `ApiPaths`, the three `AuthApi` calls, `SessionManager.languageCatalog()`, `languages()` and `saveLanguages()`, the language cases of `presentFailure` and their strings | implemented and tested |
-| Widgets and previews (`LanguageChip`, `LanguageRow` in `lib/ui/widgets/`), the level labels (`lib/screens/language_labels.dart`) and the read-only Languages summary on Profile (`lib/screens/profile_languages_section.dart`) | implemented and tested |
-| The editor screen and its route `/profile/languages`, with the button on Profile that opens it | not implemented |
-| Completing decision 030, the final pass over these documents, and verification on the emulator | pending |
+| Widgets and previews (`LanguageChip`, `LanguageRow` in `lib/ui/widgets/`), the level labels and descriptions (`lib/screens/language_labels.dart`) and the Languages summary on Profile (`lib/screens/profile_languages_section.dart`) | implemented and tested |
+| The editor (`lib/screens/languages_screen.dart`) at `/profile/languages`, its picker and level choice (`lib/screens/language_picker_sheet.dart`), and the button on Profile that opens it | implemented and tested |
+| The final pass over these documents, decision 030 to *in force*, and verification on the emulator | pending |
 
-So a member sees their languages on Profile but can't edit them in the app yet: no screen saves, and `LanguageRow`
-is built and tested but used by no screen until the editor exists. Decision 030
-(still a draft) records the client-side decisions and what is built; the rules for both the built layer and the
-screens to come are in `.claude/rules/languages.md`.
+So a member sees their languages on Profile and edits them on their own screen: add from the catalog, choose a
+level, order, remove, save. Decision 030 (a draft until the last row is done) records the client-side decisions and
+what is built; the rules are in `.claude/rules/languages.md`.

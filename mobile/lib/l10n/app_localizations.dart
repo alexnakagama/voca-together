@@ -651,6 +651,156 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Native'**
   String get languageLevelNative;
+
+  /// Button in the languages section of the profile that opens the screen where the user edits their languages.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit languages'**
+  String get languagesEditButton;
+
+  /// Title of the screen where the user edits the languages they speak and are learning.
+  ///
+  /// In en, this message translates to:
+  /// **'Your languages'**
+  String get languagesEditorTitle;
+
+  /// Notice at the top of the languages editor saying that the user’s languages and levels will be visible to other members.
+  ///
+  /// In en, this message translates to:
+  /// **'Other members will be able to see the languages you speak and are learning, and your level in each.'**
+  String get languagesVisibilityNotice;
+
+  /// Button under a list of the user’s languages (spoken or learning) that opens the language picker.
+  ///
+  /// In en, this message translates to:
+  /// **'Add a language'**
+  String get languagesAddButton;
+
+  /// Button that saves the user’s languages.
+  ///
+  /// In en, this message translates to:
+  /// **'Save'**
+  String get languagesSaveButton;
+
+  /// Button that leaves the languages editor without saving.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel'**
+  String get languagesCancelButton;
+
+  /// Title of the dialog shown when the user leaves the languages editor with unsaved changes.
+  ///
+  /// In en, this message translates to:
+  /// **'Discard changes?'**
+  String get languagesDiscardTitle;
+
+  /// Text of the dialog shown when the user leaves the languages editor with unsaved changes.
+  ///
+  /// In en, this message translates to:
+  /// **'Your changes to your languages haven’t been saved.'**
+  String get languagesDiscardMessage;
+
+  /// Dialog button that leaves the languages editor and drops the unsaved changes.
+  ///
+  /// In en, this message translates to:
+  /// **'Discard'**
+  String get languagesDiscardConfirm;
+
+  /// Dialog button that closes the dialog and stays in the languages editor.
+  ///
+  /// In en, this message translates to:
+  /// **'Keep editing'**
+  String get languagesDiscardKeep;
+
+  /// Title of the sheet where the user picks a language to add.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose a language'**
+  String get languagePickerTitle;
+
+  /// Label of the search field of the language picker.
+  ///
+  /// In en, this message translates to:
+  /// **'Search'**
+  String get languagePickerSearchLabel;
+
+  /// Text of the language picker when the search finds no language.
+  ///
+  /// In en, this message translates to:
+  /// **'No language matches your search.'**
+  String get languagePickerNoMatch;
+
+  /// Title of the sheet where the user chooses their level in a language.
+  ///
+  /// In en, this message translates to:
+  /// **'Your level in {name}'**
+  String languageLevelPickerTitle(String name);
+
+  /// Accessibility label of the button that shows a language’s level and changes it.
+  ///
+  /// In en, this message translates to:
+  /// **'{name}, level {level}'**
+  String languageLevelSemantics(String name, String level);
+
+  /// Tooltip and accessibility label of the button that removes a language from a list.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove {name}'**
+  String languageRemove(String name);
+
+  /// Tooltip and accessibility label of the button that moves a language one place up its list.
+  ///
+  /// In en, this message translates to:
+  /// **'Move {name} up'**
+  String languageMoveUp(String name);
+
+  /// Tooltip and accessibility label of the button that moves a language one place down its list.
+  ///
+  /// In en, this message translates to:
+  /// **'Move {name} down'**
+  String languageMoveDown(String name);
+
+  /// One-line description of the level A1, shown next to its short name where the user chooses a level.
+  ///
+  /// In en, this message translates to:
+  /// **'Beginner'**
+  String get languageLevelDescriptionA1;
+
+  /// One-line description of the level A2, shown next to its short name where the user chooses a level.
+  ///
+  /// In en, this message translates to:
+  /// **'Elementary'**
+  String get languageLevelDescriptionA2;
+
+  /// One-line description of the level B1, shown next to its short name where the user chooses a level.
+  ///
+  /// In en, this message translates to:
+  /// **'Intermediate'**
+  String get languageLevelDescriptionB1;
+
+  /// One-line description of the level B2, shown next to its short name where the user chooses a level.
+  ///
+  /// In en, this message translates to:
+  /// **'Upper intermediate'**
+  String get languageLevelDescriptionB2;
+
+  /// One-line description of the level C1, shown next to its short name where the user chooses a level.
+  ///
+  /// In en, this message translates to:
+  /// **'Advanced'**
+  String get languageLevelDescriptionC1;
+
+  /// One-line description of the level C2, shown next to its short name where the user chooses a level.
+  ///
+  /// In en, this message translates to:
+  /// **'Proficient'**
+  String get languageLevelDescriptionC2;
+
+  /// One-line description of the level Native, shown next to its short name where the user chooses a level.
+  ///
+  /// In en, this message translates to:
+  /// **'Native speaker'**
+  String get languageLevelDescriptionNative;
 }
 
 class _AppLocalizationsDelegate

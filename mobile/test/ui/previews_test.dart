@@ -80,6 +80,7 @@ void main() {
     ),
     'languageRow': (languageRow, fallback),
     'languageRowSameName': (languageRowSameName, fallback),
+    'languageRowFirst': (languageRowFirst, fallback),
     'languageRowDisabled': (languageRowDisabled, fallback),
     'languageRowLargeText': (
       languageRowLargeText,
