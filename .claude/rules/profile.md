@@ -15,8 +15,8 @@ paths:
 
 # Profile rules (`GET`/`PUT /v1/me/profile`, `GET /v1/profiles/{id}`, both sides)
 
-Records: 027 (backend), 028 (client), 031 (the public side, backend; **draft**: the profile picture is approved and
-not built). The general rules for a member's own resource and for reading another member are in `backend.md`.
+Records: 027 (backend), 028 (client), 031 (the public side, backend). The general rules for a member's own
+resource and for reading another member are in `backend.md`; the profile picture's are in `avatar.md`.
 
 ## Backend
 
@@ -41,7 +41,8 @@ not built). The general rules for a member's own resource and for reading anothe
   same 404 `profile_not_found`: unknown, malformed, a `users.id`, a member with no profile.
 - What is public is exactly `memberProfileResponse` (`id`, `display_name`, `bio`, `has_avatar`, `languages`). Keep
   it a type of its own: never reuse the owner's `profileResponse`, and never add an email, an account id, a
-  timestamp or anything about sign-in or sessions. `has_avatar` is always `false` until the picture is built.
+  timestamp or anything about sign-in or sessions. `has_avatar` comes from `avatar.Service.Exists`, read with the
+  owner's `UserID` like the languages.
 - Never log a public id, for the owner's requests or a reader's. A member read logs nothing.
 - **Gate:** no feature that lists, suggests or searches members ships before reporting and blocking exist.
 

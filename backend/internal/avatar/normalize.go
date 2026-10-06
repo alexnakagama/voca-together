@@ -43,8 +43,14 @@ func (n *normalizer) normalize(ctx context.Context, raw []byte) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
+	return n.produce(ctx, f, raw)
+}
+
+// produce is normalize for an upload that inspect already accepted as f: the
+// part that needs a decode slot.
+func (n *normalizer) produce(ctx context.Context, f format, raw []byte) ([]byte, error) {
 	var out []byte
-	if err := n.withSlot(ctx, func() error {
+	if err := n.withSlot(ctx, func() (err error) {
 		out, err = n.render(f, raw)
 		return err
 	}); err != nil {

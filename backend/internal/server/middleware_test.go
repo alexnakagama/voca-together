@@ -15,7 +15,7 @@ var apiSecurityHeaders = map[string]string{
 }
 
 func TestSecurityHeadersOnEveryResponse(t *testing.T) {
-	h := New(slog.New(slog.DiscardHandler), dbFreeService(), nil, nil, Options{})
+	h := New(slog.New(slog.DiscardHandler), dbFreeService(), nil, nil, nil, Options{})
 	for _, r := range []struct{ method, path string }{
 		{http.MethodGet, "/healthz"},
 		{http.MethodGet, "/nope"},         // 404
@@ -45,7 +45,7 @@ func TestSecurityHeadersOnEveryResponse(t *testing.T) {
 }
 
 func TestHSTSOnlyWhenEnabled(t *testing.T) {
-	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, Options{HSTS: true})
+	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, nil, Options{HSTS: true})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if got := rec.Header().Get("Strict-Transport-Security"); got != "max-age=31536000" {
@@ -56,7 +56,7 @@ func TestHSTSOnlyWhenEnabled(t *testing.T) {
 // Every auth endpoint marks every response no-store (CLAUDE.md convention),
 // including the ones that carry no credentials.
 func TestAuthEndpointsAreNoStore(t *testing.T) {
-	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, Options{})
+	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, nil, Options{})
 	for _, path := range []string{registerPath, verifyPath, resendPath, forgotPath, resetPath, loginPath, refreshPath, googlePath} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, nil)) // 400

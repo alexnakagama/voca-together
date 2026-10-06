@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"vocatogether/backend/internal/auth"
+	"vocatogether/backend/internal/avatar"
 	"vocatogether/backend/internal/config"
 	"vocatogether/backend/internal/db"
 	"vocatogether/backend/internal/email"
@@ -64,10 +65,11 @@ func run(logger *slog.Logger) error {
 	defer authSvc.Wait()
 	profileSvc := profile.NewService(pool, logger)
 	languageSvc := language.NewService(pool, logger)
+	avatarSvc := avatar.NewService(pool, logger)
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           server.New(logger, authSvc, profileSvc, languageSvc, serverOptions(cfg, logger)),
+		Handler:           server.New(logger, authSvc, profileSvc, languageSvc, avatarSvc, serverOptions(cfg, logger)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      15 * time.Second,

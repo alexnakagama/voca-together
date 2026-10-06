@@ -389,7 +389,7 @@ func TestPutProfileAcceptsTheLongestProfileFullyEscaped(t *testing.T) {
 
 func TestProfileAllowsOnlyGetAndPut(t *testing.T) {
 	// Nil services: the mux must answer before authentication runs.
-	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, Options{})
+	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, nil, Options{})
 	for _, method := range []string{http.MethodPost, http.MethodPatch, http.MethodDelete} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(method, profilePath, nil))

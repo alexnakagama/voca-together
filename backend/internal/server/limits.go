@@ -52,7 +52,8 @@ const maxTrackedUsers = 100_000
 type UserLimits struct {
 	ProfileWrite   *ratelimit.Limiter[string] // PUT /v1/me/profile
 	LanguagesWrite *ratelimit.Limiter[string] // PUT /v1/me/languages
-	MemberRead     *ratelimit.Limiter[string] // GET /v1/profiles/{id}; keyed by the reader
+	AvatarWrite    *ratelimit.Limiter[string] // PUT, DELETE /v1/me/avatar (one bucket)
+	MemberRead     *ratelimit.Limiter[string] // GET /v1/profiles/{id} and its /avatar; keyed by the reader
 }
 
 // NewUserLimits returns the production per-user limits. They are far above
@@ -65,10 +66,14 @@ type UserLimits struct {
 // one account walk other people's profiles, so its allowance bounds scraping
 // per account while staying far above what looking at profiles by hand needs
 // (decision 031).
+//
+// AvatarWrite is lower than the other writes because each accepted upload
+// costs a decode; it is still more than choosing a picture by hand needs.
 func NewUserLimits(logger *slog.Logger) UserLimits {
 	return UserLimits{
 		ProfileWrite:   ratelimit.New[string]("user_profile_write", 10, 6*time.Second, maxTrackedUsers, logger),   // 10/min
 		LanguagesWrite: ratelimit.New[string]("user_languages_write", 10, 6*time.Second, maxTrackedUsers, logger), // 10/min
+		AvatarWrite:    ratelimit.New[string]("user_avatar_write", 5, time.Minute, maxTrackedUsers, logger),       // 60/h
 		MemberRead:     ratelimit.New[string]("user_member_read", 60, time.Second, maxTrackedUsers, logger),       // 60/min
 	}
 }

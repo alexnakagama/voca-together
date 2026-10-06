@@ -227,7 +227,7 @@ func TestLoginEndpointSessionInsertFailureReturnsNoTokens(t *testing.T) {
 }
 
 func TestLoginEndpointIsPostOnly(t *testing.T) {
-	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, Options{})
+	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, nil, Options{})
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(method, loginPath, nil))

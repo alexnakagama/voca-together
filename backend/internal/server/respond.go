@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"vocatogether/backend/internal/auth"
+	"vocatogether/backend/internal/avatar"
 	"vocatogether/backend/internal/language"
 	"vocatogether/backend/internal/profile"
 )
@@ -36,14 +37,15 @@ const (
 	codeAccountExists       = "account_exists"
 
 	codeProfileNotFound = "profile_not_found"
+	codeAvatarNotFound  = "avatar_not_found"
 
 	codeRateLimited        = "rate_limited"
 	codeServiceUnavailable = "service_unavailable"
 )
 
-// retryAfterUnavailable is the Retry-After of a 503: about one argon2 queue
-// timeout, after which a retry meets a fresh queue (or Google's keys may be
-// fetchable again).
+// retryAfterUnavailable is the Retry-After of a 503: about one argon2 or
+// image decode queue timeout, after which a retry meets a fresh queue (or
+// Google's keys may be fetchable again).
 const retryAfterUnavailable = 5 * time.Second
 
 type errorResponse struct {
@@ -101,18 +103,19 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64)
 	return nil
 }
 
-// writeServiceError maps a service error (auth, profile or language) to a
-// response:
+// writeServiceError maps a service error (auth, profile, language or avatar)
+// to a response:
 // validation errors to 422 with their fields, login, refresh, access-token
-// and Google sign-in outcomes to 401/403/409, a missing profile to 404, a
-// spent per-account limit to 429, overload, unavailable Google keys or the
-// request deadline to 503, anything else to an opaque 500 whose details go
-// only to the log. Service errors never contain secrets, profile text or a
-// member's languages.
+// and Google sign-in outcomes to 401/403/409, a missing profile or picture
+// to 404, a spent per-account limit to 429, overload, unavailable Google
+// keys or the request deadline to 503, anything else to an opaque 500 whose
+// details go only to the log. Service errors never contain secrets, profile
+// text, a member's languages or anything of an image.
 func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, err error) {
 	var verr *auth.ValidationError
 	var profileErr *profile.ValidationError
 	var languageErr *language.ValidationError
+	var avatarErr *avatar.ValidationError
 	var limited *auth.RateLimitedError
 	switch {
 	case errors.As(err, &verr):
@@ -123,6 +126,9 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logg
 		return
 	case errors.As(err, &languageErr):
 		writeValidationFailed(w, fieldErrors(languageErr.Fields))
+		return
+	case errors.As(err, &avatarErr):
+		writeValidationFailed(w, fieldErrors(avatarErr.Fields))
 		return
 	case errors.As(err, &limited):
 		writeRateLimited(w, limited.RetryAfter)
@@ -143,10 +149,13 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logg
 	case errors.Is(err, profile.ErrNotFound):
 		writeError(w, http.StatusNotFound, codeProfileNotFound)
 		return
+	case errors.Is(err, avatar.ErrNotFound):
+		writeError(w, http.StatusNotFound, codeAvatarNotFound)
+		return
 	// ErrUserGone: the user was deleted after authentication, and their
 	// sessions with them, so the credential is dead (decision 016).
 	case errors.Is(err, auth.ErrInvalidAccessToken), errors.Is(err, profile.ErrUserGone),
-		errors.Is(err, language.ErrUserGone):
+		errors.Is(err, language.ErrUserGone), errors.Is(err, avatar.ErrUserGone):
 		// The HTTP Bearer scheme (RFC 6750 3), unlike login's credential form.
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		writeError(w, http.StatusUnauthorized, codeInvalidAccessToken)
@@ -167,17 +176,17 @@ func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logg
 }
 
 // unavailable reports whether err means the server couldn't serve the request
-// in time: the argon2 queue was full, Google's signing keys couldn't be
-// fetched, or the request deadline passed (requestDeadline; a client
-// disconnect is Canceled, not DeadlineExceeded).
+// in time: the argon2 queue or the image decode queue was full, Google's
+// signing keys couldn't be fetched, or the request deadline passed
+// (requestDeadline; a client disconnect is Canceled, not DeadlineExceeded).
 func unavailable(err error) bool {
-	return errors.Is(err, auth.ErrOverloaded) || errors.Is(err, auth.ErrGoogleUnavailable) ||
-		errors.Is(err, context.DeadlineExceeded)
+	return errors.Is(err, auth.ErrOverloaded) || errors.Is(err, avatar.ErrOverloaded) ||
+		errors.Is(err, auth.ErrGoogleUnavailable) || errors.Is(err, context.DeadlineExceeded)
 }
 
 // fieldErrors converts a domain package's field errors, which all have the
 // same shape, to the response's.
-func fieldErrors[F auth.FieldError | profile.FieldError | language.FieldError](in []*F) []fieldError {
+func fieldErrors[F auth.FieldError | profile.FieldError | language.FieldError | avatar.FieldError](in []*F) []fieldError {
 	out := make([]fieldError, len(in))
 	for i, f := range in {
 		out[i] = fieldError(*f)

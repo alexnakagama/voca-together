@@ -23,8 +23,10 @@ import (
 // response, decision 014), google (a retry, with the same ID token or a new
 // one, finds the account and creates another session; the orphaned one
 // expires), logout (idempotent), saving a profile (idempotent: the retry
-// stores the same text and changes nothing, decision 027) and saving
-// languages (idempotent in the same way, decision 029).
+// stores the same text and changes nothing, decision 027), saving languages
+// (idempotent in the same way, decision 029), and setting or removing a
+// picture (idempotent: the same upload again is recognised and changes
+// nothing, and removing nothing is not an error, decision 031).
 const requestTimeout = 10 * time.Second
 
 // requestDeadline gives each request's context a deadline of d.
@@ -39,9 +41,10 @@ func requestDeadline(d time.Duration) func(http.Handler) http.Handler {
 }
 
 // securityHeaders sets headers every response gets. The API returns JSON
-// only, so its policy allows loading and framing nothing; the reset page
-// replaces the CSP with its own. HSTS is sent only in production: TLS ends at
-// the proxy, and browsers ignore the header over plain HTTP anyway.
+// and, for profile pictures, a JPEG, so its policy allows loading and
+// framing nothing; the reset page replaces the CSP with its own. HSTS is
+// sent only in production: TLS ends at the proxy, and browsers ignore the
+// header over plain HTTP anyway.
 func securityHeaders(hsts bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

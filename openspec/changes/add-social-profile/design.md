@@ -165,6 +165,8 @@ turn by the row lock and the last one wins whole, as in 027.
 - *Why:* `_authorized` resends a refused request once after a 401, and a member retries after a 503 or a lost
   answer. The rule in `backend.md` is that such a repeat changes nothing; the hash also makes it cost nothing.
 - The hash is of the member's own upload and is never returned or logged.
+- *As built:* the checks of decision 6 that need no pixel buffer (steps 1 to 3) run before the hash and the
+  lookup, so a refused upload costs no query. The hash is still computed before anything is decoded.
 
 ### 8. The avatar routes
 
@@ -188,8 +190,10 @@ turn by the row lock and the last one wins whole, as in 027.
 - The member picture route resolves `id` with `profile.Service.Public` first, so a picture whose owner has no
   profile is unreachable, and then reads by `UserID`.
 - Every response keeps `Cache-Control: no-store` (set by `requireAccessToken`) and `nosniff`.
-- One new error code, `avatar_not_found`. A user deleted between authentication and the write gets the 401 of
-  a dead credential, as on the other writes.
+- One new error code, `avatar_not_found`. A user deleted between authentication and an upload gets the 401 of
+  a dead credential, as on the other writes. A removal for such a user answers 204: nothing is left to remove.
+- A body that can't be read whole (the client went away, or `ReadTimeout` cut a slow upload) answers 400
+  `invalid_request`. It says nothing about the photo, so the client treats it as something to try again.
 - Logs: `avatar: saved` and `avatar: removed` with `user_id` only, and only when something changed. Never
   bytes, sizes, dimensions, formats or hashes.
 
@@ -210,7 +214,8 @@ that serves other members: no profile, no public picture.
 `ReadTimeout` (10 s) and the request deadline (10 s) stay; they are the slow-request defence. The app always
 asks the system picker for a downscaled copy (decision 16), typically a few hundred kilobytes, which fits
 easily. The 5 MiB limit is what the server tolerates, not what the app sends. A full 5 MiB upload needs about
-4 Mbit/s to finish in time; a slower one ends as a timeout the member can retry. Accepted, and recorded.
+4 Mbit/s to finish in time; a slower one ends as a timeout, or as the 400 of decision 8 if the server cut the
+body first, and the member can retry either. Accepted, and recorded.
 
 ### 12. `ApiClient` gains bytes in, bytes out and DELETE (amends 023)
 

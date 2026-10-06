@@ -7,6 +7,7 @@ import (
 	"net/netip"
 
 	"vocatogether/backend/internal/auth"
+	"vocatogether/backend/internal/avatar"
 	"vocatogether/backend/internal/language"
 	"vocatogether/backend/internal/profile"
 	"vocatogether/backend/internal/ratelimit"
@@ -25,7 +26,7 @@ type Options struct {
 
 // New returns the API's router. Dependencies are built by the caller (main).
 func New(logger *slog.Logger, authSvc *auth.Service, profileSvc *profile.Service, languageSvc *language.Service,
-	opts Options) http.Handler {
+	avatarSvc *avatar.Service, opts Options) http.Handler {
 	lim := opts.IPLimits
 	perIP := func(l *ratelimit.Limiter[netip.Prefix]) func(http.Handler) http.Handler {
 		return limitByIP(l, opts.TrustedProxyHops, writeRateLimited)
@@ -72,11 +73,21 @@ func New(logger *slog.Logger, authSvc *auth.Service, profileSvc *profile.Service
 	mux.Handle("GET /v1/languages", authn(handleLanguageCatalog(logger, languageSvc)))
 	mux.Handle("GET /v1/me/languages", authn(handleGetLanguages(logger, languageSvc)))
 	mux.Handle("PUT /v1/me/languages", authn(languageWrites(handlePutLanguages(logger, languageSvc))))
-	// Another member's public profile (decision 031), named by its public id.
-	// A route that names a member is a GET and nothing else: every write
-	// stays under /v1/me. Reads are limited per reader.
+	// The caller's own picture (decision 031), under the same rules. Setting
+	// and removing it share one per-user limit.
+	avatarWrites := limitByUser(logger, opts.UserLimits.AvatarWrite)
+	mux.Handle("GET /v1/me/avatar", authn(handleGetAvatar(logger, avatarSvc)))
+	mux.Handle("PUT /v1/me/avatar", authn(avatarWrites(handlePutAvatar(logger, avatarSvc))))
+	mux.Handle("DELETE /v1/me/avatar", authn(avatarWrites(handleDeleteAvatar(logger, avatarSvc))))
+	// Another member's public profile and picture (decision 031), named by
+	// the profile's public id. A route that names a member is a GET and
+	// nothing else: every write stays under /v1/me. Reads are limited per
+	// reader, the two routes sharing one allowance.
 	memberReads := limitByUser(logger, opts.UserLimits.MemberRead)
-	mux.Handle("GET /v1/profiles/{id}", authn(memberReads(handleGetMemberProfile(logger, profileSvc, languageSvc))))
+	mux.Handle("GET /v1/profiles/{id}",
+		authn(memberReads(handleGetMemberProfile(logger, profileSvc, languageSvc, avatarSvc))))
+	mux.Handle("GET /v1/profiles/{id}/avatar",
+		authn(memberReads(handleGetMemberAvatar(logger, profileSvc, avatarSvc))))
 
 	return securityHeaders(opts.HSTS)(requestDeadline(requestTimeout)(mux))
 }

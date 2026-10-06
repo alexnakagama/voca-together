@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"vocatogether/backend/internal/auth"
+	"vocatogether/backend/internal/avatar"
 	"vocatogether/backend/internal/language"
 	"vocatogether/backend/internal/profile"
 	"vocatogether/backend/internal/ratelimit"
@@ -208,7 +209,8 @@ func memberHandlerRequest(id, readerID string) *http.Request {
 // have no pool, so any query would panic.
 func TestGetMemberProfileDoesNotQueryForAMalformedID(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
-	h := handleGetMemberProfile(logger, profile.NewService(nil, logger), language.NewService(nil, logger))
+	h := handleGetMemberProfile(logger, profile.NewService(nil, logger), language.NewService(nil, logger),
+		avatar.NewService(nil, logger))
 
 	const lettered = "abcdefab-cdef-4bcd-8fab-cdefabcdefab"
 	for _, id := range []string{"", "not-an-id", strings.ToUpper(lettered), lettered + " ", "{" + lettered + "}", lettered[:35]} {
@@ -361,7 +363,7 @@ func TestMemberProfileRouteIsReadOnly(t *testing.T) {
 
 // The mux answers a wrong method before authentication runs, with no service.
 func TestMemberProfileRouteAllowsOnlyGet(t *testing.T) {
-	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, Options{})
+	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, nil, Options{})
 	for _, method := range []string{http.MethodPut, http.MethodPost, http.MethodPatch, http.MethodDelete} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(method, membersPath+unknownMemberID, nil))
@@ -377,7 +379,7 @@ func TestMemberProfileHandlerWithoutMiddlewareFailsClosed(t *testing.T) {
 	api := newTestAPI(t)
 	_, id := api.memberWithProfile(t, "ana@example.com", "Ana", "")
 	logger := slog.New(slog.DiscardHandler)
-	h := handleGetMemberProfile(logger, profile.NewService(api.pool, logger), api.languageService())
+	h := handleGetMemberProfile(logger, profile.NewService(api.pool, logger), api.languageService(), api.avatarService())
 
 	for _, target := range []string{id, unknownMemberID, "not-an-id"} {
 		rec := httptest.NewRecorder()

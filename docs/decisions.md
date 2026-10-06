@@ -33,7 +33,8 @@ the file `docs/decisions/017-*.md`.
 | Google sign-in, backend | `google-sign-in.md` | 026, then 020 (Stage 7 first) |
 | Google sign-in, client | `google-sign-in.md` | 025, 026 |
 | Profile | `profile.md` | 027 (backend), 028 (client), 031 (the public identifier) |
-| Reading another member's profile | `profile.md`, `backend.md` | 031 (draft), then 027 and 029 |
+| Reading another member's profile | `profile.md`, `backend.md` | 031, then 027 and 029 |
+| Profile pictures | `avatar.md` | 031 ("The profile picture"), 018 (limits and 503s) |
 | Languages | `languages.md` | 029 (backend), 030 (client, draft) |
 | A new member-owned resource | `backend.md` | 027 and 029 as the two worked examples |
 | Client structure and routing | `mobile.md` | 021, 028 |
@@ -81,7 +82,7 @@ complete yet, and its row says which part exists).
 | [028](decisions/028-client-profile-screen.md) | Profile screen | client | in force |
 | [029](decisions/029-languages-backend.md) | Languages: catalog and a member's own languages | backend | amended by 031 |
 | [030](decisions/030-client-languages.md) | Languages in the profile | client | draft: implemented, the editor included; the final pass over the documents and the emulator run pending |
-| [031](decisions/031-public-profile-backend.md) | Public profiles: the public identifier and the member read | backend | draft: the identifier and `GET /v1/profiles/{id}` are implemented; the profile picture is not built or described yet |
+| [031](decisions/031-public-profile-backend.md) | Public profiles: the public identifier, the member read and the profile picture | backend | in force |
 
 ## What later records changed
 
@@ -96,11 +97,11 @@ Each of these is also noted in the header of the earlier file.
 | 021 | 023 | `Session` and `markSignedIn`/`markSignedOut` were replaced by `SessionManager`. |
 | 021 | 028 | A signed-in user may be on any route of `Routes.signedInRoutes`, not only `/home`. |
 | 018 | 027, 029 | Protected writes have per-user limits; 018 had left protected routes unlimited. |
-| 018 | 031 | A protected read that names another member has a per-user limit (`user_member_read`). Ten limiters. |
+| 018 | 031 | A protected read that names another member has a per-user limit (`user_member_read`), and setting or removing a picture a third per-user write limit (`user_avatar_write`). Eleven limiters. Decoding pictures is a second bounded queue that answers 503. |
 | 027 | 031 | A profile is readable by other signed-in members by its public identifier, `profiles.public_id`; the owner's responses gained `id`. `users.id` stays private. |
 | 029 | 031 | A member's languages are returned to other signed-in members with their profile; `language.Service.Get` takes the user to read, not necessarily the caller. |
 | 015 | 023 | The client clears its tokens first and calls the server afterwards. |
-| 008 | 018, 009, 021, 022, 023, 025 | The library lists; `go.mod` and `pubspec.yaml` are current. |
+| 008 | 018, 009, 021, 022, 023, 025, 031 | The library lists; `go.mod` and `pubspec.yaml` are current. |
 | 005 | 020 | Google sign-in's 409 `account_exists` is a deliberate exception to "no enumeration". |
 
 ## Deferred work, and where it is discussed
@@ -121,6 +122,6 @@ Pointers only; the records hold the conditions and the reasons. Check the code b
 | More locales, golden tests, a Google Sans subset | 022, 024 |
 | Profile: deletion and export, a handle, a profile gate | 027, 028, 031 |
 | Reporting, blocking and moderation: a hard gate before any feature that lists, suggests or searches members | 031 |
-| The profile picture (approved, not built) | 031 |
+| Profile pictures: a cache and a version, thumbnails, an object store, cropping, more formats, a take-down tool | 031 |
 | Languages: regional variants, per-locale names, catalog administration, a catalog cache | 029 |
 | Limiting a member's own protected reads; optimistic locking for member-owned resources | 027, 029, 031 |

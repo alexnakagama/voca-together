@@ -53,3 +53,11 @@ func refused(reason *FieldError) error {
 // without getting one. Nothing was decoded or stored, so repeating the
 // upload is safe.
 var ErrOverloaded = errors.New("avatar: overloaded")
+
+// ErrNotFound means the user has no picture.
+var ErrNotFound = errors.New("avatar: not found")
+
+// ErrUserGone means the user no longer exists, so no picture can be saved for
+// it. Deleting a user deletes its sessions, so the credential that
+// authenticated the request is dead.
+var ErrUserGone = errors.New("avatar: user gone")
