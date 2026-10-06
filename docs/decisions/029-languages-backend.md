@@ -2,7 +2,7 @@
 
 > **Status:** in force.
 >
-> **Client side:** 030 (draft; not implemented).
+> **Client side:** 030 (draft: its data, API and session layer is implemented; its screens and editor are not).
 >
 > **Current rules:** `.claude/rules/languages.md`.
 

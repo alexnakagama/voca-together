@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import 'api/api_exception.dart';
 import 'api/auth_api.dart';
+import 'api/languages.dart';
 import 'api/me.dart';
 import 'api/profile.dart';
 import 'auth/auth_clock.dart';
@@ -254,6 +255,36 @@ class SessionManager extends ChangeNotifier {
         displayName: displayName,
         bio: bio,
       ),
+    );
+  }
+
+  /// Every language a member can choose (`GET /v1/languages`), ordered by
+  /// English name. Asked of the server on every call: nothing is cached
+  /// here. Token handling and failures as for [me].
+  Future<List<Language>> languageCatalog() {
+    _checkNotDisposed();
+    return _authorized((token) => _api.languageCatalog(accessToken: token));
+  }
+
+  /// The signed-in user's own languages (`GET /v1/me/languages`). Never
+  /// null: a user who has chosen none gets two empty lists. Token handling
+  /// and failures as for [me].
+  Future<UserLanguages> languages() {
+    _checkNotDisposed();
+    return _authorized((token) => _api.languages(accessToken: token));
+  }
+
+  /// Replaces the signed-in user's whole selection with [languages]
+  /// (`PUT /v1/me/languages`) and returns it as the server stored it. Both
+  /// lists are always sent, so an empty one clears that list and two empty
+  /// ones clear the selection (030). Nothing is checked here: every rule is
+  /// the server's. Token handling and failures as for [me]; the resend after
+  /// a 401 is safe because the save is idempotent (029). Nothing else is
+  /// retried.
+  Future<UserLanguages> saveLanguages(UserLanguages languages) {
+    _checkNotDisposed();
+    return _authorized(
+      (token) => _api.saveLanguages(accessToken: token, languages: languages),
     );
   }
 

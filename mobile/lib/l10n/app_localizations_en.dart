@@ -301,4 +301,20 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get errorBioInvalid =>
       'This text contains characters that can’t be used. Remove them and try again.';
+
+  @override
+  String get errorLanguagesTooMany =>
+      'This list has too many languages. Remove some and try again.';
+
+  @override
+  String get errorLanguageUnknown =>
+      'One of these languages isn’t available. Remove it and try again.';
+
+  @override
+  String get errorLanguageLevelInvalid =>
+      'One of these levels can’t be used here. Choose a different level and try again.';
+
+  @override
+  String get errorLanguageDuplicate =>
+      'A language can only be added once, in one of the two lists. Remove the repeated one and try again.';
 }

@@ -54,7 +54,7 @@ which hands each screen only what it uses.
 | `lib/app.dart` | Owns and disposes the `GoRouter`. |
 | `lib/session.dart` | `SessionManager`, the `ChangeNotifier` session (`unknown`/`signedOut`/`signedIn`) that the router listens to. |
 | `lib/router.dart` | `Routes` and `authRedirect`, the only navigation policy. |
-| `lib/api/` | `ApiClient` over `http.Client`, the API classes (`AccountApi`, `AuthApi`), `ApiPaths`, and the models screens may see (`Me`, `Profile`). |
+| `lib/api/` | `ApiClient` over `http.Client`, the API classes (`AccountApi`, `AuthApi`), `ApiPaths`, and the models screens may see (`Me`, `Profile`, and in `languages.dart` `Language`, `LanguageLevel`, `UserLanguage`, `UserLanguages`). |
 | `lib/auth/` | `AuthTokens`, `TokenStore`/`SecureTokenStore`, `AuthClock`, `GoogleIdentity`/`PluginGoogleIdentity`. |
 | `lib/screens/` | The screens and `failure_presentation.dart` (`presentFailure`). |
 | `lib/ui/` | `theme.dart` (`AppTheme`, `Spacing`, `Radii`), `widgets/`, `previews/`. |
@@ -66,8 +66,9 @@ which hands each screen only what it uses.
 
 `SessionManager` holds the only in-memory tokens and owns refresh and logout. Tokens persist only in
 `SecureTokenStore` (one `flutter_secure_storage` key). Screens reach the backend through `SessionManager`'s
-token-free public API (`me()`, `profile()`, `saveProfile()`, sign-in, logout) and through `AccountApi` (register,
-resend, forgot).
+token-free public API (`me()`, `profile()`, `saveProfile()`, `languageCatalog()`, `languages()`, `saveLanguages()`,
+sign-in, logout) and through `AccountApi` (register, resend, forgot). No screen calls the three language methods
+yet.
 
 ### Google sign-in
 
@@ -82,7 +83,15 @@ management, the email/password auth screens (log in, register, forgot password, 
 screen with `/v1/me` and logout, Google sign-in on log in and register, and the user's own profile (create and
 edit, from home).
 
-Stage 8 (languages) is done on the backend only: the three routes of decision 029 (`GET /v1/languages`, `GET` and
-`PUT /v1/me/languages`) are served and tested. The client has not started it: nothing in `mobile/` calls those
-routes, and there is no language model, route or screen yet. The client-side decisions already taken are a draft,
-decision 030; the requirements they put on the code are in `.claude/rules/languages.md`.
+Stage 8 (languages) is done on the backend: the three routes of decision 029 (`GET /v1/languages`, `GET` and
+`PUT /v1/me/languages`) are served and tested. On the client it is partly done:
+
+| Part | State |
+|---|---|
+| Data, API and session layer: the models in `lib/api/languages.dart`, the two `ApiPaths`, the three `AuthApi` calls, `SessionManager.languageCatalog()`, `languages()` and `saveLanguages()`, the language cases of `presentFailure` and their strings | implemented and tested |
+| UI: language widgets and previews, the Languages summary on Profile, the editor screen and its route `/profile/languages` | not implemented |
+| Completing decision 030, the final pass over these documents, and verification on the emulator | pending |
+
+So the app can call the three routes but no screen does, and a member can't see or edit languages yet. Decision 030
+(still a draft) records the client-side decisions and what is built; the rules for both the built layer and the
+screens to come are in `.claude/rules/languages.md`.

@@ -555,6 +555,30 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'This text contains characters that can’t be used. Remove them and try again.'**
   String get errorBioInvalid;
+
+  /// Error under a list of the member’s languages (spoken or learning) when the server finds too many in it. Must not state a number.
+  ///
+  /// In en, this message translates to:
+  /// **'This list has too many languages. Remove some and try again.'**
+  String get errorLanguagesTooMany;
+
+  /// Error under a list of the member’s languages when the server doesn’t know one of them. The server doesn’t say which.
+  ///
+  /// In en, this message translates to:
+  /// **'One of these languages isn’t available. Remove it and try again.'**
+  String get errorLanguageUnknown;
+
+  /// Error under a list of the member’s languages when the server refuses a level, for example “native” for a language being learned. The server doesn’t say which.
+  ///
+  /// In en, this message translates to:
+  /// **'One of these levels can’t be used here. Choose a different level and try again.'**
+  String get errorLanguageLevelInvalid;
+
+  /// Error under a list of the member’s languages when a language appears twice, in that list or in both lists.
+  ///
+  /// In en, this message translates to:
+  /// **'A language can only be added once, in one of the two lists. Remove the repeated one and try again.'**
+  String get errorLanguageDuplicate;
 }
 
 class _AppLocalizationsDelegate

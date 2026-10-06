@@ -63,7 +63,8 @@ class ApiClient {
     String? bearer,
     required Duration timeout,
   }) async {
-    // PUT is only for idempotent replacements (the profile, 027).
+    // PUT is only for idempotent replacements (the profile, 027; the user's
+    // languages, 029).
     if (method != 'GET' && method != 'POST' && method != 'PUT') {
       throw ArgumentError.value(method, 'method', 'unsupported');
     }

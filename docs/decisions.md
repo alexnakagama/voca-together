@@ -45,7 +45,8 @@ the file `docs/decisions/017-*.md`.
 ## All records
 
 Status is one of: **in force**; **amended** (in force, with parts changed by the records named); **partly
-superseded** (a part no longer holds); **draft** (approved, not implemented).
+superseded** (a part no longer holds); **draft** (approved, and not implemented or only partly: the record is not
+complete yet, and its row says which part exists).
 
 | # | Record | Side | Status |
 |---|---|---|---|
@@ -78,7 +79,7 @@ superseded** (a part no longer holds); **draft** (approved, not implemented).
 | [027](decisions/027-profile-backend.md) | User profile | backend | in force |
 | [028](decisions/028-client-profile-screen.md) | Profile screen | client | in force |
 | [029](decisions/029-languages-backend.md) | Languages: catalog and a member's own languages | backend | in force |
-| [030](decisions/030-client-languages.md) | Languages in the profile | client | draft, not implemented |
+| [030](decisions/030-client-languages.md) | Languages in the profile | client | draft: data, API and session layer implemented; screens not |
 
 ## What later records changed
 
@@ -89,6 +90,7 @@ Each of these is also noted in the header of the earlier file.
 | 020 | 026 | A Google ID token is accepted every time it verifies, not once. The `google_id_token_uses` table and everything about "spent" tokens are gone. |
 | 023 | 025 | `signInWithGoogle()` takes no argument; the Google ID token never leaves the session layer. |
 | 023 | 028 | `ApiClient` sends PUT as well as GET and POST; `SessionManager` gained `profile()` and `saveProfile()`. |
+| 023 | 030 | `SessionManager` gained `languageCatalog()`, `languages()` and `saveLanguages()`. |
 | 021 | 023 | `Session` and `markSignedIn`/`markSignedOut` were replaced by `SessionManager`. |
 | 021 | 028 | A signed-in user may be on any route of `Routes.signedInRoutes`, not only `/home`. |
 | 018 | 027, 029 | Protected writes have per-user limits; 018 had left protected routes unlimited. |

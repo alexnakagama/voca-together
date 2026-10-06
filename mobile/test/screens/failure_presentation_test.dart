@@ -210,6 +210,85 @@ void main() {
     });
   });
 
+  group('languages', () {
+    // code → text; the same under either list.
+    final codes = <String, String>{
+      'too_many': l10n.errorLanguagesTooMany,
+      'unknown_language': l10n.errorLanguageUnknown,
+      'invalid_level': l10n.errorLanguageLevelInvalid,
+      'duplicate': l10n.errorLanguageDuplicate,
+    };
+    codes.forEach((code, text) {
+      test('spoken:$code goes on the spoken list, with no banner', () {
+        final p = _present(
+          _http(422, 'validation_failed', [FieldError('spoken', code)]),
+        );
+        expect(p.kind, FailureKind.invalidInput);
+        expect(p.message, isNull);
+        expect(p.spokenError, text);
+        expect(p.learningError, isNull);
+      });
+
+      test('learning:$code goes on the learning list, with no banner', () {
+        final p = _present(
+          _http(422, 'validation_failed', [FieldError('learning', code)]),
+        );
+        expect(p.kind, FailureKind.invalidInput);
+        expect(p.message, isNull);
+        expect(p.spokenError, isNull);
+        expect(p.learningError, text);
+        expect(p.displayNameError, isNull);
+        expect(p.bioError, isNull);
+      });
+    });
+
+    test('both lists at once', () {
+      final p = _present(
+        _http(422, 'validation_failed', const [
+          FieldError('spoken', 'too_many'),
+          FieldError('learning', 'duplicate'),
+        ]),
+      );
+      expect(p.message, isNull);
+      expect(p.spokenError, l10n.errorLanguagesTooMany);
+      expect(p.learningError, l10n.errorLanguageDuplicate);
+    });
+
+    // The backend reports a list's errors in a fixed order (029).
+    test('the first error per list wins', () {
+      final p = _present(
+        _http(422, 'validation_failed', const [
+          FieldError('spoken', 'unknown_language'),
+          FieldError('spoken', 'duplicate'),
+        ]),
+      );
+      expect(p.spokenError, l10n.errorLanguageUnknown);
+      expect(p.message, isNull);
+    });
+
+    // Nothing is required of either list (029, 030), so `required` is as
+    // unknown as any other code.
+    test('a code this app doesn\'t know adds the generic banner', () {
+      for (final f in const [
+        FieldError('spoken', 'required'),
+        FieldError('learning', 'too_long'),
+        FieldError('languages', 'too_many'),
+      ]) {
+        final p = _present(_http(422, 'validation_failed', [f]));
+        expect(p.message, l10n.errorCheckInput, reason: '$f');
+        expect(p.spokenError, isNull, reason: '$f');
+        expect(p.learningError, isNull, reason: '$f');
+      }
+    });
+
+    // Limits live on the server only: the text states none of them.
+    test('no message states a number', () {
+      for (final text in codes.values) {
+        expect(text, isNot(contains(RegExp(r'\d'))));
+      }
+    });
+  });
+
   group('status fallback for missing or unknown codes', () {
     final cases = <int, (FailureKind, String)>{
       400: (FailureKind.unexpected, l10n.errorUnexpected),

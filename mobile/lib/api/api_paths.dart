@@ -13,4 +13,10 @@ abstract final class ApiPaths {
   static const logout = '/v1/auth/logout';
   static const me = '/v1/me';
   static const profile = '/v1/me/profile';
+
+  /// The catalog every member chooses from.
+  static const languages = '/v1/languages';
+
+  /// The signed-in user's own languages.
+  static const myLanguages = '/v1/me/languages';
 }

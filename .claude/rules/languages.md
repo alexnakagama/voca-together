@@ -5,12 +5,21 @@ paths:
   - "backend/internal/server/languages_test.go"
   - "backend/internal/db/migrations/00006_languages.sql"
   - "mobile/lib/**/*language*"
+  - "mobile/lib/api/api_paths.dart"
+  - "mobile/lib/api/auth_api.dart"
+  - "mobile/lib/session.dart"
+  - "mobile/lib/screens/failure_presentation.dart"
+  - "mobile/lib/l10n/app_en.arb"
   - "mobile/test/**/*language*"
+  - "mobile/test/screens/failure_presentation_test.dart"
+  - "mobile/test/leak_test.dart"
+  - "mobile/test/support/fakes.dart"
 ---
 
 # Languages rules (`GET /v1/languages`, `GET`/`PUT /v1/me/languages`, both sides)
 
-Records: 029 (backend, in force), 030 (client, **draft**). The general rules for a member's own resource are in
+Records: 029 (backend, in force), 030 (client, **draft**: its data, API and session layer is implemented, its
+screens are not). The general rules for a member's own resource are in
 `backend.md`.
 
 ## Backend (implemented)
@@ -29,16 +38,40 @@ Records: 029 (backend, in force), 030 (client, **draft**). The general rules for
 - The `languages` catalog changes only by a new migration with `INSERT`s, so every environment has the same one.
   `testutil.DB` never truncates it.
 
-## Client (not implemented: the app calls none of these routes yet)
+## Client: data, API and session layer (implemented)
 
-These are the approved requirements for the code that will (030). When it exists, update `mobile.md`'s lists
-(`signedInRoutes`, the `SessionManager` methods), add `mobile/lib/session.dart` to this file's `paths`, and remove
-"draft" here and in 030.
+`lib/api/languages.dart` (`LanguageLevel`, `Language`, `UserLanguage`, `UserLanguages`), `ApiPaths.languages` and
+`myLanguages`, `AuthApi` and `SessionManager` (`languageCatalog()`, `languages()`, `saveLanguages()`), and the
+language cases of `presentFailure` (in `lib/screens/failure_presentation.dart`). No screen or widget calls the
+three `SessionManager` language methods yet.
 
-- No minimum in the client: `spoken`, `learning` or both may be empty. Add no "at least one" check.
-- The save model is the member's complete selection. Its `toJson` always emits both `spoken` and `learning` as
-  arrays (`[]` when empty, never `null`, never left out), and the PUT body is never partial.
+- `UserLanguages` is the member's complete selection, never one list or a change to one. Its `toJson` always emits
+  both `spoken` and `learning` as arrays (`[]` when empty, never `null`, never left out), and it is the whole body
+  of the PUT: put nothing between it and the request that could drop a key. Its lists are unmodifiable copies.
+- No rule of the server is repeated in the client: no minimum (either list, or both, may be empty), no maximum, no
+  duplicate check, no "`native` only for spoken", no code format. The selection is sent as given.
+- Parsing checks the shape only, and strictly: both lists must be arrays, every code a non-empty string, every
+  level one of the seven identifiers exactly (no trimming, no case folding). Anything else, a level this app
+  doesn't know included, fails the whole response as `ApiProtocolException(malformedBody)`. Never skip an entry or
+  substitute a level: the next save replaces everything and would delete or change it (030).
+- `GET /v1/me/languages` always answers 200: "none yet" is two empty lists. There is no 404-to-empty mapping as
+  the profile has; every 404 stays an error.
+- Each `SessionManager` method is one `_authorized` call and caches nothing. The resend after a 401 is safe only
+  because the save is idempotent (029).
+- `UserLanguage` and `UserLanguages` redact `toString`: a member's languages are personal data. A code or a level
+  never goes in a log, an exception or a route.
+- `presentFailure` maps `too_many`, `unknown_language`, `invalid_level` and `duplicate` on `spoken` and `learning`
+  to `spokenError`/`learningError`, one text per code for both lists, stating no number. There is no `required`
+  code. The backend names the list, not the entry.
+
+## Client: screens (not implemented)
+
+There is no language widget, no Profile summary, no editor and no `/profile/languages` route yet. These are the
+approved requirements for them (030). When they exist, update `mobile.md`'s `signedInRoutes`, add the new screen
+and widget files to this file's `paths` if their names don't already match, and remove "draft" here and in 030.
+
+- No minimum in the editor: add no "at least one" check, and saving two empty lists clears the selection.
+- The editor always saves the complete selection, both lists, whichever one was edited.
 - Languages are edited on their own screen at `/profile/languages`; Profile shows a read-only summary. The route
   names nobody and carries no language code.
 - Languages are public by intent: the app says so before the member saves. Where is decided with the screens.
-- `GET /v1/me/languages` always answers 200: "none yet" is two empty lists, not a 404.

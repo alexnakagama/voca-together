@@ -42,10 +42,12 @@ load with that feature's files: `auth.md` (session internals), `google-sign-in.m
 ## Networking and the token boundary (decision 023)
 
 - `ApiClient` holds no auth state, never retries, never follows redirects and never logs. It sends GET, POST and
-  PUT; use PUT only for writes the backend makes idempotent, because `_authorized` resends once after a 401 (028).
+  PUT; use PUT only for writes the backend makes idempotent, because `_authorized` resends once after a 401 (028):
+  the profile and the member's languages.
 - **Token boundary:** screens may use only `AccountApi` (register/resend/forgot, token-free) and `SessionManager`'s
   public API, which takes and returns no token (`signIn`/`signInWithGoogle()`/`logout` → `void`, `me()` → `Me`,
-  `profile()` → `Profile?`, `saveProfile()` → `Profile`).
+  `profile()` → `Profile?`, `saveProfile()` → `Profile`, `languageCatalog()` → `List<Language>`, `languages()` and
+  `saveLanguages()` → `UserLanguages`). No screen calls the three language methods yet (`languages.md`).
 - Adding a protected route: a path in `ApiPaths`, a call in `AuthApi` (which takes the raw access token and is held
   only by `SessionManager`), and a typed, token-free `SessionManager` method that makes one `_authorized` call.
   `_authorized` stays private. A model screens may import is added to the allowlist in `test/architecture_test.dart`.

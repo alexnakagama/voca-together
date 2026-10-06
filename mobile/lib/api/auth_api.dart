@@ -4,11 +4,13 @@ import '../auth/auth_tokens.dart';
 import 'api_client.dart';
 import 'api_exception.dart';
 import 'api_paths.dart';
+import 'languages.dart';
 import 'me.dart';
 import 'profile.dart';
 
 /// The token-bearing calls: sign-in, refresh, logout, `GET /v1/me`, the
-/// user's profile and the reachability probe.
+/// user's profile, the language catalog, the user's languages and the
+/// reachability probe.
 ///
 /// **Internal to the session layer** (decision 023): only `main` builds it
 /// and only `SessionManager` holds it. It returns [AuthTokens] and takes raw
@@ -18,7 +20,7 @@ import 'profile.dart';
 ///
 /// Stateless transport: it knows paths, bodies and expected statuses, and
 /// nothing about sessions. Tokens go in only where the backend reads them:
-/// the access token in `Authorization` (logout, me, profile), the refresh token
+/// the access token in `Authorization` (logout, me, profile, languages), the refresh token
 /// in the refresh body, the Google ID token in the google body. Nothing is retried;
 /// failures are [ApiException]s.
 class AuthApi {
@@ -120,6 +122,56 @@ class AuthApi {
     );
     _expectStatus(r, 200);
     return Profile.fromJson(r.json);
+  }
+
+  /// `GET /v1/languages` with the access token → 200 with the catalog,
+  /// ordered by English name (029).
+  Future<List<Language>> languageCatalog({required String accessToken}) async {
+    final r = await _client.send(
+      'GET',
+      ApiPaths.languages,
+      bearer: accessToken,
+      timeout: requestTimeout,
+    );
+    _expectStatus(r, 200);
+    return Language.catalogFromJson(r.json);
+  }
+
+  /// `GET /v1/me/languages` with the access token → 200 with the user's own
+  /// languages (029).
+  ///
+  /// A user who has chosen none gets two empty lists: unlike [profile] there
+  /// is no "none saved" 404, so every 404 here stays an error.
+  Future<UserLanguages> languages({required String accessToken}) async {
+    final r = await _client.send(
+      'GET',
+      ApiPaths.myLanguages,
+      bearer: accessToken,
+      timeout: requestTimeout,
+    );
+    _expectStatus(r, 200);
+    return UserLanguages.fromJson(r.json);
+  }
+
+  /// `PUT /v1/me/languages` with the access token → 200 with the languages
+  /// as stored (029). Replaces the user's whole selection with [languages];
+  /// the body is its [UserLanguages.toJson], which always holds both lists.
+  /// It is sent as given; the backend validates it.
+  ///
+  /// Idempotent on the server, so sending the same save twice is harmless.
+  Future<UserLanguages> saveLanguages({
+    required String accessToken,
+    required UserLanguages languages,
+  }) async {
+    final r = await _client.send(
+      'PUT',
+      ApiPaths.myLanguages,
+      json: languages.toJson(),
+      bearer: accessToken,
+      timeout: requestTimeout,
+    );
+    _expectStatus(r, 200);
+    return UserLanguages.fromJson(r.json);
   }
 
   /// `GET /healthz`: whether the API answers at all. Any 2xx is success.

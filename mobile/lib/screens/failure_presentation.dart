@@ -64,6 +64,8 @@ final class FailurePresentation {
     this.passwordError,
     this.displayNameError,
     this.bioError,
+    this.spokenError,
+    this.learningError,
   });
 
   final FailureKind kind;
@@ -79,6 +81,11 @@ final class FailurePresentation {
   /// Errors for the profile's name and "about you" fields (422 `fields`).
   final String? displayNameError;
   final String? bioError;
+
+  /// Errors for the two lists of the member's languages (422 `fields`): one
+  /// for a whole list, since the backend names the list and not the entry.
+  final String? spokenError;
+  final String? learningError;
 }
 
 /// The app's one mapping from a failed call to what the user is told
@@ -176,6 +183,8 @@ FailurePresentation _validation(ApiHttpException e, AppLocalizations l10n) {
   String? password;
   String? displayName;
   String? bio;
+  String? spoken;
+  String? learning;
   var unshown = e.fields.isEmpty;
   for (final f in e.fields) {
     final text = switch ((f.field, f.code)) {
@@ -190,6 +199,13 @@ FailurePresentation _validation(ApiHttpException e, AppLocalizations l10n) {
       ('display_name', 'invalid') => l10n.errorDisplayNameInvalid,
       ('bio', 'too_long') => l10n.errorBioTooLong,
       ('bio', 'invalid') => l10n.errorBioInvalid,
+      // The same rules hold for both lists of languages (029). There is no
+      // `required`: either list may be empty.
+      ('spoken' || 'learning', 'too_many') => l10n.errorLanguagesTooMany,
+      ('spoken' || 'learning', 'unknown_language') => l10n.errorLanguageUnknown,
+      ('spoken' || 'learning', 'invalid_level') =>
+        l10n.errorLanguageLevelInvalid,
+      ('spoken' || 'learning', 'duplicate') => l10n.errorLanguageDuplicate,
       _ => null,
     };
     if (text == null) {
@@ -205,6 +221,10 @@ FailurePresentation _validation(ApiHttpException e, AppLocalizations l10n) {
         displayName ??= text;
       case 'bio':
         bio ??= text;
+      case 'spoken':
+        spoken ??= text;
+      case 'learning':
+        learning ??= text;
     }
   }
   return FailurePresentation(
@@ -214,6 +234,8 @@ FailurePresentation _validation(ApiHttpException e, AppLocalizations l10n) {
     passwordError: password,
     displayNameError: displayName,
     bioError: bio,
+    spokenError: spoken,
+    learningError: learning,
   );
 }
 

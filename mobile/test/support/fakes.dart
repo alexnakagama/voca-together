@@ -265,6 +265,27 @@ Map<String, Object?> profileBody({
 /// The 404 of a user who hasn't saved a profile.
 http.Response noProfile() => errorResponse(404, 'profile_not_found');
 
+/// A `GET /v1/languages` 200 body: three languages, ordered by name.
+Map<String, Object?> catalogBody() => {
+  'languages': [
+    {'code': 'en', 'name': 'English', 'endonym': 'English'},
+    {'code': 'ja', 'name': 'Japanese', 'endonym': '日本語'},
+    {'code': 'es', 'name': 'Spanish', 'endonym': 'Español'},
+  ],
+};
+
+/// A `GET`/`PUT /v1/me/languages` 200 body. Each entry is (code, level);
+/// both lists are always arrays, as the backend sends them.
+Map<String, Object?> languagesBody({
+  List<(String, String)> spoken = const [],
+  List<(String, String)> learning = const [],
+}) {
+  List<Object?> entries(List<(String, String)> list) => [
+    for (final (code, level) in list) {'language': code, 'level': level},
+  ];
+  return {'spoken': entries(spoken), 'learning': entries(learning)};
+}
+
 /// A responder for a connection that fails (DNS, refused, reset).
 http.Response networkFailure(http.Request _) =>
     throw http.ClientException('connection failed');

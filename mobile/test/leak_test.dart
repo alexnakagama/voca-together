@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:vocatogether/api/api_paths.dart';
 import 'package:vocatogether/api/api_exception.dart';
+import 'package:vocatogether/api/languages.dart';
 import 'package:vocatogether/auth/auth_tokens.dart';
 import 'package:vocatogether/auth/google_identity_exception.dart';
 import 'package:vocatogether/auth/token_store.dart';
@@ -24,6 +25,9 @@ const _idToken = 'LEAKidtoken.payload.signature';
 const _idToken2 = 'LEAKidtokenTwo.payload.signature';
 const _displayName = 'LEAK-display-name';
 const _bio = 'LEAK-bio about me';
+
+/// No real code looks like this; the client sends a code as given.
+const _language = 'LEAKlanguage';
 
 const _markers = ['LEAK', 'leak.email'];
 
@@ -199,6 +203,36 @@ Future<FakeServer> _runEveryFlow(List<String> strings) async {
   await record(() => manager.profile());
   await record(() => manager.saveProfile(displayName: _displayName, bio: _bio));
 
+  // Languages (029): the catalog, then the member's own, read, saved with a
+  // marked code that the server returns, and refused with a body that
+  // echoes it.
+  final selection = UserLanguages(
+    spoken: const [UserLanguage(_language, LanguageLevel.native)],
+    learning: const [],
+  );
+  final stored = languagesBody(spoken: [(_language, 'native')]);
+  server
+    ..once('GET', ApiPaths.languages, (_) => jsonResponse(200, catalogBody()))
+    ..once('GET', ApiPaths.myLanguages, (_) => jsonResponse(200, stored))
+    ..once('PUT', ApiPaths.myLanguages, (_) => jsonResponse(200, stored))
+    ..once(
+      'PUT',
+      ApiPaths.myLanguages,
+      (_) => http.Response(
+        '{"error":{"code":"validation_failed","detail":"$_language"}}',
+        422,
+        headers: {'content-type': 'application/json'},
+      ),
+    );
+  await record(() => manager.languageCatalog());
+  await record(() => manager.languages());
+  await record(() => manager.saveLanguages(selection));
+  await record(() => manager.saveLanguages(selection));
+  strings
+    ..add('$selection')
+    ..add('${selection.spoken}')
+    ..add('${selection.spoken.single}');
+
   // Programming errors are refused without echoing the value.
   await record(() async => api.refresh(refreshToken: _access2));
   await record(() async => api.logout(accessToken: _refresh2));
@@ -262,16 +296,22 @@ void _checkPlacement(List<http.Request> requests) {
     _access1: {
       (ApiPaths.me, 'authorization'),
       (ApiPaths.profile, 'authorization'),
+      (ApiPaths.languages, 'authorization'),
+      (ApiPaths.myLanguages, 'authorization'),
       (ApiPaths.logout, 'authorization'),
     },
     _access2: {
       (ApiPaths.me, 'authorization'),
       (ApiPaths.profile, 'authorization'),
+      (ApiPaths.languages, 'authorization'),
+      (ApiPaths.myLanguages, 'authorization'),
       (ApiPaths.logout, 'authorization'),
     },
     // What a member writes goes only into the body of their own save.
     _displayName: {(ApiPaths.profile, 'body')},
     _bio: {(ApiPaths.profile, 'body')},
+    // A member's languages go only into the body of their own save.
+    _language: {(ApiPaths.myLanguages, 'body')},
     _refresh1: {(ApiPaths.refresh, 'body')},
     _refresh2: {(ApiPaths.refresh, 'body')},
     _idToken: {(ApiPaths.google, 'body')},
@@ -309,7 +349,16 @@ void _checkPlacement(List<http.Request> requests) {
       expect(r.bodyBytes, isEmpty);
     }
     if (r.headers['Authorization'] case final auth?) {
-      expect(path, anyOf(ApiPaths.me, ApiPaths.profile, ApiPaths.logout));
+      expect(
+        path,
+        anyOf(
+          ApiPaths.me,
+          ApiPaths.profile,
+          ApiPaths.languages,
+          ApiPaths.myLanguages,
+          ApiPaths.logout,
+        ),
+      );
       expect(isAccessToken(auth.replaceFirst('Bearer ', '')), isTrue);
     }
   }
@@ -320,6 +369,9 @@ void _checkPlacement(List<http.Request> requests) {
   expect(seen[_access2], contains((ApiPaths.profile, 'authorization')));
   expect(seen[_displayName], contains((ApiPaths.profile, 'body')));
   expect(seen[_bio], contains((ApiPaths.profile, 'body')));
+  expect(seen[_access2], contains((ApiPaths.languages, 'authorization')));
+  expect(seen[_access2], contains((ApiPaths.myLanguages, 'authorization')));
+  expect(seen[_language], contains((ApiPaths.myLanguages, 'body')));
   expect(seen[_refresh1], contains((ApiPaths.refresh, 'body')));
   expect(seen[_refresh2], contains((ApiPaths.refresh, 'body')));
   expect(seen[_idToken], contains((ApiPaths.google, 'body')));

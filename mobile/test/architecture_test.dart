@@ -130,6 +130,7 @@ void main() {
       const uiAllowed = {
         'api/account_api.dart',
         'api/api_exception.dart',
+        'api/languages.dart',
         'api/me.dart',
         'api/profile.dart',
         // Only the failure Google sign-in can end with; it holds no data.
@@ -215,6 +216,9 @@ void main() {
         'me',
         'profile',
         'saveProfile',
+        'languageCatalog',
+        'languages',
+        'saveLanguages',
         'logout',
       ]),
     );
