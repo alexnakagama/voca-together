@@ -1,0 +1,95 @@
+# Tasks
+
+Commands run from the repository root. Backend checks need the database (`make db-up`) and `TEST_DATABASE_URL`;
+without it the database tests skip silently and prove nothing. Flutter is not on `PATH` here: pass
+`FLUTTER=~/develop/flutter/bin/flutter` to `make mobile-analyze` and `make mobile-test`. Nothing is committed or
+pushed. Stop for review after each numbered group.
+
+## 1. Backend: the public identifier
+
+- [ ] 1.1 Add migration `00007_profile_public_id.sql` (design decision 1) with its down migration; verify with new cases in `backend/internal/db/schema_test.go` that a new profile gets a `public_id`, two profiles never share one (`profiles_public_id_key`), rows present before the migration each get a distinct value and keep their `updated_at`, and 00007 applies and rolls back with profiles present
+- [ ] 1.2 Add `PublicID` to `profile.Profile`, return it from `findProfile` and `upsertProfile`, and add `id` to `profileResponse`; verify in `backend/internal/profile/profile_test.go` and `backend/internal/server/profile_test.go` that GET and PUT return the same `id` before and after an edit and after an unchanged save, that it differs from `/v1/me`'s `id`, and that a body carrying `id` is still 400 `invalid_request`
+- [ ] 1.3 Add `profile.ParsePublicID` (design decision 3) and `profile.Service.Public(ctx, publicID)`, returning the public fields and the owner's `UserID` or `ErrNotFound`; verify with table tests that only a canonical lowercase UUID parses (upper case, braces, no hyphens, 35 and 37 characters, surrounding spaces refused) and that `Public` finds a profile by its id, misses an unknown id, misses another member's `users.id`, and misses after the user is deleted
+
+## 2. Backend: reading a member's profile
+
+- [ ] 2.1 Add `UserLimits.MemberRead` (`user_member_read`, design decision 4) in `backend/internal/server/limits.go` and wire it in `serverOptions`; verify `TestServerOptionsWireEveryRateLimit` fails without the wiring and passes with it
+- [ ] 2.2 Add `GET /v1/profiles/{id}` in a new `backend/internal/server/members.go`, composing `profile.Public` and `language.Get` behind `requireAccessToken` and the member-read limit, with its own `memberProfileResponse` (`has_avatar` is `false` until group 4); relax the doc comment of `language.Service.Get` as design decision 2 says; verify in a new `backend/internal/server/members_test.go` the spec's "Reading a member's public profile" and "Unknown and unavailable profiles are indistinguishable" scenarios, including identical 404 bodies for unknown, malformed, upper-case and account-id values and no database query for a malformed one
+- [ ] 2.3 Verify in `members_test.go` the spec's disclosure and access scenarios: the response's keys are exactly the five public ones; a marked email and the reader's and owner's `users.id` appear in no response; the 401 matrix (no token, malformed, expired, revoked) answers the same for an existing and an unknown id; every response has `no-store`; PUT, POST, PATCH and DELETE on the route answer 405 with nothing changed; the handler fails closed when mounted without the middleware
+- [ ] 2.4 Verify the limit and the logs: reads over the allowance answer 429 with `Retry-After`; the bucket is per reader, shared by a reader's sessions, not spent by unauthenticated requests, and leaves the reader's own profile GET and PUT working; and no log line of a successful or failed member read holds the id, a name, a text or a language
+- [ ] 2.5 Write `docs/decisions/031-*.md` up to this point (the public id, the member read, the visibility model, the report-and-block gate as an accepted risk) with header notes on 018, 027 and 029, add its row and the "What later records changed" lines to `docs/decisions.md`, update `.claude/rules/profile.md` and add the member-read pattern to `.claude/rules/backend.md`; verify with a search that no rule or map still says no endpoint returns one member's profile to another
+- [ ] 2.6 Run `make vet` and `make test` with the database up and verify both pass
+
+## 3. Backend: the avatar pipeline
+
+- [ ] 3.1 Add `golang.org/x/image` to `backend/go.mod`; verify `go mod tidy` leaves no other new direct dependency and `make vet` passes
+- [ ] 3.2 Add migration `00008_avatars.sql` (design decision 5), with its down migration, and add `avatars` to the `TRUNCATE` in `backend/internal/testutil/db.go`; verify in `schema_test.go` each CHECK by name, one row per user, the cascade when the user is deleted, and 00008 applied and rolled back with rows present
+- [ ] 3.3 Create `backend/internal/avatar` with its typed errors and the checks that run before decoding (design decision 6, steps 1 to 3); verify with table tests over generated fixtures each code (`required`, `too_large` at and over 5 MiB, `unsupported_type` for GIF, WebP, PDF and text, `invalid_image` for a truncated JPEG and PNG, `dimensions_too_large` at 4096 and 4097 on each side, including a small file that declares huge dimensions), and that no error message contains bytes of the input
+- [ ] 3.4 Implement the EXIF orientation reader for JPEG; verify with fixtures for the eight orientation values, a JPEG with no EXIF, big- and little-endian EXIF, and truncated or self-referencing segments that it returns the right value or "upright" and never panics, and add a fuzz target for it
+- [ ] 3.5 Implement decode, orientation, centre crop, scale to 512×512 over white and JPEG encoding; verify with fixtures that a landscape, a portrait, a 100×100 and a 4096×4096 input all yield a 512×512 JPEG of the centre square, each of the eight orientations yields the same upright picture, transparent PNG areas come out white, the output holds no APP1, COM or ICC segment and none of a marker string planted in the input's EXIF, text chunks and trailing bytes, and the same input always yields the same bytes; add a fuzz target over the whole pipeline
+- [ ] 3.6 Add the decode slots with their queue timeout and `ErrOverloaded`; verify that with every slot held a `Save` returns `ErrOverloaded` after the timeout and writes nothing, and that an ended context returns promptly
+
+## 4. Backend: the avatar service and routes
+
+- [ ] 4.1 Implement `avatar.Service` (`Get`, `Exists`, `Save`, `Delete`) and its SQL (design decisions 5 and 7); verify on the database: first save, replace, the same bytes again writing no row version and logging nothing, delete with and without a row, a deleted user as `ErrUserGone`, 16 concurrent distinct saves leaving one whole picture, and that a failed save leaves the earlier picture
+- [ ] 4.2 Add `UserLimits.AvatarWrite` (`user_avatar_write`) and wire it and the avatar service in `main` and `serverOptions`; add `PUT`, `GET` and `DELETE /v1/me/avatar` in a new `backend/internal/server/avatar.go` with the mapping of `avatar.ValidationError`, `ErrNotFound`, `ErrOverloaded` and `ErrUserGone` in `writeServiceError` and the new code `avatar_not_found`; verify in a new `backend/internal/server/avatar_test.go` the spec's "Setting and replacing", "Accepted input", "Uploading is idempotent", "Removing" and "Reading one's own picture" scenarios, including a declared `Content-Type` that disagrees with the content and a body over the limit not being read past it
+- [ ] 4.3 Add `GET /v1/profiles/{id}/avatar` behind the member-read limit and set `has_avatar` in the member profile response; verify the spec's "Reading a member's picture" scenarios, including a picture whose owner has no profile being unreachable, and `has_avatar` following an upload and a removal
+- [ ] 4.4 Verify ownership, limits and logs in `avatar_test.go`: the 401 matrix on all four routes with nothing stored or removed; another member's id in the query affecting only the caller; a second session of the same member reading the upload; the avatar bucket shared by PUT and DELETE, spent by refused uploads, separate from the profile and languages buckets; 503 with `Retry-After` when the slots are held; `no-store` and `image/jpeg` on every image response; a user deleted before the write answering 401; and logs holding `user_id` only
+- [ ] 4.5 Complete decision 031 with the avatar part (storage, the pipeline, idempotence, limits, the unchanged server timeouts, accepted risks, deferred work) and add `.claude/rules/avatar.md` with narrow `paths`; update `.claude/rules/testing.md` (the `TRUNCATE` list), `docs/architecture.md` (the package, the routes, startup order, dependency direction) and the table and boundaries in `CLAUDE.md`; verify every route in `server.go` is described and the dependency-direction sentence names `avatar`
+- [ ] 4.6 Run `make vet` and `make test` with the database up and verify both pass
+
+## 5. Client: transport, models and session
+
+- [ ] 5.1 Extend `ApiClient` (design decision 12) with `DELETE`, the byte body and the image response; verify in `mobile/test/api/api_client_test.dart` the exact request for a byte PUT and a DELETE, that `json` and `bytes` together are refused, an image answer at and over its cap, a 2xx that is not `image/jpeg` as a protocol failure, error bodies still parsed as JSON, redirects still refused, and every existing JSON test unchanged
+- [ ] 5.2 Add `id` to `Profile` and create `lib/api/member_profile.dart`; verify in `mobile/test/api/` strict parsing of both (a missing or empty `id`, a missing `languages`, a `null` list, an unknown level and a non-boolean `has_avatar` each fail the whole response) and redacted `toString`
+- [ ] 5.3 Add the paths and the five `AuthApi` calls (design decision 13); verify the exact method, path, bearer and body of each, `avatar()` and `memberAvatar()` returning null only for 404 `avatar_not_found`, `memberProfile()` returning null only for 404 `profile_not_found`, any other 404 staying an error, and a non-canonical member id refused before any request
+- [ ] 5.4 Add the five `SessionManager` methods, each one `_authorized` call; verify in a new `mobile/test/session_social_profile_test.dart` a stale token, a 401 then one refresh and one resend with the same bytes, a second 401, other failures sent once, no session, and a disposed manager
+- [ ] 5.5 Add `avatarError` and the five `avatar` codes to `presentFailure`, with their strings; verify each in `mobile/test/screens/failure_presentation_test.dart`
+- [ ] 5.6 Extend `mobile/test/architecture_test.dart` (the new model on the screens' allowlist, the new public `SessionManager` members) and `mobile/test/leak_test.dart` (the bearer on the five new paths; marked image bytes only in the body of the upload, in no string, exception or print; a member id only in a path); verify both pass
+- [ ] 5.7 Run `make mobile-analyze` and `make mobile-test` and verify both pass with no screen changed yet
+
+## 6. Client: the photo source and the shared widgets
+
+- [ ] 6.1 Add `image_picker` to `mobile/pubspec.yaml`, create `lib/media/photo_source.dart` and `photo_source_plugin.dart` (design decision 14), build the source in `main.dart` and add `FakePhotoSource` to `mobile/test/support/fakes.dart` and the screens' harness; verify the merged Android manifest of a debug build declares no storage, media or camera permission, a test of the adapter covers a pick, backing out and an unreadable file, and the architecture test fails if any other file imports `image_picker`
+- [ ] 6.2 Create `ProfileAvatar` and `ProfileHeader` in `lib/ui/widgets/` with previews listed in `mobile/test/ui/previews_test.dart`; verify in new widget tests the picture from bytes, the initial for Latin, CJK, emoji and combined-character names, bytes that fail to decode falling back to the initial, the semantics label, contrast in both themes and no overflow at text scale 2.0 on 320 dp with a long name and text
+- [ ] 6.3 Move the two chip lists out of `ProfileLanguagesSection` into `lib/screens/profile_language_lists.dart` without changing what they show; verify `mobile/test/screens/profile_languages_section_test.dart` passes unchanged except for imports
+
+## 7. Client: `/profile/edit` and the read-only `/profile`
+
+- [ ] 7.1 Add `Routes.profileEdit` to `signedInRoutes` with its `GoRoute`; verify the `authRedirect` table in `mobile/test/router_test.dart` gains `/profile/edit`, `/profile/edit/`, `/profile/edit/x` and `/profile/edit?x=1` for the three statuses and the "no redirect loop" test passes
+- [ ] 7.2 Move the form into `lib/screens/profile_edit_screen.dart` with the changes of design decision 18 (return on success, Cancel, `PopScope` and the discard question, the "Languages" row, the reworded notice), and remove the "Profile saved." state and string; verify in a new `mobile/test/screens/profile_edit_screen_test.dart` the spec's "Loading the form", "Saving the name and the text", "Profile save failures", "A profile save in flight", "Cancelling and unsaved changes" and "The way in to the languages editor" scenarios, including the exact PUT body, no catalog or languages request from this screen, and the session ending with the dialog open
+- [ ] 7.3 Rewrite `lib/screens/profile_screen.dart` as the read-only page (design decisions 16 and 17) with the placeholder avatar for now, the Friends area, the languages section without its button, "Edit Profile", the empty state and the reload on return; verify in `mobile/test/screens/profile_screen_test.dart` the spec's "The profile page is read-only", "The Friends placeholder", "Languages on the profile page", "A member without a profile", "Opening the edit screen and showing the result" and "Loading and failure of the profile page" scenarios, including no text field in any state and a failed reload not showing the earlier profile
+- [ ] 7.4 Update the languages tests for the new entry point (the `language-editor` delta): the editor opened from the edit screen, a save and a discard returning to it with typed text kept, the page showing the new selection after going back, and no "Edit languages" control on the page; verify `languages_screen_test.dart` and `profile_languages_section_test.dart` pass
+- [ ] 7.5 Add every state of the page and of the edit screen, the discard dialog included, to `mobile/test/screens/accessibility_test.dart` and `privacy_test.dart`; verify both pass, including large text at 320 by 480 dp with the keyboard open on the edit screen, and the locations `/profile` and `/profile/edit` with no query
+- [ ] 7.6 Run `make mobile-analyze` and `make mobile-test` and verify both pass
+
+## 8. Client: the picture
+
+- [ ] 8.1 Show the member's picture on the profile page through `avatar()`, loading on its own; verify in `profile_screen_test.dart` the picture, the placeholder without one, the placeholder and no error when the picture request fails, and the new picture or placeholder after returning from the edit screen
+- [ ] 8.2 Create `lib/screens/profile_avatar_editor.dart` (design decision 19) and mount it on the edit screen, passing the `PhotoSource` from the router; verify in `profile_edit_screen_test.dart` the spec's "The picture control", "Choosing a picture applies it at once" and "Removing the picture" scenarios, including the exact upload body, no profile PUT sent by a picture action, typed text kept, backing out of the chooser and dismissing the removal question
+- [ ] 8.3 Verify the spec's "Picture failures" and "A picture action in flight" scenarios: each of the four 422 codes, 429 with and without `Retry-After`, 503, a network failure, a timeout, an unreadable photo, the earlier picture kept in each case, the form still saving afterwards, every control disabled and back ignored during an upload that never answers, a double activation sending one request, and the session ending mid-upload showing no error
+- [ ] 8.4 Add the picture control's states (loading, none, with a picture, working, failed, the removal question) to `accessibility_test.dart` and `privacy_test.dart`, with a response body whose text must not appear; verify both pass
+
+## 9. Client: the member profile
+
+- [ ] 9.1 Add `Routes.member(id)` and the member pattern to `authRedirect` (design decision 15) with a `GoRoute`; verify in `router_test.dart` a canonical id for the three statuses, and that `/members`, `/members/`, `/members/abc`, an upper-case id and `/members/<id>/x` go home when signed in
+- [ ] 9.2 Create `lib/screens/member_profile_screen.dart` (design decision 20); verify in a new `mobile/test/screens/member_profile_screen_test.dart` the spec's "The member profile screen" and "Member profile loading and failure states" scenarios, including the unavailable state with no retry, no Friends area and no edit control for the member's own id, an unnamed language code, a failed picture falling back to the placeholder, and a late answer ignored
+- [ ] 9.3 Add the "See public profile" action to the profile page; verify it is absent without a profile, opens `/members/<own id>`, shows the same name, text, picture and languages, and that going back shows the page without a reload
+- [ ] 9.4 Add the member screen's states to `accessibility_test.dart` and `privacy_test.dart`; verify both pass and that the location holds the id and nothing else
+- [ ] 9.5 Write `docs/decisions/032-*.md` (the four routes, the page and edit split, the picture control, the member screen, the transport change, tests, deferred work) with header notes on 021, 023, 028 and 030, index it in `docs/decisions.md`, and update `.claude/rules/profile.md`, `languages.md`, `mobile.md` and the client section of `docs/architecture.md`; verify with a search that no document still says `/profile` holds the form, that the summary has an "Edit languages" button, or that no route names another member
+- [ ] 9.6 Run `make mobile-analyze` and `make mobile-test` and verify both pass
+
+## 10. Integration checks
+
+- [ ] 10.1 Run `make vet` and `make test` with the database up, then `make mobile-analyze` and `make mobile-test`, and verify all four pass
+- [ ] 10.2 Verify with `git diff --stat` that the only dependency changes are `golang.org/x/image` in `backend/go.mod` and `image_picker` in `mobile/pubspec.yaml`, and that no applied migration (00001 to 00006) was edited
+- [ ] 10.3 On the emulator against `make run`: create a profile from the empty state, add a photo from the gallery, edit languages from the edit screen, return to `/profile` and see all of it, open "See public profile", remove the photo, and discard an unsaved name; verify each step shows what the specs describe and the API log holds no name, text, language, id or image data
+- [ ] 10.4 With two accounts, verify by request that one can read the other's profile and picture by public id and cannot change either, and that the reader's email and account id appear in no response
+- [ ] 10.5 Run `openspec validate add-social-profile --strict` and verify it passes
+
+## Workflow follow-up
+
+- The user reviews and commits; nothing is committed or pushed by the implementation.
+- Archive the change (`/opsx:archive`) after the user's review.
+- Before any feature that lists, suggests or searches members: reporting and blocking (decision 031's gate).
+- Stage 8's remaining step is separate from this change: decision 030 to *in force*.
