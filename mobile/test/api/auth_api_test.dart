@@ -237,6 +237,7 @@ void main() {
 
   group('profile', () {
     final body = {
+      'id': testMemberId,
       'display_name': 'Ana López',
       'bio': 'Learning Japanese.',
       'created_at': '2026-10-01T10:00:00.123456Z',
@@ -246,7 +247,8 @@ void main() {
     test('parses the profile', () async {
       server.once('GET', ApiPaths.profile, (_) => jsonResponse(200, body));
       final profile = await api.profile(accessToken: accessToken('1'));
-      expect(profile!.displayName, 'Ana López');
+      expect(profile!.id, testMemberId);
+      expect(profile.displayName, 'Ana López');
       expect(profile.bio, 'Learning Japanese.');
       expect(profile.createdAt, DateTime.utc(2026, 10, 1, 10, 0, 0, 123, 456));
       expect(profile.updatedAt, DateTime.utc(2026, 10, 2, 6));
@@ -256,6 +258,7 @@ void main() {
       // What a member wrote is personal data: never in a string.
       expect('$profile', isNot(contains('Ana')));
       expect('$profile', isNot(contains('Japanese')));
+      expect('$profile', isNot(contains(testMemberId)));
     });
 
     test('an empty bio is a profile', () async {
@@ -289,6 +292,10 @@ void main() {
 
     test('rejects a malformed profile', () async {
       for (final b in [
+        {...body}..remove('id'),
+        {...body, 'id': ''},
+        {...body, 'id': null},
+        {...body, 'id': 7},
         {...body}..remove('display_name'),
         {...body}..remove('bio'),
         {...body, 'display_name': ''},

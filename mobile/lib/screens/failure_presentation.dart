@@ -66,6 +66,7 @@ final class FailurePresentation {
     this.bioError,
     this.spokenError,
     this.learningError,
+    this.avatarError,
   });
 
   final FailureKind kind;
@@ -86,6 +87,9 @@ final class FailurePresentation {
   /// for a whole list, since the backend names the list and not the entry.
   final String? spokenError;
   final String? learningError;
+
+  /// Why the server refused a photo as the profile picture (422 `fields`).
+  final String? avatarError;
 }
 
 /// The app's one mapping from a failed call to what the user is told
@@ -144,9 +148,12 @@ FailurePresentation _fromHttp(ApiHttpException e, AppLocalizations l10n) {
         FailureKind.sessionInvalid,
         message: l10n.errorSessionInvalid,
       );
-    // profile_not_found never reaches a screen: the session answers "no
-    // profile" instead (027).
-    case 'internal_error' || 'invalid_request' || 'profile_not_found':
+    // profile_not_found and avatar_not_found never reach a screen: the
+    // session answers "no profile" and "no picture" instead (027, 031).
+    case 'internal_error' ||
+        'invalid_request' ||
+        'profile_not_found' ||
+        'avatar_not_found':
       return _unexpected(l10n);
     // Google sign-in (020). The server didn't accept what Google returned;
     // the next attempt asks Google again.
@@ -185,6 +192,7 @@ FailurePresentation _validation(ApiHttpException e, AppLocalizations l10n) {
   String? bio;
   String? spoken;
   String? learning;
+  String? avatar;
   var unshown = e.fields.isEmpty;
   for (final f in e.fields) {
     final text = switch ((f.field, f.code)) {
@@ -206,6 +214,13 @@ FailurePresentation _validation(ApiHttpException e, AppLocalizations l10n) {
       ('spoken' || 'learning', 'invalid_level') =>
         l10n.errorLanguageLevelInvalid,
       ('spoken' || 'learning', 'duplicate') => l10n.errorLanguageDuplicate,
+      // What the server refuses about a photo (031). The app checks none
+      // of it itself.
+      ('avatar', 'required') => l10n.errorAvatarRequired,
+      ('avatar', 'too_large') => l10n.errorAvatarTooLarge,
+      ('avatar', 'unsupported_type') => l10n.errorAvatarUnsupportedType,
+      ('avatar', 'invalid_image') => l10n.errorAvatarInvalidImage,
+      ('avatar', 'dimensions_too_large') => l10n.errorAvatarDimensionsTooLarge,
       _ => null,
     };
     if (text == null) {
@@ -225,6 +240,8 @@ FailurePresentation _validation(ApiHttpException e, AppLocalizations l10n) {
         spoken ??= text;
       case 'learning':
         learning ??= text;
+      case 'avatar':
+        avatar ??= text;
     }
   }
   return FailurePresentation(
@@ -236,6 +253,7 @@ FailurePresentation _validation(ApiHttpException e, AppLocalizations l10n) {
     bioError: bio,
     spokenError: spoken,
     learningError: learning,
+    avatarError: avatar,
   );
 }
 

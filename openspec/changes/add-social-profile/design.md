@@ -225,6 +225,9 @@ body first, and the member can retry either. Accepted, and recorded.
   must be `image/jpeg`, is capped at 1 MiB (twice the stored maximum) and is returned as bytes; anything else
   is the existing `ApiProtocolException`. Error responses are parsed as today (JSON, 64 KiB).
 - The JSON path is untouched: same cap, same checks.
+- *As built:* the two image methods are `getImage` and `putForImage`. An image answer must be exactly 200, not
+  any 2xx (the only success the avatar routes have), so they return plain bytes; the type and the status are
+  decided from the headers, before anything is buffered up to the image cap.
 - *Why not `Image.network`:* it would need the access token in a widget, and it uses `dart:io`'s client, which
   bypasses `ApiClient`'s origin, redirect and size rules.
 
@@ -239,6 +242,8 @@ body first, and the member can retry either. Accepted, and recorded.
   `avatar()` → `Uint8List?` (null only for 404 `avatar_not_found`), `saveAvatar(Uint8List)` → `Uint8List`,
   `removeAvatar()` → `void`, `memberProfile(id)` → `MemberProfile?` (null only for 404 `profile_not_found`),
   `memberAvatar(id)` → `Uint8List?`. Any other 404 stays an error, as 028 decided for the profile.
+  *As built:* `SessionManager` refuses a non-canonical id before `_authorized`, so a caller's mistake causes
+  no request and no refresh; `AuthApi` keeps its own check.
 - `presentFailure` gains `avatarError` and the five `avatar` codes.
 - `test/architecture_test.dart`: the new model on the screens' allowlist and the new public members listed.
   `test/leak_test.dart`: image bytes only in the body of the upload; the bearer on the five new paths.

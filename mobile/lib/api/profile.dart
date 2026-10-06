@@ -6,6 +6,7 @@ import 'api_exception.dart';
 /// themselves is personal data.
 final class Profile {
   const Profile({
+    required this.id,
     required this.displayName,
     required this.bio,
     required this.createdAt,
@@ -17,16 +18,18 @@ final class Profile {
   factory Profile.fromJson(Object? json) {
     if (json
         case {
+          'id': final String id,
           'display_name': final String displayName,
           'bio': final String bio,
           'created_at': final String createdAt,
           'updated_at': final String updatedAt,
         }
-        when displayName.isNotEmpty) {
+        when id.isNotEmpty && displayName.isNotEmpty) {
       final created = DateTime.tryParse(createdAt);
       final updated = DateTime.tryParse(updatedAt);
       if (created != null && updated != null) {
         return Profile(
+          id: id,
           displayName: displayName,
           bio: bio,
           createdAt: created.toUtc(),
@@ -39,6 +42,10 @@ final class Profile {
       statusCode: 200,
     );
   }
+
+  /// The profile's public identifier: what names this member to other
+  /// members (decision 031). Never empty, and not the account's id.
+  final String id;
 
   /// The name shown for this member. Never empty.
   final String displayName;

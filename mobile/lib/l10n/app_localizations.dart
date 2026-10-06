@@ -580,6 +580,36 @@ abstract class AppLocalizations {
   /// **'A language can only be added once, in one of the two lists. Remove the repeated one and try again.'**
   String get errorLanguageDuplicate;
 
+  /// Error by the profile picture control when the server received a photo with no data.
+  ///
+  /// In en, this message translates to:
+  /// **'That photo is empty. Choose a different one.'**
+  String get errorAvatarRequired;
+
+  /// Error by the profile picture control when the server finds the photo’s file too large. Must not state a number.
+  ///
+  /// In en, this message translates to:
+  /// **'That photo’s file is too large. Choose a smaller one.'**
+  String get errorAvatarTooLarge;
+
+  /// Error by the profile picture control when the chosen file is not a JPEG or PNG image.
+  ///
+  /// In en, this message translates to:
+  /// **'That kind of file can’t be used. Choose a JPEG or PNG photo.'**
+  String get errorAvatarUnsupportedType;
+
+  /// Error by the profile picture control when the server could not decode the photo.
+  ///
+  /// In en, this message translates to:
+  /// **'That photo couldn’t be read and may be damaged. Choose a different one.'**
+  String get errorAvatarInvalidImage;
+
+  /// Error by the profile picture control when the photo is wider or taller than the server accepts. Must not state a number.
+  ///
+  /// In en, this message translates to:
+  /// **'That photo has too many pixels. Choose a smaller one.'**
+  String get errorAvatarDimensionsTooLarge;
+
   /// Heading of the section of the profile screen that shows the languages the user speaks and is learning.
   ///
   /// In en, this message translates to:

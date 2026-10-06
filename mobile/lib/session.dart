@@ -3,9 +3,11 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import 'api/api_exception.dart';
+import 'api/api_paths.dart';
 import 'api/auth_api.dart';
 import 'api/languages.dart';
 import 'api/me.dart';
+import 'api/member_profile.dart';
 import 'api/profile.dart';
 import 'auth/auth_clock.dart';
 import 'auth/auth_tokens.dart';
@@ -285,6 +287,60 @@ class SessionManager extends ChangeNotifier {
     _checkNotDisposed();
     return _authorized(
       (token) => _api.saveLanguages(accessToken: token, languages: languages),
+    );
+  }
+
+  /// The signed-in user's own profile picture (`GET /v1/me/avatar`), a
+  /// JPEG, or null if they have none. Asked of the server on every call:
+  /// nothing is cached here. Token handling and failures as for [me].
+  Future<Uint8List?> avatar() {
+    _checkNotDisposed();
+    return _authorized((token) => _api.avatar(accessToken: token));
+  }
+
+  /// Makes [image] the signed-in user's profile picture
+  /// (`PUT /v1/me/avatar`), replacing any earlier one, and returns the
+  /// picture as the server stored it. The bytes are sent as given: every
+  /// rule about the photo is the server's. Token handling and failures as
+  /// for [me]; the resend after a 401 is safe because the upload is
+  /// idempotent (031). Nothing else is retried.
+  Future<Uint8List> saveAvatar(Uint8List image) {
+    _checkNotDisposed();
+    return _authorized(
+      (token) => _api.saveAvatar(accessToken: token, image: image),
+    );
+  }
+
+  /// Removes the signed-in user's profile picture (`DELETE /v1/me/avatar`);
+  /// succeeds when there was none too. Token handling and failures as for
+  /// [me]; the resend after a 401 is safe for that reason (031).
+  Future<void> removeAvatar() {
+    _checkNotDisposed();
+    return _authorized((token) => _api.removeAvatar(accessToken: token));
+  }
+
+  /// The public profile of the member whose public identifier is [id]
+  /// (`GET /v1/profiles/{id}`), or null if [id] names no profile. Nothing is
+  /// cached. Token handling and failures as for [me]. An [id] that isn't a
+  /// canonical public identifier is an [ArgumentError], thrown before any
+  /// token is used: a caller's mistake costs no request and no refresh.
+  Future<MemberProfile?> memberProfile(String id) {
+    _checkNotDisposed();
+    ApiPaths.checkMemberId(id);
+    return _authorized(
+      (token) => _api.memberProfile(accessToken: token, id: id),
+    );
+  }
+
+  /// The profile picture of the member whose public identifier is [id]
+  /// (`GET /v1/profiles/{id}/avatar`), a JPEG, or null if that member has
+  /// none. Nothing is cached. Token handling and failures as for
+  /// [memberProfile].
+  Future<Uint8List?> memberAvatar(String id) {
+    _checkNotDisposed();
+    ApiPaths.checkMemberId(id);
+    return _authorized(
+      (token) => _api.memberAvatar(accessToken: token, id: id),
     );
   }
 

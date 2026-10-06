@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import '../auth/auth_tokens.dart';
 import 'api_client.dart';
@@ -6,11 +7,12 @@ import 'api_exception.dart';
 import 'api_paths.dart';
 import 'languages.dart';
 import 'me.dart';
+import 'member_profile.dart';
 import 'profile.dart';
 
 /// The token-bearing calls: sign-in, refresh, logout, `GET /v1/me`, the
-/// user's profile, the language catalog, the user's languages and the
-/// reachability probe.
+/// user's profile, picture and languages, the language catalog, a member's
+/// public profile and picture, and the reachability probe.
 ///
 /// **Internal to the session layer** (decision 023): only `main` builds it
 /// and only `SessionManager` holds it. It returns [AuthTokens] and takes raw
@@ -20,9 +22,10 @@ import 'profile.dart';
 ///
 /// Stateless transport: it knows paths, bodies and expected statuses, and
 /// nothing about sessions. Tokens go in only where the backend reads them:
-/// the access token in `Authorization` (logout, me, profile, languages), the refresh token
-/// in the refresh body, the Google ID token in the google body. Nothing is retried;
-/// failures are [ApiException]s.
+/// the access token in `Authorization` (logout, me, profile, languages,
+/// pictures, member profiles), the refresh token in the refresh body, the
+/// Google ID token in the google body. Nothing is retried; failures are
+/// [ApiException]s.
 class AuthApi {
   AuthApi(this._client);
 
@@ -174,6 +177,80 @@ class AuthApi {
     return UserLanguages.fromJson(r.json);
   }
 
+  /// `GET /v1/me/avatar` with the access token → 200 with the user's own
+  /// picture, a JPEG, or null when they have none (031).
+  ///
+  /// Null only for the backend's own 404 `avatar_not_found`; any other 404
+  /// stays an error, as for [profile].
+  Future<Uint8List?> avatar({required String accessToken}) =>
+      _imageOrNull(ApiPaths.myAvatar, accessToken);
+
+  /// `PUT /v1/me/avatar` with the access token → 200 with the picture as
+  /// stored (031). [image] is the whole body, sent as given: the backend
+  /// decides what it accepts and stores its own re-encoding of it.
+  ///
+  /// Idempotent on the server, so sending the same bytes twice is harmless.
+  Future<Uint8List> saveAvatar({
+    required String accessToken,
+    required Uint8List image,
+  }) => _client.putForImage(
+    ApiPaths.myAvatar,
+    bytes: image,
+    bearer: accessToken,
+    timeout: requestTimeout,
+  );
+
+  /// `DELETE /v1/me/avatar` with the access token → 204, also when there
+  /// was no picture (031), so sending it twice is harmless.
+  Future<void> removeAvatar({required String accessToken}) async {
+    final r = await _client.send(
+      'DELETE',
+      ApiPaths.myAvatar,
+      bearer: accessToken,
+      timeout: requestTimeout,
+    );
+    _expectStatus(r, 204);
+  }
+
+  /// `GET /v1/profiles/{id}` with the access token → 200 with the public
+  /// profile [id] names, or null when it names none (031).
+  ///
+  /// Null only for the backend's own 404 `profile_not_found`; any other 404
+  /// stays an error, as for [profile]. An [id] that isn't a canonical public
+  /// identifier is an [ArgumentError] and nothing is sent.
+  Future<MemberProfile?> memberProfile({
+    required String accessToken,
+    required String id,
+  }) async {
+    final path = ApiPaths.memberProfile(id);
+    final ApiResult r;
+    try {
+      r = await _client.send(
+        'GET',
+        path,
+        bearer: accessToken,
+        timeout: requestTimeout,
+      );
+    } on ApiHttpException catch (e) {
+      if (e.statusCode == 404 && e.code == 'profile_not_found') return null;
+      rethrow;
+    }
+    _expectStatus(r, 200);
+    return MemberProfile.fromJson(r.json);
+  }
+
+  /// `GET /v1/profiles/{id}/avatar` with the access token → 200 with the
+  /// picture of the member [id] names, a JPEG, or null when that member has
+  /// none (031).
+  ///
+  /// Null only for the backend's own 404 `avatar_not_found`. Any other 404
+  /// stays an error, `profile_not_found` included: whether [id] names a
+  /// profile is [memberProfile]'s answer. [id] as for [memberProfile].
+  Future<Uint8List?> memberAvatar({
+    required String accessToken,
+    required String id,
+  }) async => _imageOrNull(ApiPaths.memberAvatar(id), accessToken);
+
   /// `GET /healthz`: whether the API answers at all. Any 2xx is success.
   Future<void> healthz() =>
       _client.send('GET', ApiPaths.healthz, timeout: healthzTimeout);
@@ -187,6 +264,19 @@ class AuthApi {
     );
     _expectStatus(r, 200);
     return AuthTokens.fromJson(r.json);
+  }
+
+  Future<Uint8List?> _imageOrNull(String path, String accessToken) async {
+    try {
+      return await _client.getImage(
+        path,
+        bearer: accessToken,
+        timeout: requestTimeout,
+      );
+    } on ApiHttpException catch (e) {
+      if (e.statusCode == 404 && e.code == 'avatar_not_found') return null;
+      rethrow;
+    }
   }
 
   static void _expectStatus(ApiResult r, int expected) {

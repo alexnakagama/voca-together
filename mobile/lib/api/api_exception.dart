@@ -115,6 +115,9 @@ enum ProtocolFailure {
 
   /// A non-empty success body that isn't `application/json`.
   notJson,
+
+  /// A success where an image is expected that isn't `image/jpeg`.
+  notImage,
 }
 
 /// The server answered, but not as the contract says.

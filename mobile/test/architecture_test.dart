@@ -132,6 +132,8 @@ void main() {
         'api/api_exception.dart',
         'api/languages.dart',
         'api/me.dart',
+        // What one member may read about another (031): holds no token.
+        'api/member_profile.dart',
         'api/profile.dart',
         // Only the failure Google sign-in can end with; it holds no data.
         'auth/google_identity_exception.dart',
@@ -219,6 +221,11 @@ void main() {
         'languageCatalog',
         'languages',
         'saveLanguages',
+        'avatar',
+        'saveAvatar',
+        'removeAvatar',
+        'memberProfile',
+        'memberAvatar',
         'logout',
       ]),
     );

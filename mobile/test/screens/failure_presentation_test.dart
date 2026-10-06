@@ -289,6 +289,92 @@ void main() {
     });
   });
 
+  group('profile picture', () {
+    // code → the text by the picture control.
+    final codes = <String, String>{
+      'required': l10n.errorAvatarRequired,
+      'too_large': l10n.errorAvatarTooLarge,
+      'unsupported_type': l10n.errorAvatarUnsupportedType,
+      'invalid_image': l10n.errorAvatarInvalidImage,
+      'dimensions_too_large': l10n.errorAvatarDimensionsTooLarge,
+    };
+    codes.forEach((code, text) {
+      test('avatar:$code goes by the picture, with no banner', () {
+        final p = _present(
+          _http(422, 'validation_failed', [FieldError('avatar', code)]),
+        );
+        expect(p.kind, FailureKind.invalidInput);
+        expect(p.message, isNull);
+        expect(p.avatarError, text);
+        expect(p.displayNameError, isNull);
+        expect(p.bioError, isNull);
+        expect(p.spokenError, isNull);
+        expect(p.learningError, isNull);
+      });
+    });
+
+    test('each code has its own text', () {
+      expect(codes.values.toSet(), hasLength(codes.length));
+    });
+
+    test('the first error wins', () {
+      final p = _present(
+        _http(422, 'validation_failed', [
+          const FieldError('avatar', 'too_large'),
+          const FieldError('avatar', 'invalid_image'),
+        ]),
+      );
+      expect(p.message, isNull);
+      expect(p.avatarError, l10n.errorAvatarTooLarge);
+    });
+
+    test('a code this app doesn\'t know adds the generic banner', () {
+      final p = _present(
+        _http(422, 'validation_failed', [
+          const FieldError('avatar', 'too_blurry'),
+        ]),
+      );
+      expect(p.kind, FailureKind.invalidInput);
+      expect(p.message, l10n.errorCheckInput);
+      expect(p.avatarError, isNull);
+    });
+
+    test('a profile or language error is not a picture error', () {
+      final p = _present(
+        _http(422, 'validation_failed', [
+          const FieldError('bio', 'too_long'),
+          const FieldError('spoken', 'too_many'),
+        ]),
+      );
+      expect(p.avatarError, isNull);
+    });
+
+    // Limits live on the server only: the text states none of them.
+    test('no message states a number', () {
+      for (final text in codes.values) {
+        expect(text, isNot(contains(RegExp(r'\d'))));
+      }
+    });
+
+    // An upload cut short (031): nothing about the photo, so no picture
+    // error, only something to try again.
+    test('a 400 invalid_request says nothing about the photo', () {
+      final p = _present(_http(400, 'invalid_request'));
+      expect(p.kind, FailureKind.unexpected);
+      expect(p.message, l10n.errorUnexpected);
+      expect(p.avatarError, isNull);
+    });
+
+    // The session layer turns it into "no picture"; if it ever reaches a
+    // screen it is an ordinary unexpected failure, never server text.
+    test('avatar_not_found is unexpected', () {
+      final p = _present(_http(404, 'avatar_not_found'));
+      expect(p.kind, FailureKind.unexpected);
+      expect(p.message, l10n.errorUnexpected);
+      expect(p.avatarError, isNull);
+    });
+  });
+
   group('status fallback for missing or unknown codes', () {
     final cases = <int, (FailureKind, String)>{
       400: (FailureKind.unexpected, l10n.errorUnexpected),

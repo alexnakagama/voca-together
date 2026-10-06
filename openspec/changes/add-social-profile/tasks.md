@@ -40,13 +40,13 @@ pushed. Stop for review after each numbered group.
 
 ## 5. Client: transport, models and session
 
-- [ ] 5.1 Extend `ApiClient` (design decision 12) with `DELETE`, the byte body and the image response; verify in `mobile/test/api/api_client_test.dart` the exact request for a byte PUT and a DELETE, that `json` and `bytes` together are refused, an image answer at and over its cap, a 2xx that is not `image/jpeg` as a protocol failure, error bodies still parsed as JSON, redirects still refused, and every existing JSON test unchanged
-- [ ] 5.2 Add `id` to `Profile` and create `lib/api/member_profile.dart`; verify in `mobile/test/api/` strict parsing of both (a missing or empty `id`, a missing `languages`, a `null` list, an unknown level and a non-boolean `has_avatar` each fail the whole response) and redacted `toString`
-- [ ] 5.3 Add the paths and the five `AuthApi` calls (design decision 13); verify the exact method, path, bearer and body of each, `avatar()` and `memberAvatar()` returning null only for 404 `avatar_not_found`, `memberProfile()` returning null only for 404 `profile_not_found`, any other 404 staying an error, and a non-canonical member id refused before any request
-- [ ] 5.4 Add the five `SessionManager` methods, each one `_authorized` call; verify in a new `mobile/test/session_social_profile_test.dart` a stale token, a 401 then one refresh and one resend with the same bytes, a second 401, other failures sent once, no session, and a disposed manager
-- [ ] 5.5 Add `avatarError` and the five `avatar` codes to `presentFailure`, with their strings; verify each in `mobile/test/screens/failure_presentation_test.dart`
-- [ ] 5.6 Extend `mobile/test/architecture_test.dart` (the new model on the screens' allowlist, the new public `SessionManager` members) and `mobile/test/leak_test.dart` (the bearer on the five new paths; marked image bytes only in the body of the upload, in no string, exception or print; a member id only in a path); verify both pass
-- [ ] 5.7 Run `make mobile-analyze` and `make mobile-test` and verify both pass with no screen changed yet
+- [x] 5.1 Extend `ApiClient` (design decision 12) with `DELETE`, the byte body and the image response; verify in `mobile/test/api/api_client_test.dart` the exact request for a byte PUT and a DELETE, that `json` and `bytes` together are refused, an image answer at and over its cap, a 2xx that is not `image/jpeg` as a protocol failure, error bodies still parsed as JSON, redirects still refused, and every existing JSON test unchanged
+- [x] 5.2 Add `id` to `Profile` and create `lib/api/member_profile.dart`; verify in `mobile/test/api/` strict parsing of both (a missing or empty `id`, a missing `languages`, a `null` list, an unknown level and a non-boolean `has_avatar` each fail the whole response) and redacted `toString`
+- [x] 5.3 Add the paths and the five `AuthApi` calls (design decision 13); verify the exact method, path, bearer and body of each, `avatar()` and `memberAvatar()` returning null only for 404 `avatar_not_found`, `memberProfile()` returning null only for 404 `profile_not_found`, any other 404 staying an error, and a non-canonical member id refused before any request
+- [x] 5.4 Add the five `SessionManager` methods, each one `_authorized` call; verify in a new `mobile/test/session_social_profile_test.dart` a stale token, a 401 then one refresh and one resend with the same bytes, a second 401, other failures sent once, no session, and a disposed manager
+- [x] 5.5 Add `avatarError` and the five `avatar` codes to `presentFailure`, with their strings; verify each in `mobile/test/screens/failure_presentation_test.dart`
+- [x] 5.6 Extend `mobile/test/architecture_test.dart` (the new model on the screens' allowlist, the new public `SessionManager` members) and `mobile/test/leak_test.dart` (the bearer on the five new paths; marked image bytes only in the body of the upload, in no string, exception or print; a member id only in a path); verify both pass
+- [x] 5.7 Run `make mobile-analyze` and `make mobile-test` and verify both pass with no screen changed yet
 
 ## 6. Client: the photo source and the shared widgets
 

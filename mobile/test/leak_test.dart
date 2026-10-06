@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:vocatogether/api/api_paths.dart';
 import 'package:vocatogether/api/api_exception.dart';
 import 'package:vocatogether/api/languages.dart';
+import 'package:vocatogether/api/member_profile.dart';
 import 'package:vocatogether/auth/auth_tokens.dart';
 import 'package:vocatogether/auth/google_identity_exception.dart';
 import 'package:vocatogether/auth/token_store.dart';
@@ -29,7 +30,20 @@ const _bio = 'LEAK-bio about me';
 /// No real code looks like this; the client sends a code as given.
 const _language = 'LEAKlanguage';
 
-const _markers = ['LEAK', 'leak.email'];
+/// A photo, marked: ASCII only, so it can be found in a request body read
+/// as text. The client sends a photo as given and never looks inside.
+final _image = Uint8List.fromList(utf8.encode('LEAKimage-bytes-of-a-photo'));
+
+/// How those bytes would look if a list of them were ever printed.
+final _imageAsList = _image.join(', ');
+
+/// The picture the server stores and returns: not what was uploaded.
+final _storedImage = [0xff, 0xd8, 0xff, 0xe0, 1, 2, 3];
+
+/// A member's public identifier. It can't carry the word, being a UUID.
+const _memberId = '1eac0000-1eac-41ea-81ea-c00000001eac';
+
+final _markers = ['LEAK', 'leak.email', _imageAsList, _memberId];
 
 /// Where each secret may appear in a request: (path, location).
 typedef _Place = (String path, String location);
@@ -233,6 +247,80 @@ Future<FakeServer> _runEveryFlow(List<String> strings) async {
     ..add('${selection.spoken}')
     ..add('${selection.spoken.single}');
 
+  // The picture (031): none yet, uploaded with marked bytes, read, refused
+  // with a body that echoes them, and removed.
+  server
+    ..once('GET', ApiPaths.myAvatar, (_) => noAvatar())
+    ..once('PUT', ApiPaths.myAvatar, (_) => imageResponse(_storedImage))
+    ..once('GET', ApiPaths.myAvatar, (_) => imageResponse(_storedImage))
+    ..once(
+      'PUT',
+      ApiPaths.myAvatar,
+      (r) => http.Response(
+        '{"error":{"code":"validation_failed","fields":[{"field":"avatar",'
+        '"code":"invalid_image"}],"detail":"${r.body} $_imageAsList"}}',
+        422,
+        headers: {'content-type': 'application/json'},
+      ),
+    )
+    // An answer that is the upload itself under the wrong type.
+    ..once(
+      'PUT',
+      ApiPaths.myAvatar,
+      (r) => http.Response.bytes(
+        r.bodyBytes,
+        200,
+        headers: {'content-type': 'application/octet-stream'},
+      ),
+    )
+    ..once('DELETE', ApiPaths.myAvatar, (_) => noContent())
+    ..once('DELETE', ApiPaths.myAvatar, (_) => echoing(500));
+  await record(() => manager.avatar());
+  await record(() => manager.saveAvatar(_image));
+  await record(() => manager.avatar());
+  await record(() => manager.saveAvatar(_image));
+  await record(() => manager.saveAvatar(_image));
+  await record(() => manager.removeAvatar());
+  await record(() => manager.removeAvatar());
+
+  // A member's public profile and picture (031): read, missing, and refused
+  // with a body that echoes the identifier and the profile's text.
+  final memberPath = ApiPaths.memberProfile(_memberId);
+  final memberAvatarPath = ApiPaths.memberAvatar(_memberId);
+  final member = memberProfileBody(
+    id: _memberId,
+    displayName: _displayName,
+    bio: _bio,
+    hasAvatar: true,
+    languages: languagesBody(spoken: [(_language, 'native')]),
+  );
+  http.Response echoingMember(int status) => http.Response(
+    '{"error":{"code":"internal_error","detail":"$_memberId $_displayName"}}',
+    status,
+    headers: {'content-type': 'application/json'},
+  );
+  server
+    ..once('GET', memberPath, (_) => jsonResponse(200, member))
+    ..once('GET', memberPath, (_) => noProfile())
+    ..once('GET', memberPath, (_) => echoingMember(500))
+    // A profile that is off-contract, with everything personal in it.
+    ..once('GET', memberPath, (_) => jsonResponse(200, {...member, 'bio': 1}))
+    ..once('GET', memberAvatarPath, (_) => imageResponse(_storedImage))
+    ..once('GET', memberAvatarPath, (_) => noAvatar())
+    ..once('GET', memberAvatarPath, (_) => echoingMember(429));
+  for (var i = 0; i < 4; i++) {
+    await record(() => manager.memberProfile(_memberId));
+  }
+  for (var i = 0; i < 3; i++) {
+    await record(() => manager.memberAvatar(_memberId));
+  }
+  // An identifier that isn't one is refused without being echoed.
+  await record(() async => manager.memberProfile('$_memberId-LEAK'));
+  await record(() async => manager.memberAvatar('$_memberId-LEAK'));
+  await record(() async => ApiPaths.memberProfile('$_memberId-LEAK'));
+  await record(() async => ApiPaths.memberAvatar(_memberId.toUpperCase()));
+  strings.add('${MemberProfile.fromJson(member)}');
+
   // Programming errors are refused without echoing the value.
   await record(() async => api.refresh(refreshToken: _access2));
   await record(() async => api.logout(accessToken: _refresh2));
@@ -292,26 +380,33 @@ Future<FakeServer> _runEveryFlow(List<String> strings) async {
 
 /// Asserts each secret appears only in its one allowed place.
 void _checkPlacement(List<http.Request> requests) {
+  final memberPath = ApiPaths.memberProfile(_memberId);
+  final memberAvatarPath = ApiPaths.memberAvatar(_memberId);
+  // The routes that carry the access token.
+  final protected = [
+    ApiPaths.me,
+    ApiPaths.profile,
+    ApiPaths.languages,
+    ApiPaths.myLanguages,
+    ApiPaths.myAvatar,
+    memberPath,
+    memberAvatarPath,
+    ApiPaths.logout,
+  ];
   final allowed = <String, Set<_Place>>{
-    _access1: {
-      (ApiPaths.me, 'authorization'),
-      (ApiPaths.profile, 'authorization'),
-      (ApiPaths.languages, 'authorization'),
-      (ApiPaths.myLanguages, 'authorization'),
-      (ApiPaths.logout, 'authorization'),
-    },
-    _access2: {
-      (ApiPaths.me, 'authorization'),
-      (ApiPaths.profile, 'authorization'),
-      (ApiPaths.languages, 'authorization'),
-      (ApiPaths.myLanguages, 'authorization'),
-      (ApiPaths.logout, 'authorization'),
-    },
+    _access1: {for (final path in protected) (path, 'authorization')},
+    _access2: {for (final path in protected) (path, 'authorization')},
     // What a member writes goes only into the body of their own save.
     _displayName: {(ApiPaths.profile, 'body')},
     _bio: {(ApiPaths.profile, 'body')},
     // A member's languages go only into the body of their own save.
     _language: {(ApiPaths.myLanguages, 'body')},
+    // A photo goes only into the body of the member's own upload.
+    utf8.decode(_image): {(ApiPaths.myAvatar, 'body')},
+    _imageAsList: {},
+    // A member's identifier goes only into the path of the two member
+    // routes: never a query, a header or a body.
+    _memberId: {(memberPath, 'url'), (memberAvatarPath, 'url')},
     _refresh1: {(ApiPaths.refresh, 'body')},
     _refresh2: {(ApiPaths.refresh, 'body')},
     _idToken: {(ApiPaths.google, 'body')},
@@ -349,16 +444,7 @@ void _checkPlacement(List<http.Request> requests) {
       expect(r.bodyBytes, isEmpty);
     }
     if (r.headers['Authorization'] case final auth?) {
-      expect(
-        path,
-        anyOf(
-          ApiPaths.me,
-          ApiPaths.profile,
-          ApiPaths.languages,
-          ApiPaths.myLanguages,
-          ApiPaths.logout,
-        ),
-      );
+      expect(protected, contains(path));
       expect(isAccessToken(auth.replaceFirst('Bearer ', '')), isTrue);
     }
   }
@@ -372,6 +458,34 @@ void _checkPlacement(List<http.Request> requests) {
   expect(seen[_access2], contains((ApiPaths.languages, 'authorization')));
   expect(seen[_access2], contains((ApiPaths.myLanguages, 'authorization')));
   expect(seen[_language], contains((ApiPaths.myLanguages, 'body')));
+  expect(seen[utf8.decode(_image)], {(ApiPaths.myAvatar, 'body')});
+  expect(seen[_memberId], {(memberPath, 'url'), (memberAvatarPath, 'url')});
+  // The bearer travelled on each of the five new requests.
+  for (final (method, path) in [
+    ('GET', ApiPaths.myAvatar),
+    ('PUT', ApiPaths.myAvatar),
+    ('DELETE', ApiPaths.myAvatar),
+    ('GET', memberPath),
+    ('GET', memberAvatarPath),
+  ]) {
+    final sent = requests.where(
+      (r) => r.method == method && r.url.path == path,
+    );
+    expect(sent, isNotEmpty, reason: '$method $path');
+    for (final r in sent) {
+      expect(r.headers['Authorization'], 'Bearer $_access2', reason: '$r');
+    }
+  }
+  // The upload's body is the photo and nothing else; nothing but the upload
+  // has a byte body.
+  for (final r in requests) {
+    if (r.method == 'PUT' && r.url.path == ApiPaths.myAvatar) {
+      expect(r.bodyBytes, _image);
+    } else if (r.url.path == ApiPaths.myAvatar ||
+        r.url.path.startsWith('/v1/profiles/')) {
+      expect(r.bodyBytes, isEmpty, reason: '$r');
+    }
+  }
   expect(seen[_refresh1], contains((ApiPaths.refresh, 'body')));
   expect(seen[_refresh2], contains((ApiPaths.refresh, 'body')));
   expect(seen[_idToken], contains((ApiPaths.google, 'body')));

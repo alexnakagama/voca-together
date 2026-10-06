@@ -319,6 +319,26 @@ class AppLocalizationsEn extends AppLocalizations {
       'A language can only be added once, in one of the two lists. Remove the repeated one and try again.';
 
   @override
+  String get errorAvatarRequired =>
+      'That photo is empty. Choose a different one.';
+
+  @override
+  String get errorAvatarTooLarge =>
+      'That photo’s file is too large. Choose a smaller one.';
+
+  @override
+  String get errorAvatarUnsupportedType =>
+      'That kind of file can’t be used. Choose a JPEG or PNG photo.';
+
+  @override
+  String get errorAvatarInvalidImage =>
+      'That photo couldn’t be read and may be damaged. Choose a different one.';
+
+  @override
+  String get errorAvatarDimensionsTooLarge =>
+      'That photo has too many pixels. Choose a smaller one.';
+
+  @override
   String get languagesHeading => 'Languages';
 
   @override

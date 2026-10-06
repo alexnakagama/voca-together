@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -114,9 +115,9 @@ void main() {
       expect(sent, isEmpty);
     });
 
-    test('rejects methods other than GET, POST and PUT', () {
+    test('rejects methods other than GET, POST, PUT and DELETE', () {
       final api = clientAnswering((_) => healthy());
-      for (final method in ['DELETE', 'PATCH', 'HEAD', 'put']) {
+      for (final method in ['PATCH', 'HEAD', 'OPTIONS', 'put', 'delete']) {
         expect(
           () => api.send(method, '/v1/me', timeout: _timeout),
           throwsArgumentError,
@@ -137,6 +138,341 @@ void main() {
       expect(sent.single.url.path, '/v1/me/profile');
       expect(sent.single.headers['Content-Type'], 'application/json');
       expect(sent.single.body, '{"display_name":"Ana"}');
+    });
+
+    test('sends DELETE with no body', () async {
+      final api = clientAnswering((_) => noContent());
+      final r = await api.send(
+        'DELETE',
+        '/v1/me/avatar',
+        bearer: accessToken('1'),
+        timeout: _timeout,
+      );
+      expect(r.statusCode, 204);
+      expect(r.json, isNull);
+      final request = sent.single;
+      expect(request.method, 'DELETE');
+      expect(request.url.toString(), 'https://api.test.example/v1/me/avatar');
+      expect(request.headers['Authorization'], 'Bearer ${accessToken('1')}');
+      expect(request.headers['Accept'], 'application/json');
+      expect(request.headers.containsKey('Content-Type'), isFalse);
+      expect(request.bodyBytes, isEmpty);
+      expect(request.followRedirects, isFalse);
+    });
+
+    test('accepts a member identifier as a path segment', () async {
+      final api = clientAnswering((_) => healthy());
+      await api.send('GET', '/v1/profiles/$testMemberId', timeout: _timeout);
+      await api.send(
+        'GET',
+        '/v1/profiles/$testMemberId/avatar',
+        timeout: _timeout,
+      );
+      expect(sent.map((r) => r.url.path), [
+        '/v1/profiles/$testMemberId',
+        '/v1/profiles/$testMemberId/avatar',
+      ]);
+    });
+  });
+
+  group('byte bodies', () {
+    // Every byte value, so nothing is read as text on the way out.
+    final bytes = Uint8List.fromList([for (var i = 0; i < 256; i++) i]);
+
+    test('send PUTs the bytes as they are', () async {
+      final api = clientAnswering((_) => healthy());
+      await api.send(
+        'PUT',
+        '/v1/me/avatar',
+        bytes: bytes,
+        bearer: accessToken('1'),
+        timeout: _timeout,
+      );
+      final request = sent.single;
+      expect(request.method, 'PUT');
+      expect(request.url.toString(), 'https://api.test.example/v1/me/avatar');
+      expect(request.headers['Content-Type'], 'application/octet-stream');
+      expect(request.headers['Authorization'], 'Bearer ${accessToken('1')}');
+      expect(request.bodyBytes, bytes);
+    });
+
+    test('putForImage PUTs the bytes and returns the image answered', () async {
+      final api = clientAnswering((_) => imageResponse([0xff, 0xd8, 0xff, 1]));
+      final image = await api.putForImage(
+        '/v1/me/avatar',
+        bytes: bytes,
+        bearer: accessToken('1'),
+        timeout: _timeout,
+      );
+      expect(image, [0xff, 0xd8, 0xff, 1]);
+      final request = sent.single;
+      expect(request.method, 'PUT');
+      expect(request.url.toString(), 'https://api.test.example/v1/me/avatar');
+      expect(request.headers['Content-Type'], 'application/octet-stream');
+      expect(request.headers['Accept'], 'image/jpeg, application/json');
+      expect(request.headers['User-Agent'], 'VocaTogether-Android');
+      expect(request.headers['Authorization'], 'Bearer ${accessToken('1')}');
+      expect(request.bodyBytes, bytes);
+      expect(request.followRedirects, isFalse);
+    });
+
+    test('an empty byte body is sent as given', () async {
+      final api = clientAnswering((_) => healthy());
+      await api.send(
+        'PUT',
+        '/v1/me/avatar',
+        bytes: Uint8List(0),
+        timeout: _timeout,
+      );
+      expect(sent.single.headers['Content-Type'], 'application/octet-stream');
+      expect(sent.single.bodyBytes, isEmpty);
+    });
+
+    test('json and bytes together are refused', () {
+      final api = clientAnswering((_) => healthy());
+      expect(
+        () => api.send(
+          'PUT',
+          '/v1/me/avatar',
+          json: {'a': 1},
+          bytes: bytes,
+          timeout: _timeout,
+        ),
+        throwsArgumentError,
+      );
+      expect(sent, isEmpty);
+    });
+  });
+
+  group('image responses', () {
+    Future<Uint8List> get(ApiClient api) =>
+        api.getImage('/v1/me/avatar', timeout: _timeout);
+
+    test('getImage sends a GET and returns the bytes', () async {
+      final api = clientAnswering((_) => imageResponse([0xff, 0xd8, 0, 255]));
+      final image = await api.getImage(
+        '/v1/me/avatar',
+        bearer: accessToken('1'),
+        timeout: _timeout,
+      );
+      expect(image, [0xff, 0xd8, 0, 255]);
+      final request = sent.single;
+      expect(request.method, 'GET');
+      expect(request.headers['Accept'], 'image/jpeg, application/json');
+      expect(request.headers['Authorization'], 'Bearer ${accessToken('1')}');
+      expect(request.headers.containsKey('Content-Type'), isFalse);
+      expect(request.bodyBytes, isEmpty);
+      expect(request.followRedirects, isFalse);
+    });
+
+    test('an image at the cap is read, one byte over is refused', () async {
+      final atCap = clientAnswering(
+        (_) => imageResponse(Uint8List(ApiClient.maxImageBytes)),
+      );
+      expect(await get(atCap), hasLength(1024 * 1024));
+
+      final over = clientAnswering(
+        (_) => imageResponse(Uint8List(ApiClient.maxImageBytes + 1)),
+      );
+      await expectLater(
+        get(over),
+        throwsA(_protocol(ProtocolFailure.bodyTooLarge, 200)),
+      );
+    });
+
+    test('a 2xx that is not image/jpeg is a protocol failure', () async {
+      for (final type in [
+        null,
+        'application/json',
+        'image/png',
+        'text/html',
+        'application/octet-stream',
+        'garbage;;',
+      ]) {
+        final api = clientAnswering(
+          (_) => http.Response.bytes(
+            [0xff, 0xd8, 0xff],
+            200,
+            headers: {'content-type': ?type},
+          ),
+        );
+        await expectLater(
+          get(api),
+          throwsA(_protocol(ProtocolFailure.notImage, 200)),
+          reason: '$type',
+        );
+        await expectLater(
+          api.putForImage(
+            '/v1/me/avatar',
+            bytes: Uint8List(1),
+            timeout: _timeout,
+          ),
+          throwsA(_protocol(ProtocolFailure.notImage, 200)),
+          reason: '$type',
+        );
+      }
+    });
+
+    test('an image type with parameters is an image', () async {
+      final api = clientAnswering(
+        (_) => http.Response.bytes(
+          [1, 2, 3],
+          200,
+          headers: {'content-type': 'Image/JPEG; q=1'},
+        ),
+      );
+      expect(await get(api), [1, 2, 3]);
+    });
+
+    test('an empty image is malformed', () {
+      final api = clientAnswering((_) => imageResponse(const []));
+      expect(get(api), throwsA(_protocol(ProtocolFailure.malformedBody, 200)));
+    });
+
+    test('any other 2xx is unexpected, also with an image in it', () async {
+      for (final status in [201, 202, 204, 206]) {
+        final api = clientAnswering(
+          (_) => imageResponse(status == 204 ? const [] : [1], status: status),
+        );
+        await expectLater(
+          get(api),
+          throwsA(_protocol(ProtocolFailure.unexpectedStatus, status)),
+        );
+      }
+    });
+
+    test('error bodies are still parsed as JSON', () async {
+      final api = clientAnswering(
+        (_) => jsonResponse(
+          422,
+          {
+            'error': {
+              'code': 'validation_failed',
+              'fields': [
+                {'field': 'avatar', 'code': 'too_large'},
+              ],
+            },
+          },
+          headers: {'retry-after': '9'},
+        ),
+      );
+      await expectLater(
+        api.putForImage(
+          '/v1/me/avatar',
+          bytes: Uint8List(1),
+          timeout: _timeout,
+        ),
+        throwsA(
+          isA<ApiHttpException>()
+              .having((e) => e.statusCode, 'status', 422)
+              .having((e) => e.code, 'code', 'validation_failed')
+              .having(
+                (e) => e.fields.map((f) => '${f.field}:${f.code}'),
+                'fields',
+                ['avatar:too_large'],
+              )
+              .having(
+                (e) => e.retryAfter,
+                'retryAfter',
+                const Duration(seconds: 9),
+              ),
+        ),
+      );
+    });
+
+    test('an error body is not an image, whatever it says it is', () async {
+      final api = clientAnswering(
+        (_) =>
+            imageResponse(utf8.encode('{"error":{"code":"x"}}'), status: 404),
+      );
+      await expectLater(
+        get(api),
+        throwsA(
+          isA<ApiHttpException>()
+              .having((e) => e.statusCode, 'status', 404)
+              .having((e) => e.code, 'code', isNull),
+        ),
+      );
+    });
+
+    test('an error body keeps the 64 KiB cap', () {
+      final api = clientAnswering(
+        (_) => http.Response('x' * (64 * 1024 + 1), 500),
+      );
+      expect(get(api), throwsA(_protocol(ProtocolFailure.bodyTooLarge, 500)));
+    });
+
+    test('redirects are still refused, and nothing is resent', () async {
+      for (final status in [301, 302, 307, 308]) {
+        final api = clientAnswering(
+          (_) => http.Response(
+            '',
+            status,
+            headers: {'location': 'https://evil.example/steal'},
+          ),
+        );
+        await expectLater(
+          api.putForImage(
+            '/v1/me/avatar',
+            bytes: Uint8List(3),
+            bearer: accessToken('1'),
+            timeout: _timeout,
+          ),
+          throwsA(_protocol(ProtocolFailure.redirect, status)),
+        );
+        await expectLater(
+          get(api),
+          throwsA(_protocol(ProtocolFailure.redirect, status)),
+        );
+        expect(sent, hasLength(2));
+      }
+    });
+
+    test('path, bearer and transport rules are those of send', () async {
+      final api = clientAnswering((_) => imageResponse([1]));
+      expect(
+        () => api.getImage('/v1/me/avatar?x=1', timeout: _timeout),
+        throwsArgumentError,
+      );
+      expect(
+        () => api.getImage(
+          '/v1/me/avatar',
+          bearer: refreshToken('SECRET'),
+          timeout: _timeout,
+        ),
+        throwsA(
+          isA<ArgumentError>().having(
+            (e) => e.toString(),
+            'toString',
+            isNot(contains('SECRET')),
+          ),
+        ),
+      );
+      expect(sent, isEmpty);
+
+      final offline = apiClientFor(
+        MockClient((_) async => throw const SocketException('down')),
+      );
+      await expectLater(get(offline), throwsA(isA<ApiNetworkException>()));
+    });
+
+    test('a hung image request times out', () {
+      fakeAsync((async) {
+        final api = apiClientFor(
+          MockClient.streaming(
+            (request, body) => Completer<http.StreamedResponse>().future,
+          ),
+        );
+        Object? error;
+        api
+            .getImage('/v1/me/avatar', timeout: const Duration(seconds: 5))
+            .catchError((Object e) {
+              error = e;
+              return Uint8List(0);
+            });
+        async.elapse(const Duration(seconds: 6));
+        expect(error, isA<ApiTimeoutException>());
+      });
     });
   });
 

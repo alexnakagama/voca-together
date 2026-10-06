@@ -249,21 +249,50 @@ Map<String, Object?> meBody({
   'created_at': createdAt,
 };
 
+/// A well-formed public identifier of a profile: the test member's own.
+const testMemberId = '0b9f6c1e-52a7-4d3b-9c8e-7a1f2e3d4c5b';
+
 /// A `GET`/`PUT /v1/me/profile` 200 body.
 Map<String, Object?> profileBody({
+  String id = testMemberId,
   String displayName = 'Ana',
   String bio = '',
   String createdAt = '2026-03-15T12:00:00Z',
   String? updatedAt,
 }) => {
+  'id': id,
   'display_name': displayName,
   'bio': bio,
   'created_at': createdAt,
   'updated_at': updatedAt ?? createdAt,
 };
 
-/// The 404 of a user who hasn't saved a profile.
+/// The 404 of a user who hasn't saved a profile, and of a public identifier
+/// that names no profile.
 http.Response noProfile() => errorResponse(404, 'profile_not_found');
+
+/// A `GET /v1/profiles/{id}` 200 body. [languages] is a [languagesBody].
+Map<String, Object?> memberProfileBody({
+  String id = testMemberId,
+  String displayName = 'Ana',
+  String bio = '',
+  bool hasAvatar = false,
+  Map<String, Object?>? languages,
+}) => {
+  'id': id,
+  'display_name': displayName,
+  'bio': bio,
+  'has_avatar': hasAvatar,
+  'languages': languages ?? languagesBody(),
+};
+
+/// A 200 with a picture, as the avatar routes answer. The transport never
+/// decodes it, so [bytes] can be anything.
+http.Response imageResponse(List<int> bytes, {int status = 200}) =>
+    http.Response.bytes(bytes, status, headers: {'content-type': 'image/jpeg'});
+
+/// The 404 of a member who has no picture.
+http.Response noAvatar() => errorResponse(404, 'avatar_not_found');
 
 /// A `GET /v1/languages` 200 body: three languages, ordered by name.
 Map<String, Object?> catalogBody() => {
