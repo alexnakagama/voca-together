@@ -32,7 +32,8 @@ the file `docs/decisions/017-*.md`.
 | Email content, pages and delivery | `auth.md`, `config.md` | 019, 007, 006 |
 | Google sign-in, backend | `google-sign-in.md` | 026, then 020 (Stage 7 first) |
 | Google sign-in, client | `google-sign-in.md` | 025, 026 |
-| Profile | `profile.md` | 027 (backend), 028 (client) |
+| Profile | `profile.md` | 027 (backend), 028 (client), 031 (the public identifier) |
+| Reading another member's profile | `profile.md`, `backend.md` | 031 (draft), then 027 and 029 |
 | Languages | `languages.md` | 029 (backend), 030 (client, draft) |
 | A new member-owned resource | `backend.md` | 027 and 029 as the two worked examples |
 | Client structure and routing | `mobile.md` | 021, 028 |
@@ -67,7 +68,7 @@ complete yet, and its row says which part exists).
 | [015](decisions/015-logout.md) | Logout | backend | in force |
 | [016](decisions/016-access-token-auth-and-me.md) | Access-token authentication and `GET /v1/me` | backend | in force |
 | [017](decisions/017-password-reset.md) | Password reset | backend | in force |
-| [018](decisions/018-hardening-and-rate-limits.md) | Rate limits, deadlines, retries, cleanup, headers | backend | amended by 027, 029 |
+| [018](decisions/018-hardening-and-rate-limits.md) | Rate limits, deadlines, retries, cleanup, headers | backend | amended by 027, 029, 031 |
 | [019](decisions/019-resend-email-delivery.md) | Production email with Resend; the verify-email page | backend | in force |
 | [020](decisions/020-google-sign-in-backend.md) | Google sign-in and passwordless accounts | backend | partly superseded by 026 |
 | [021](decisions/021-client-shell-and-routing.md) | App shell: session state and routing | client | amended by 023, 028 |
@@ -76,10 +77,11 @@ complete yet, and its row says which part exists).
 | [024](decisions/024-client-auth-screens.md) | Authentication screens and the failure mapping | client | in force |
 | [025](decisions/025-client-google-sign-in.md) | Google sign-in in the client | client | in force |
 | [026](decisions/026-google-id-token-reuse.md) | Google ID tokens are accepted while valid, not once | both | in force; supersedes part of 020 |
-| [027](decisions/027-profile-backend.md) | User profile | backend | in force |
+| [027](decisions/027-profile-backend.md) | User profile | backend | amended by 031 |
 | [028](decisions/028-client-profile-screen.md) | Profile screen | client | in force |
-| [029](decisions/029-languages-backend.md) | Languages: catalog and a member's own languages | backend | in force |
+| [029](decisions/029-languages-backend.md) | Languages: catalog and a member's own languages | backend | amended by 031 |
 | [030](decisions/030-client-languages.md) | Languages in the profile | client | draft: implemented, the editor included; the final pass over the documents and the emulator run pending |
+| [031](decisions/031-public-profile-backend.md) | Public profiles: the public identifier and the member read | backend | draft: the identifier and `GET /v1/profiles/{id}` are implemented; the profile picture is not built or described yet |
 
 ## What later records changed
 
@@ -94,6 +96,9 @@ Each of these is also noted in the header of the earlier file.
 | 021 | 023 | `Session` and `markSignedIn`/`markSignedOut` were replaced by `SessionManager`. |
 | 021 | 028 | A signed-in user may be on any route of `Routes.signedInRoutes`, not only `/home`. |
 | 018 | 027, 029 | Protected writes have per-user limits; 018 had left protected routes unlimited. |
+| 018 | 031 | A protected read that names another member has a per-user limit (`user_member_read`). Ten limiters. |
+| 027 | 031 | A profile is readable by other signed-in members by its public identifier, `profiles.public_id`; the owner's responses gained `id`. `users.id` stays private. |
+| 029 | 031 | A member's languages are returned to other signed-in members with their profile; `language.Service.Get` takes the user to read, not necessarily the caller. |
 | 015 | 023 | The client clears its tokens first and calls the server afterwards. |
 | 008 | 018, 009, 021, 022, 023, 025 | The library lists; `go.mod` and `pubspec.yaml` are current. |
 | 005 | 020 | Google sign-in's 409 `account_exists` is a deliberate exception to "no enumeration". |
@@ -114,6 +119,8 @@ Pointers only; the records hold the conditions and the reasons. Check the code b
 | Release signing, a published consent screen, a release-build smoke test | 025 |
 | Deep links; verify-email and reset-password inside the app | 021, 023, 024 |
 | More locales, golden tests, a Google Sans subset | 022, 024 |
-| Profile: deletion and export, a handle, moderation and blocking, a profile gate | 027, 028 |
+| Profile: deletion and export, a handle, a profile gate | 027, 028, 031 |
+| Reporting, blocking and moderation: a hard gate before any feature that lists, suggests or searches members | 031 |
+| The profile picture (approved, not built) | 031 |
 | Languages: regional variants, per-locale names, catalog administration, a catalog cache | 029 |
-| Limiting protected reads; optimistic locking for member-owned resources | 027, 029 |
+| Limiting a member's own protected reads; optimistic locking for member-owned resources | 027, 029, 031 |

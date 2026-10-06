@@ -72,6 +72,11 @@ func New(logger *slog.Logger, authSvc *auth.Service, profileSvc *profile.Service
 	mux.Handle("GET /v1/languages", authn(handleLanguageCatalog(logger, languageSvc)))
 	mux.Handle("GET /v1/me/languages", authn(handleGetLanguages(logger, languageSvc)))
 	mux.Handle("PUT /v1/me/languages", authn(languageWrites(handlePutLanguages(logger, languageSvc))))
+	// Another member's public profile (decision 031), named by its public id.
+	// A route that names a member is a GET and nothing else: every write
+	// stays under /v1/me. Reads are limited per reader.
+	memberReads := limitByUser(logger, opts.UserLimits.MemberRead)
+	mux.Handle("GET /v1/profiles/{id}", authn(memberReads(handleGetMemberProfile(logger, profileSvc, languageSvc))))
 
 	return securityHeaders(opts.HSTS)(requestDeadline(requestTimeout)(mux))
 }

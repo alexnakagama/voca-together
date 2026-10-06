@@ -27,6 +27,9 @@ in `backend.md`.
 - `internal/language` owns the catalog and members' languages and imports none of `auth`, `server` and `profile`.
   Nothing in a route, query or body names a user, a `kind` or a `position`.
 - Never log a member's languages: no codes, levels or counts. They are personal data, public by intent.
+- Other signed-in members read a member's languages only inside `GET /v1/profiles/{id}` (decision 031, the pattern
+  in `backend.md`), which calls `language.Service.Get` with the owner's `UserID`. The language routes themselves
+  stay the caller's own.
 - `PUT /v1/me/languages` replaces the whole selection, so its body must hold both `spoken` and `learning` as arrays;
   only `[]` clears a list, and both may be empty (nothing is required). A missing or `null` list is 400
   `invalid_request` (`languagesRequest.complete`, in `server`): never read one as an empty list, which would delete

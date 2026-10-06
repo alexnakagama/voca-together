@@ -2,6 +2,10 @@
 
 > **Status:** in force.
 >
+> **Changed later:** 031 changed the scope below: a member's languages are now returned to other signed-in
+> members as part of `GET /v1/profiles/{id}`, read through this package as this record planned.
+> `Service.Get`'s user is therefore "the user whose languages are read", not always the authenticated one.
+>
 > **Client side:** 030 (draft: its data, API and session layer is implemented; its screens and editor are not).
 >
 > **Current rules:** `.claude/rules/languages.md`.

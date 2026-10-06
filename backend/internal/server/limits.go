@@ -45,29 +45,38 @@ func NewIPLimits(logger *slog.Logger) IPLimits {
 // maxTrackedUsers caps each per-user limiter's memory, like maxTrackedIPs.
 const maxTrackedUsers = 100_000
 
-// UserLimits are the per-user limiters of protected routes that write
-// (decision 027), keyed by the authenticated user's ID. A nil limiter allows
+// UserLimits are the per-user limiters of protected routes: the ones that
+// write (decision 027) and the ones that read other members' data (decision
+// 031), keyed by the authenticated user's ID. A nil limiter allows
 // everything, so the zero value disables limiting (tests).
 type UserLimits struct {
 	ProfileWrite   *ratelimit.Limiter[string] // PUT /v1/me/profile
 	LanguagesWrite *ratelimit.Limiter[string] // PUT /v1/me/languages
+	MemberRead     *ratelimit.Limiter[string] // GET /v1/profiles/{id}; keyed by the reader
 }
 
 // NewUserLimits returns the production per-user limits. They are far above
 // what editing a profile or a list of languages by hand needs and bound the
 // writes one account can make the database do. Each route has its own
 // bucket, so one kind of save never uses up another's allowance.
+//
+// MemberRead is the one limit on reads. A member's own GETs return only
+// their own data and stay unlimited; a read that names another member lets
+// one account walk other people's profiles, so its allowance bounds scraping
+// per account while staying far above what looking at profiles by hand needs
+// (decision 031).
 func NewUserLimits(logger *slog.Logger) UserLimits {
 	return UserLimits{
 		ProfileWrite:   ratelimit.New[string]("user_profile_write", 10, 6*time.Second, maxTrackedUsers, logger),   // 10/min
 		LanguagesWrite: ratelimit.New[string]("user_languages_write", 10, 6*time.Second, maxTrackedUsers, logger), // 10/min
+		MemberRead:     ratelimit.New[string]("user_member_read", 60, time.Second, maxTrackedUsers, logger),       // 60/min
 	}
 }
 
 // limitByUser returns middleware that answers 429 rate_limited once the
 // authenticated user's bucket in l is empty. It must run behind
 // requireAccessToken, and runs before the body is read, so malformed
-// requests cost a token too.
+// requests cost a token too, as do reads that find nothing.
 func limitByUser(logger *slog.Logger, l *ratelimit.Limiter[string]) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

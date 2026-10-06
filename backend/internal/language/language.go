@@ -114,8 +114,8 @@ func (s *Service) Catalog(ctx context.Context) ([]Language, error) {
 }
 
 // Get returns the languages of the user userID; both lists are empty if they
-// haven't chosen any. userID must be the authenticated user: it is the only
-// thing that selects a selection.
+// haven't chosen any. userID is the user whose languages are read; the caller
+// decides who may read them (decision 031).
 func (s *Service) Get(ctx context.Context, userID string) (Selection, error) {
 	if err := ctx.Err(); err != nil {
 		return Selection{}, fmt.Errorf("language: get: %w", err)

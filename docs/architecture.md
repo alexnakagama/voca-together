@@ -24,11 +24,11 @@ The backend is a modular monolith: one Go service, one PostgreSQL database, stdl
 
 | Package | Role |
 |---|---|
-| `server` | HTTP layer only: routing (`server.go`, `Options`), JSON decode/encode and error codes (`respond.go`), the `requireAccessToken` middleware (`authn.go`), per-IP and per-user limits and client IP (`limits.go`, `clientip.go`), security headers and the request deadline (`middleware.go`), the profile routes (`profile.go`), the language routes (`languages.go`), and the HTML pages that emailed links open (`pages.go`, templates embedded from `pages/`: `/verify-email` and `/reset-password`). |
+| `server` | HTTP layer only: routing (`server.go`, `Options`), JSON decode/encode and error codes (`respond.go`), the `requireAccessToken` middleware (`authn.go`), per-IP and per-user limits and client IP (`limits.go`, `clientip.go`), security headers and the request deadline (`middleware.go`), the profile routes (`profile.go`), the language routes (`languages.go`), the member profile route that composes `profile` and `language` (`members.go`, decision 031), and the HTML pages that emailed links open (`pages.go`, templates embedded from `pages/`: `/verify-email` and `/reset-password`). |
 | `config` | Reads the environment into `Config` (validation per `ENV`; secrets held as `config.Secret`). |
 | `auth` | The domain: `Service` (business logic, argon2 slot limiter with a queue timeout, bounded best-effort background email sending), Google sign-in (`google.go`), per-account limits (`limits.go`), retention cleanup (`cleanup.go`), `store.go` (SQL), tokens, password policy/hashing, email content (text, plus HTML from `templates/` for link emails), typed errors (`errors.go`). |
-| `profile` | The profile domain: `Service` (`Get`, `Save`), normalization and validation (`validate.go`), `store.go` (SQL), typed errors. Imports neither `auth` nor `server`. |
-| `language` | The languages domain (decision 029): the catalog and a member's own spoken and learning languages with a level. `Service` (`Catalog`, `Get`, `Save`), the `Level` scale (`level.go`), validation (`validate.go`), `store.go` (SQL; a save is one transaction that locks the `users` row first), typed errors. Imports none of `auth`, `server` and `profile`. |
+| `profile` | The profile domain: `Service` (`Get`, `Save` for the owner; `Public` for a profile found by its public id), the public identifier (`public_id.go`, `ParsePublicID`), normalization and validation (`validate.go`), `store.go` (SQL), typed errors. Imports neither `auth` nor `server`. |
+| `language` | The languages domain (decision 029): the catalog and a member's spoken and learning languages with a level. `Service` (`Catalog`, `Get`, `Save`; `Get` also serves the member profile read), the `Level` scale (`level.go`), validation (`validate.go`), `store.go` (SQL; a save is one transaction that locks the `users` row first), typed errors. Imports none of `auth`, `server` and `profile`. |
 | `googleid` | Verifies Google ID tokens locally (stdlib RS256 + Google's key set, `Verifier` interface, `Fake` for tests). |
 | `email` | Delivery only: `Sender` interface; `ResendSender` for production (stdlib HTTP client); `LogSender` for dev/test; `Recorder` for unit tests. |
 | `ratelimit` | In-process per-key token bucket. |
@@ -37,6 +37,9 @@ The backend is a modular monolith: one Go service, one PostgreSQL database, stdl
 
 Dependency direction: `main` → `server` → `auth`, `profile`, `language`; `auth` → `email`, `googleid`. `profile` and
 `language` import neither `auth` nor each other.
+
+Routes that name a member are read-only: `GET /v1/profiles/{id}` returns the public profile (name, text, languages)
+of the member whose profile has that public id, to signed-in members only. Every write is under `/v1/me/…`.
 
 Handlers read `auth.Identity` from the request context via `identityFrom` and pass `UserID` explicitly to services,
 so domain packages never read the request context.

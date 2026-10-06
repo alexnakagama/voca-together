@@ -5,7 +5,9 @@
 > **Changed later:** 019 delivered the production sender and the verify-email page (deferred at the end).
 > 020 put Google sign-in on `ip_login` and `account_login` and added a cleanup of Google token uses, which
 > 026 removed. 027 and 029 added per-user limits on protected writes, which this decision had left
-> unlimited; there are now nine limiters, not seven.
+> unlimited; there are now nine limiters, not seven. 031 added the first limit on a protected read
+> (`user_member_read`, for reads that name another member), which this decision had also left unlimited:
+> ten limiters.
 >
 > **Current rules:** `.claude/rules/backend.md` (API conventions), `.claude/rules/auth.md`,
 > `.claude/rules/config.md`.

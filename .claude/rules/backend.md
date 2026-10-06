@@ -27,7 +27,21 @@ files: `auth.md`, `google-sign-in.md`, `profile.md`, `languages.md`, and `config
   rely on it, because they resend a save after a 401 and retry after a 503.
 - A protected route that writes gets a per-user limit (`UserLimits`, `limitByUser`) inside `authn`, so only the
   user's own authenticated requests spend it. Each resource has its own bucket (`ProfileWrite`, `LanguagesWrite`).
-  `serverOptions` in `main` must wire every one: a limit left out disables itself silently.
+  `serverOptions` in `main` must wire every one, `MemberRead` included: a limit left out disables itself silently.
+
+## Reading another member (the pattern of decision 031)
+
+- A route that names a member takes the member's **public id** in the path and is a `GET`, nothing else. Every
+  write stays under `/v1/me/…`, selected by the session: ownership is a property of the routes, not a check.
+- The handler resolves the id with `profile.Service.Public`, which returns the owner's internal `UserID`, and reads
+  the owner's other public data with that `UserID` through the owning package (`language.Service.Get`). The
+  `UserID` never reaches a response or a log. The domain packages still don't import each other: `server` composes.
+- A member who has no profile has no public id, so nothing about them is reachable. Not found, malformed and
+  unavailable are one 404 `profile_not_found`, identical in body and headers.
+- The response is its own struct listing the public fields, never an owner's response with fields removed.
+- These reads share the per-user limit `UserLimits.MemberRead`, keyed by the reader, inside `authn`. A member's own
+  GETs stay unlimited.
+- Nothing about the member read is logged: no id, name, text or language.
 
 ## Migrations
 

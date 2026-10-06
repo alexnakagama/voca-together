@@ -3,6 +3,10 @@
 > **Status:** in force.
 >
 > **Changed later:** 029 added a third domain package and a second per-user limit, each with its own bucket.
+> 031 changed the scope below: a profile is now readable by other signed-in members, through
+> `GET /v1/profiles/{id}`. It decided the public identifier this record deferred (`profiles.public_id`, not
+> `users.id`, which stays private), so the owner's `GET` and `PUT` responses gained `id`; and it limited
+> that read per user, where this record left protected reads unlimited.
 >
 > **Client side:** 028.
 >

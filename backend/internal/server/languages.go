@@ -47,9 +47,10 @@ func (r *languagesRequest) complete() bool {
 	return r != nil && r.Spoken != nil && r.Learning != nil
 }
 
-// languagesResponse is the caller's own languages. It lists its fields
-// explicitly: no user id, no timestamps, nothing about the account. Both
-// lists are always arrays, never null.
+// languagesResponse is a member's languages: the caller's own, and the
+// languages part of a member profile (memberProfileResponse). It lists its
+// fields explicitly: no user id, no timestamps, nothing about the account.
+// Both lists are always arrays, never null.
 type languagesResponse struct {
 	Spoken   []languageEntry `json:"spoken"`
 	Learning []languageEntry `json:"learning"`

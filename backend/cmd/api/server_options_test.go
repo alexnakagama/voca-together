@@ -20,6 +20,9 @@ func TestServerOptionsWireEveryRateLimit(t *testing.T) {
 	if opts.UserLimits.LanguagesWrite == nil {
 		t.Fatal("the per-user languages write limit is not wired")
 	}
+	if opts.UserLimits.MemberRead == nil {
+		t.Fatal("the per-user member read limit is not wired")
+	}
 	ip := opts.IPLimits
 	if ip.Login == nil || ip.Register == nil || ip.Email == nil || ip.Token == nil || ip.Refresh == nil {
 		t.Error("a per-IP limit is not wired")
@@ -29,7 +32,7 @@ func TestServerOptionsWireEveryRateLimit(t *testing.T) {
 	}
 
 	// The wired limits really limit: each bucket empties, on its own.
-	allowed, languagesAllowed := 0, 0
+	allowed, languagesAllowed, readsAllowed := 0, 0, 0
 	for range 100 {
 		if ok, _ := opts.UserLimits.ProfileWrite.Allow("user"); ok {
 			allowed++
@@ -39,6 +42,14 @@ func TestServerOptionsWireEveryRateLimit(t *testing.T) {
 		if ok, _ := opts.UserLimits.LanguagesWrite.Allow("user"); ok {
 			languagesAllowed++
 		}
+	}
+	for range 100 {
+		if ok, _ := opts.UserLimits.MemberRead.Allow("user"); ok {
+			readsAllowed++
+		}
+	}
+	if readsAllowed != 60 {
+		t.Errorf("member reads allowed in a burst = %d, want 60 of their own", readsAllowed)
 	}
 	if allowed != 10 {
 		t.Errorf("profile writes allowed in a burst = %d, want 10", allowed)
