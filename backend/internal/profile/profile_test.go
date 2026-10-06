@@ -352,3 +352,179 @@ func TestLogsNameTheUserButNeverTheProfile(t *testing.T) {
 		t.Errorf("logs contain profile text: %s", logs)
 	}
 }
+
+// The public identifier is assigned on the first save and never changes: not
+// with an edit, not with an unchanged save, and Get returns the same one.
+func TestPublicIDIsAssignedOnceAndStable(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	ben := f.user(t, "ben@example.com")
+
+	first, err := f.svc.Save(ctx, ana, Input{DisplayName: "Ana", Bio: "Hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id, ok := ParsePublicID(first.PublicID); !ok || id != first.PublicID {
+		t.Fatalf("public id %q is not a canonical identifier", first.PublicID)
+	}
+	if first.PublicID == ana {
+		t.Error("the public id is the user's id")
+	}
+
+	for name, in := range map[string]Input{
+		"unchanged":   {DisplayName: "Ana", Bio: "Hi"},
+		"edited":      {DisplayName: "Ana L.", Bio: ""},
+		"edited back": {DisplayName: "Ana", Bio: "Hi"},
+	} {
+		saved, err := f.svc.Save(ctx, ana, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if saved.PublicID != first.PublicID {
+			t.Errorf("%s save: public id %s, want %s", name, saved.PublicID, first.PublicID)
+		}
+		got, err := f.svc.Get(ctx, ana)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.PublicID != first.PublicID {
+			t.Errorf("%s save: Get returned public id %s, want %s", name, got.PublicID, first.PublicID)
+		}
+	}
+
+	other, err := f.svc.Save(ctx, ben, Input{DisplayName: "Ben"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.PublicID == first.PublicID {
+		t.Errorf("two profiles share the public id %s", first.PublicID)
+	}
+}
+
+func TestPublicFindsAProfileByItsPublicID(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	ben := f.user(t, "ben@example.com")
+	saved, err := f.svc.Save(ctx, ana, Input{DisplayName: "Ana", Bio: "Hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	benSaved, err := f.svc.Save(ctx, ben, Input{DisplayName: "Ben"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := f.svc.Public(ctx, saved.PublicID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (PublicProfile{UserID: ana, PublicID: saved.PublicID, DisplayName: "Ana", Bio: "Hi"}); got != want {
+		t.Errorf("Public = %+v, want %+v", got, want)
+	}
+	if got, err := f.svc.Public(ctx, benSaved.PublicID); err != nil || got.UserID != ben || got.DisplayName != "Ben" || got.Bio != "" {
+		t.Errorf("ben's public profile = %+v, %v", got, err)
+	}
+
+	// It shows the profile as last saved.
+	if _, err := f.svc.Save(ctx, ana, Input{DisplayName: "Ana L."}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := f.svc.Public(ctx, saved.PublicID); err != nil || got.DisplayName != "Ana L." || got.Bio != "" {
+		t.Errorf("after an edit: %+v, %v", got, err)
+	}
+}
+
+// Everything that is not the public id of a profile misses the same way: an
+// id no profile has, a user's internal id (with or without a profile), and
+// any spelling but the canonical one.
+func TestPublicMisses(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	ben := f.user(t, "ben@example.com") // no profile
+	saved, err := f.svc.Save(ctx, ana, Input{DisplayName: "Ana"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, id := range map[string]string{
+		"unknown":                     "00000000-0000-4000-8000-000000000000",
+		"the owner's user id":         ana,
+		"a user id without a profile": ben,
+		"upper case":                  strings.ToUpper(saved.PublicID),
+		"braces":                      "{" + saved.PublicID + "}",
+		"no hyphens":                  strings.ReplaceAll(saved.PublicID, "-", ""),
+		"padded":                      " " + saved.PublicID,
+		"empty":                       "",
+		"not an id":                   "not-an-id",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, err := f.svc.Public(ctx, id); !errors.Is(err, ErrNotFound) || got != (PublicProfile{}) {
+				t.Errorf("Public(%q) = %+v, %v; want ErrNotFound", id, got, err)
+			}
+		})
+	}
+}
+
+// A malformed identifier is answered without asking the database: it misses
+// even when no query could run.
+func TestPublicDoesNotQueryForAMalformedID(t *testing.T) {
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	saved, err := f.svc.Save(context.Background(), ana, Input{DisplayName: "Ana"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := f.svc.Public(ctx, strings.ToUpper(saved.PublicID)); !errors.Is(err, ErrNotFound) {
+		t.Errorf("malformed id with an ended context: %v, want ErrNotFound", err)
+	}
+	// A well-formed one does reach the database, so the ended context shows.
+	if _, err := f.svc.Public(ctx, saved.PublicID); !errors.Is(err, context.Canceled) {
+		t.Errorf("well-formed id with an ended context: %v, want context.Canceled", err)
+	}
+}
+
+func TestPublicMissesAfterTheUserIsDeleted(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	saved, err := f.svc.Save(ctx, ana, Input{DisplayName: "Ana"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Public(ctx, saved.PublicID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, ana); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Public(ctx, saved.PublicID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// Reading a public profile logs nothing: not the id asked for, not the text.
+func TestPublicLogsNothing(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	saved, err := f.svc.Save(ctx, ana, Input{DisplayName: "MARKERNAME", Bio: "MARKERBIO"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.logs.Reset()
+
+	if _, err := f.svc.Public(ctx, saved.PublicID); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.svc.Public(ctx, "00000000-0000-4000-8000-000000000000")
+	_, _ = f.svc.Public(ctx, "MARKERID")
+	if logs := f.logs.String(); logs != "" {
+		t.Errorf("public reads logged: %s", logs)
+	}
+}

@@ -39,7 +39,8 @@ func (e *ValidationError) Error() string {
 	return "profile: invalid input: " + strings.Join(codes, ", ")
 }
 
-// ErrNotFound means the user has not saved a profile yet.
+// ErrNotFound means there is no such profile: the user has not saved one
+// yet, or no profile has the public identifier asked for.
 var ErrNotFound = errors.New("profile: not found")
 
 // ErrUserGone means the user no longer exists, so no profile can be saved for

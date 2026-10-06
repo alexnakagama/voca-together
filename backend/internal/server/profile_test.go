@@ -56,6 +56,7 @@ func profileJSON(t *testing.T, displayName, bio string) string {
 }
 
 type profileBody struct {
+	ID          string    `json:"id"`
 	DisplayName string    `json:"display_name"`
 	Bio         string    `json:"bio"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -63,7 +64,8 @@ type profileBody struct {
 }
 
 // requireProfile checks a successful profile response and returns its body.
-// It must have exactly the profile's fields: no id, no email, nothing else.
+// It must have exactly the profile's fields: its public id, no account id, no
+// email, nothing else.
 func requireProfile(t *testing.T, rec *httptest.ResponseRecorder) profileBody {
 	t.Helper()
 	if rec.Code != http.StatusOK {
@@ -79,12 +81,15 @@ func requireProfile(t *testing.T, rec *httptest.ResponseRecorder) profileBody {
 	if err := json.Unmarshal(rec.Body.Bytes(), &fields); err != nil {
 		t.Fatalf("decode %s: %v", rec.Body, err)
 	}
-	if keys := slices.Sorted(maps.Keys(fields)); !slices.Equal(keys, []string{"bio", "created_at", "display_name", "updated_at"}) {
+	if keys := slices.Sorted(maps.Keys(fields)); !slices.Equal(keys, []string{"bio", "created_at", "display_name", "id", "updated_at"}) {
 		t.Errorf("fields = %v", keys)
 	}
 	var body profileBody
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
+	}
+	if id, ok := profile.ParsePublicID(body.ID); !ok || id != body.ID {
+		t.Errorf("id = %q, want a canonical public identifier", body.ID)
 	}
 	if body.CreatedAt.IsZero() || body.UpdatedAt.Before(body.CreatedAt) {
 		t.Errorf("timestamps = %v, %v", body.CreatedAt, body.UpdatedAt)
@@ -129,6 +134,64 @@ func TestPutProfileCreatesItAndGetReturnsIt(t *testing.T) {
 	requireProfile(t, get)
 	if get.Body.String() != put.Body.String() {
 		t.Errorf("GET %s differs from PUT %s", get.Body, put.Body)
+	}
+}
+
+// The profile's id is its public identifier (decision 031): assigned by the
+// first save, the same in every later answer whatever was saved, and never
+// the account's id that /v1/me returns.
+func TestProfileIDIsStableAndNotTheAccountID(t *testing.T) {
+	api := newTestAPI(t)
+	ana := api.loggedIn(t, "ana@example.com")
+	ben := api.loggedIn(t, "ben@example.com")
+
+	id := requireProfile(t, api.putProfile(ana.AccessToken, profileJSON(t, "Ana", "Hi"))).ID
+	if got := requireProfile(t, api.getProfile(ana.AccessToken)).ID; got != id {
+		t.Errorf("GET after the first save: id %s, want %s", got, id)
+	}
+	for name, body := range map[string]string{
+		"an unchanged save": profileJSON(t, "Ana", "Hi"),
+		"an edit":           profileJSON(t, "Ana L.", "Learning Japanese."),
+		"clearing the bio":  `{"display_name":"Ana L."}`,
+	} {
+		if got := requireProfile(t, api.putProfile(ana.AccessToken, body)).ID; got != id {
+			t.Errorf("PUT, %s: id %s, want %s", name, got, id)
+		}
+		if got := requireProfile(t, api.getProfile(ana.AccessToken)).ID; got != id {
+			t.Errorf("GET after %s: id %s, want %s", name, got, id)
+		}
+	}
+	// A second session of the same member reads the same one.
+	second := decodeTokens(t, api.login(loginBody("ana@example.com", loginPassword)))
+	if got := requireProfile(t, api.getProfile(second.AccessToken)).ID; got != id {
+		t.Errorf("another session: id %s, want %s", got, id)
+	}
+
+	accountID := api.meID(t, ana.AccessToken)
+	if accountID != api.userID(t, "ana@example.com") {
+		t.Fatalf("/v1/me id = %s, not the user's", accountID)
+	}
+	if id == accountID {
+		t.Errorf("the profile's id is the account's id %s", accountID)
+	}
+	if benID := requireProfile(t, api.putProfile(ben.AccessToken, profileJSON(t, "Ben", ""))).ID; benID == id {
+		t.Errorf("two profiles share the id %s", id)
+	}
+
+	// The id is the server's: a body that carries one, even the profile's
+	// own, is refused and saves nothing.
+	for _, body := range []string{
+		`{"id":"` + id + `","display_name":"Mallory","bio":""}`,
+		`{"id":"` + accountID + `","display_name":"Mallory","bio":""}`,
+		`{"public_id":"` + id + `","display_name":"Mallory","bio":""}`,
+	} {
+		requireLoginResponse(t, api.putProfile(ana.AccessToken, body), http.StatusBadRequest, invalidRequest)
+	}
+	if name, _ := api.storedProfile(t, "ana@example.com"); name != "Ana L." {
+		t.Errorf("a refused save changed the name to %q", name)
+	}
+	if got := requireProfile(t, api.getProfile(ana.AccessToken)).ID; got != id {
+		t.Errorf("after the refused saves: id %s, want %s", got, id)
 	}
 }
 

@@ -26,8 +26,10 @@ type profileRequest struct {
 }
 
 // profileResponse is the caller's own profile. It lists its fields
-// explicitly: no user id, no email, nothing about the account.
+// explicitly: no user id, no email, nothing about the account. id is the
+// profile's public identifier (decision 031), not the account's.
 type profileResponse struct {
+	ID          string    `json:"id"`
 	DisplayName string    `json:"display_name"`
 	Bio         string    `json:"bio"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -36,6 +38,7 @@ type profileResponse struct {
 
 func writeProfile(w http.ResponseWriter, p profile.Profile) {
 	writeJSON(w, http.StatusOK, profileResponse{
+		ID:          p.PublicID,
 		DisplayName: p.DisplayName,
 		Bio:         p.Bio,
 		CreatedAt:   p.CreatedAt,

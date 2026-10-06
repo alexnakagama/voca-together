@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"vocatogether/backend/internal/db"
 	"vocatogether/backend/internal/testutil"
 )
 
@@ -656,5 +658,170 @@ func TestUserLanguagesByLanguageIndex(t *testing.T) {
 	}
 	if !strings.Contains(def, "(language_code, kind, level)") {
 		t.Errorf("index definition = %q, want (language_code, kind, level)", def)
+	}
+}
+
+// canonicalUUID is the only spelling of a public identifier: lowercase, with
+// its hyphens.
+var canonicalUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+func publicID(t *testing.T, pool *pgxpool.Pool, userID string) string {
+	t.Helper()
+	var id string
+	err := pool.QueryRow(context.Background(), `SELECT public_id FROM profiles WHERE user_id = $1`, userID).Scan(&id)
+	if err != nil {
+		t.Fatalf("public id of %s: %v", userID, err)
+	}
+	return id
+}
+
+func columnExists(t *testing.T, pool *pgxpool.Pool, table, column string) bool {
+	t.Helper()
+	return countRows(t, pool,
+		`SELECT count(*) FROM information_schema.columns
+		 WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2`, table, column) == 1
+}
+
+// Every profile gets a public identifier of its own when it is created,
+// without the writer naming one, and it is neither the user's id nor empty.
+func TestProfilesPublicID(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := mustInsertUser(t, pool, "ben@example.com")
+	if err := insertProfile(pool, ana, "Ana", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := insertProfile(pool, ben, "Ben", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	anaID, benID := publicID(t, pool, ana), publicID(t, pool, ben)
+	for _, id := range []string{anaID, benID} {
+		if !canonicalUUID.MatchString(id) {
+			t.Errorf("public id %q is not a canonical UUID", id)
+		}
+	}
+	if anaID == benID {
+		t.Errorf("two profiles share the public id %s", anaID)
+	}
+	if anaID == ana || benID == ben || anaID == ben || benID == ana {
+		t.Error("a public id is a user's id")
+	}
+
+	// Changing the text leaves it alone.
+	if _, err := pool.Exec(ctx, `UPDATE profiles SET display_name = 'Ana L.', updated_at = now() WHERE user_id = $1`, ana); err != nil {
+		t.Fatal(err)
+	}
+	if got := publicID(t, pool, ana); got != anaID {
+		t.Errorf("public id changed with the name: %s → %s", anaID, got)
+	}
+
+	// Two profiles never share one, and none is without.
+	_, err := pool.Exec(ctx, `UPDATE profiles SET public_id = $2 WHERE user_id = $1`, ben, anaID)
+	requirePgError(t, err, uniqueViolation, "profiles_public_id_key")
+	_, err = pool.Exec(ctx, `UPDATE profiles SET public_id = NULL WHERE user_id = $1`, ben)
+	requirePgError(t, err, notNullViolation, "")
+	if got := publicID(t, pool, ben); got != benID {
+		t.Errorf("ben's public id after the refused writes: %s, want %s", got, benID)
+	}
+}
+
+// 00007 adds profiles.public_id. Up gives every profile already there its
+// own identifier and changes nothing else about it, updated_at included;
+// down removes the column and keeps the profiles.
+func TestMigration00007PublicIDWithExistingRows(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	// Leave the schema migrated whatever happens here.
+	t.Cleanup(func() {
+		if err := db.Migrate(ctx, pool); err != nil {
+			t.Errorf("restoring the schema: %v", err)
+		}
+	})
+
+	// Before 00007: profiles exist and have no public id.
+	if err := db.MigrateDownTo(ctx, pool, 6); err != nil {
+		t.Fatalf("down to 00006: %v", err)
+	}
+	if columnExists(t, pool, "profiles", "public_id") {
+		t.Fatal("profiles.public_id exists before 00007")
+	}
+	users := []string{
+		mustInsertUser(t, pool, "ana@example.com"),
+		insertGoogleUser(t, pool, "ben@example.com", "1001"),
+		mustInsertUser(t, pool, "cho@example.com"),
+	}
+	for i, uid := range users {
+		if err := insertProfile(pool, uid, "Member", "Hi"); err != nil {
+			t.Fatal(err)
+		}
+		// Saved and last changed at different, known times in the past.
+		if _, err := pool.Exec(ctx,
+			`UPDATE profiles SET created_at = now() - interval '30 days', updated_at = now() - make_interval(days => $2)
+			 WHERE user_id = $1`, uid, i+1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	type stamps struct{ created, updated time.Time }
+	read := func(uid string) (s stamps) {
+		t.Helper()
+		err := pool.QueryRow(ctx, `SELECT created_at, updated_at FROM profiles WHERE user_id = $1 AND display_name = 'Member' AND bio = 'Hi'`,
+			uid).Scan(&s.created, &s.updated)
+		if err != nil {
+			t.Fatalf("profile of %s: %v", uid, err)
+		}
+		return s
+	}
+	before := map[string]stamps{}
+	for _, uid := range users {
+		before[uid] = read(uid)
+	}
+
+	// Up with profiles present: each gets its own id, nothing else moves.
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("up with profiles present: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, uid := range users {
+		id := publicID(t, pool, uid)
+		if !canonicalUUID.MatchString(id) {
+			t.Errorf("public id %q is not a canonical UUID", id)
+		}
+		if seen[id] {
+			t.Errorf("two existing profiles got the public id %s", id)
+		}
+		seen[id] = true
+		if got := read(uid); !got.created.Equal(before[uid].created) || !got.updated.Equal(before[uid].updated) {
+			t.Errorf("timestamps moved: %+v → %+v", before[uid], got)
+		}
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM profiles p JOIN users u ON u.id = p.public_id`); n != 0 {
+		t.Errorf("%d public ids are a user's id", n)
+	}
+
+	// Down with profiles present: the column goes, the profiles stay.
+	if err := db.MigrateDownTo(ctx, pool, 6); err != nil {
+		t.Fatalf("down with profiles present: %v", err)
+	}
+	if columnExists(t, pool, "profiles", "public_id") {
+		t.Error("profiles.public_id still exists after rolling 00007 back")
+	}
+	for _, uid := range users {
+		if got := read(uid); !got.updated.Equal(before[uid].updated) {
+			t.Errorf("updated_at moved by the rollback: %v → %v", before[uid].updated, got.updated)
+		}
+	}
+
+	// Up again: every profile has an id once more, and a new profile gets one.
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+	dee := mustInsertUser(t, pool, "dee@example.com")
+	if err := insertProfile(pool, dee, "Dee", ""); err != nil {
+		t.Errorf("saving a profile after re-applying: %v", err)
+	}
+	if n := countRows(t, pool, `SELECT count(DISTINCT public_id) FROM profiles`); n != len(users)+1 {
+		t.Errorf("distinct public ids after re-applying = %d, want %d", n, len(users)+1)
 	}
 }

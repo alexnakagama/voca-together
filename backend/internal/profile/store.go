@@ -19,13 +19,29 @@ const (
 // One plain read on the primary key, without a lock.
 func findProfile(ctx context.Context, pool *pgxpool.Pool, userID string) (p Profile, found bool, err error) {
 	err = pool.QueryRow(ctx,
-		`SELECT display_name, bio, created_at, updated_at FROM profiles WHERE user_id = $1`,
-		userID).Scan(&p.DisplayName, &p.Bio, &p.CreatedAt, &p.UpdatedAt)
+		`SELECT public_id, display_name, bio, created_at, updated_at FROM profiles WHERE user_id = $1`,
+		userID).Scan(&p.PublicID, &p.DisplayName, &p.Bio, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Profile{}, false, nil
 	}
 	if err != nil {
 		return Profile{}, false, fmt.Errorf("find profile: %w", err)
+	}
+	return p, true, nil
+}
+
+// findPublicProfile returns the profile whose public id is publicID, which
+// must be well formed (ParsePublicID); found=false if no profile has it. One
+// plain read on the unique index, without a lock.
+func findPublicProfile(ctx context.Context, pool *pgxpool.Pool, publicID string) (p PublicProfile, found bool, err error) {
+	err = pool.QueryRow(ctx,
+		`SELECT user_id, public_id, display_name, bio FROM profiles WHERE public_id = $1`,
+		publicID).Scan(&p.UserID, &p.PublicID, &p.DisplayName, &p.Bio)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return PublicProfile{}, false, nil
+	}
+	if err != nil {
+		return PublicProfile{}, false, fmt.Errorf("find public profile: %w", err)
 	}
 	return p, true, nil
 }
@@ -38,7 +54,8 @@ func findProfile(ctx context.Context, pool *pgxpool.Pool, userID string) (p Prof
 // The write is a single statement: two first saves can't both insert (the
 // loser of the race updates instead), concurrent updates take the row lock in
 // turn, and each writes both columns, so the row always holds one request's
-// text. When the text is the same the statement only locks the row and
+// text. public_id is set by its default on the insert and never written
+// again. When the text is the same the statement only locks the row and
 // returns nothing; the row is then read back, which shows the profile as it
 // is at that moment (after a concurrent save, the newer text).
 //
@@ -54,8 +71,8 @@ func upsertProfile(ctx context.Context, pool *pgxpool.Pool, userID string, in In
 		     updated_at   = now()
 		 WHERE (profiles.display_name, profiles.bio)
 		       IS DISTINCT FROM (EXCLUDED.display_name, EXCLUDED.bio)
-		 RETURNING display_name, bio, created_at, updated_at`,
-		userID, in.DisplayName, in.Bio).Scan(&p.DisplayName, &p.Bio, &p.CreatedAt, &p.UpdatedAt)
+		 RETURNING public_id, display_name, bio, created_at, updated_at`,
+		userID, in.DisplayName, in.Bio).Scan(&p.PublicID, &p.DisplayName, &p.Bio, &p.CreatedAt, &p.UpdatedAt)
 	var pgErr *pgconn.PgError
 	switch {
 	case err == nil:

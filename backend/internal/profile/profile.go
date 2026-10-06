@@ -18,13 +18,28 @@ type Input struct {
 	Bio         string
 }
 
-// Profile is a user's saved profile. DisplayName and Bio are the text meant
-// for other members; nothing else about the user belongs here.
+// Profile is a user's saved profile, as its owner sees it. DisplayName and
+// Bio are the text meant for other members; nothing else about the user
+// belongs here.
 type Profile struct {
+	// PublicID names the profile to other members (decision 031). It is
+	// assigned by the database when the profile is created and never changes.
+	PublicID    string
 	DisplayName string
 	Bio         string // "" when the user wrote none
 	CreatedAt   time.Time
 	UpdatedAt   time.Time // last change of DisplayName or Bio
+}
+
+// PublicProfile is what any signed-in member may read of another's profile,
+// found by its public identifier. UserID is the owner's internal id, for the
+// caller to read the owner's other public data with; it must never leave the
+// server.
+type PublicProfile struct {
+	UserID      string
+	PublicID    string
+	DisplayName string
+	Bio         string // "" when the user wrote none
 }
 
 // Service implements the profile use cases.
@@ -51,6 +66,31 @@ func (s *Service) Get(ctx context.Context, userID string) (Profile, error) {
 	}
 	if !found {
 		return Profile{}, ErrNotFound
+	}
+	return p, nil
+}
+
+// Public returns the profile that publicID names, or ErrNotFound. A value
+// that is not a well-formed identifier (ParsePublicID) names nothing and is
+// answered without a query, exactly as an unknown one is. A member who has
+// saved no profile has no public identifier, so nothing reaches them.
+//
+// Unlike Get, the caller is not the owner: who may read is the caller's
+// decision.
+func (s *Service) Public(ctx context.Context, publicID string) (PublicProfile, error) {
+	id, ok := ParsePublicID(publicID)
+	if !ok {
+		return PublicProfile{}, ErrNotFound
+	}
+	if err := ctx.Err(); err != nil {
+		return PublicProfile{}, fmt.Errorf("profile: public: %w", err)
+	}
+	p, found, err := findPublicProfile(ctx, s.pool, id)
+	if err != nil {
+		return PublicProfile{}, fmt.Errorf("profile: public: %w", err)
+	}
+	if !found {
+		return PublicProfile{}, ErrNotFound
 	}
 	return p, nil
 }
