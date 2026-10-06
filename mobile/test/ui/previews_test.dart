@@ -5,6 +5,8 @@ import 'package:vocatogether/ui/previews/auth_scaffold_previews.dart';
 import 'package:vocatogether/ui/previews/form_error_banner_previews.dart';
 import 'package:vocatogether/ui/previews/form_notice_banner_previews.dart';
 import 'package:vocatogether/ui/previews/google_sign_in_button_previews.dart';
+import 'package:vocatogether/ui/previews/language_chip_previews.dart';
+import 'package:vocatogether/ui/previews/language_row_previews.dart';
 import 'package:vocatogether/ui/previews/preview_support.dart';
 import 'package:vocatogether/ui/previews/primary_button_previews.dart';
 import 'package:vocatogether/ui/previews/secondary_button_previews.dart';
@@ -70,6 +72,19 @@ void main() {
     'secondaryButton': (secondaryButton, fallback),
     'secondaryButtonBusy': (secondaryButtonBusy, fallback),
     'secondaryButtonLargeText': (secondaryButtonLargeText, fallback),
+    'languageChip': (languageChip, fallback),
+    'languageChipList': (languageChipList, fallback),
+    'languageChipLargeText': (
+      languageChipLargeText,
+      const Size(320, double.infinity),
+    ),
+    'languageRow': (languageRow, fallback),
+    'languageRowSameName': (languageRowSameName, fallback),
+    'languageRowDisabled': (languageRowDisabled, fallback),
+    'languageRowLargeText': (
+      languageRowLargeText,
+      const Size(320, double.infinity),
+    ),
     'authScaffoldLight': (authScaffoldLight, const Size(390, 760)),
     'authScaffoldDarkError': (authScaffoldDarkError, const Size(390, 760)),
     'authScaffoldSmallLargeText': (

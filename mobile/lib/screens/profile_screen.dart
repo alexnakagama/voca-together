@@ -12,6 +12,7 @@ import '../ui/widgets/form_error_banner.dart';
 import '../ui/widgets/form_notice_banner.dart';
 import '../ui/widgets/primary_button.dart';
 import 'failure_presentation.dart';
+import 'profile_languages_section.dart';
 
 /// The signed-in user's own profile: the name and the "about you" text other
 /// members will see (`GET`/`PUT /v1/me/profile` through [SessionManager],
@@ -21,6 +22,9 @@ import 'failure_presentation.dart';
 /// text is sent as typed and the form then shows what the server stored. It
 /// never decides access; when the session ends the router leaves this screen
 /// on its own.
+///
+/// Below the form, [ProfileLanguagesSection] shows the user's languages. It
+/// loads and fails by itself, and the form's save doesn't touch it.
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key, required this.session});
 
@@ -272,7 +276,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: content,
+                children: [
+                  ...content,
+                  // The languages load by themselves from the moment the
+                  // screen opens, and are shown once the form is: the
+                  // section keeps its state while it is hidden.
+                  Visibility(
+                    visible: !_loading && loadError == null,
+                    maintainState: true,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const Divider(height: Spacing.xl * 2),
+                        ProfileLanguagesSection(session: widget.session),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
           ),

@@ -112,6 +112,18 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
       ApiPaths.profile,
       (_) => jsonResponse(200, profileBody(displayName: 'Ana', bio: 'Hi')),
     )
+    // The profile's languages: an echoing load failure, then a selection
+    // with a language the catalog doesn't name.
+    ..always('GET', ApiPaths.languages, (_) => jsonResponse(200, catalogBody()))
+    ..once('GET', ApiPaths.myLanguages, (_) => _echo(500))
+    ..once(
+      'GET',
+      ApiPaths.myLanguages,
+      (_) => jsonResponse(
+        200,
+        languagesBody(spoken: [('es', 'native')], learning: [('xx', 'a2')]),
+      ),
+    )
     // Google: an echoing 409, an echoing 500, then a session.
     ..once(
       'POST',
@@ -201,6 +213,18 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
   _checkScreen(tester);
   await tapAndSettle(tester, find.widgetWithText(FilledButton, l10n.tryAgain));
   _checkScreen(tester);
+  // The languages section failed with an echoing body; its retry shows the
+  // member's languages, which appear on the screen and never in the route.
+  expect(find.widgetWithText(OutlinedButton, l10n.tryAgain), findsOneWidget);
+  await tapAndSettle(
+    tester,
+    find.widgetWithText(OutlinedButton, l10n.tryAgain),
+  );
+  record();
+  _checkScreen(tester);
+  expect(find.text('Spanish'), findsOneWidget);
+  expect(find.text('xx'), findsOneWidget);
+  expect(app.location(tester), '/profile');
   final save = find.widgetWithText(FilledButton, l10n.profileSaveButton);
   await tester.enterText(field(l10n.displayNameLabel), 'Ana');
   await tester.enterText(field(l10n.bioLabel), 'Hi');

@@ -67,8 +67,8 @@ which hands each screen only what it uses.
 `SessionManager` holds the only in-memory tokens and owns refresh and logout. Tokens persist only in
 `SecureTokenStore` (one `flutter_secure_storage` key). Screens reach the backend through `SessionManager`'s
 token-free public API (`me()`, `profile()`, `saveProfile()`, `languageCatalog()`, `languages()`, `saveLanguages()`,
-sign-in, logout) and through `AccountApi` (register, resend, forgot). No screen calls the three language methods
-yet.
+sign-in, logout) and through `AccountApi` (register, resend, forgot). Of the three language methods, the Profile
+screen's languages section calls `languageCatalog()` and `languages()`; nothing calls `saveLanguages()` yet.
 
 ### Google sign-in
 
@@ -89,9 +89,11 @@ Stage 8 (languages) is done on the backend: the three routes of decision 029 (`G
 | Part | State |
 |---|---|
 | Data, API and session layer: the models in `lib/api/languages.dart`, the two `ApiPaths`, the three `AuthApi` calls, `SessionManager.languageCatalog()`, `languages()` and `saveLanguages()`, the language cases of `presentFailure` and their strings | implemented and tested |
-| UI: language widgets and previews, the Languages summary on Profile, the editor screen and its route `/profile/languages` | not implemented |
+| Widgets and previews (`LanguageChip`, `LanguageRow` in `lib/ui/widgets/`), the level labels (`lib/screens/language_labels.dart`) and the read-only Languages summary on Profile (`lib/screens/profile_languages_section.dart`) | implemented and tested |
+| The editor screen and its route `/profile/languages`, with the button on Profile that opens it | not implemented |
 | Completing decision 030, the final pass over these documents, and verification on the emulator | pending |
 
-So the app can call the three routes but no screen does, and a member can't see or edit languages yet. Decision 030
+So a member sees their languages on Profile but can't edit them in the app yet: no screen saves, and `LanguageRow`
+is built and tested but used by no screen until the editor exists. Decision 030
 (still a draft) records the client-side decisions and what is built; the rules for both the built layer and the
 screens to come are in `.claude/rules/languages.md`.

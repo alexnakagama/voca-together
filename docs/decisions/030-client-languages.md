@@ -1,7 +1,7 @@
 # 030: Languages in the profile (client stage 8, draft)
 
-> **Status:** draft, partly implemented. The data, API and session layer exists and is tested; the screens do not
-> (see the first bullet).
+> **Status:** draft, partly implemented. The data, API and session layer, the language widgets and the read-only
+> summary on Profile exist and are tested; the editor does not (see the first bullet).
 >
 > **Backend side:** 029. **Changes** 023: `SessionManager` gained `languageCatalog()`, `languages()` and
 > `saveLanguages()`.
@@ -14,13 +14,17 @@
     `UserLanguage`, `UserLanguages`), `ApiPaths.languages` and `ApiPaths.myLanguages`, `AuthApi.languageCatalog`,
     `languages` and `saveLanguages`, the token-free `SessionManager.languageCatalog()`, `languages()` and
     `saveLanguages(UserLanguages)`, and in `presentFailure` the fields `spokenError` and `learningError` with four
-    strings. The app can call the three routes of 029; no screen does yet.
-  - **Not implemented (the UI):** the language widgets and their previews, the read-only Languages summary on
-    Profile, the editor screen and its route `/profile/languages`. Nothing in `lib/screens/`, `lib/ui/` or
-    `router.dart` knows about languages, and a member can't see or change theirs.
-  - **Pending after the UI:** completing this entry (screen states, the notice's placement, the UI's tests,
-    deferred work), the final pass over the architecture map and the rule files, and verification on the emulator.
-    The word "draft" is removed then.
+    strings.
+  - **Implemented (the widgets and the summary):** `LanguageChip` and `LanguageRow` with their previews,
+    `languageLevelLabel` and its seven strings, and `ProfileLanguagesSection`, the read-only Languages summary
+    that `ProfileScreen` shows below its form. A member sees their languages; described under "What the summary
+    does" below.
+  - **Not implemented (the editor):** the editor screen, its route `/profile/languages` and the button on Profile
+    that opens it. `router.dart` knows nothing about languages, nothing calls `saveLanguages()`, `LanguageRow` is
+    used by no screen, and a member can't change their languages in the app.
+  - **Pending after the editor:** completing this entry (the editor's states and tests, deferred work), the final
+    pass over the architecture map and the rule files, and verification on the emulator. The word "draft" is
+    removed then.
 - **Scope:** the signed-in user reads the catalog and reads and replaces their own languages, over the contract of
   029. Nothing about other members.
 - **No minimum in the client.** `spoken` may be empty, `learning` may be empty, and both may be empty. The app
@@ -111,6 +115,35 @@
   - The same holds for anything else off-contract in these bodies (a missing or `null` list, a non-string code).
     A code the *catalog* doesn't name is a different case: it parses, and what the editor shows for it is decided
     with the screens.
-- **Not decided here:** the placement of the visibility notice (above); the layout of the summary and the
-  editor; the names of the widgets, the screen and their states. They are settled in the UI steps and written here
-  then.
+- **What the summary does** (`lib/screens/profile_languages_section.dart`):
+  - *Its own widget with its own state*, below the profile form. It asks for the catalog (for the names) and the
+    selection together, once, when the Profile screen opens, and is shown once the form is; while the profile is
+    loading or failed to load, the screen shows only that. A failure of the languages shows an error and a retry
+    inside the section: the form, its save and its banners are untouched, and a profile save neither reloads nor
+    sends the languages.
+  - *The load is whole.* If either request fails, nothing is shown but the error: never some of the languages,
+    never "none yet" for a failure. A session that ended shows
+    nothing, as on the profile (028).
+  - *States:* loading (a labelled spinner); failed (the `presentFailure` text and "Try again"); none chosen (one
+    sentence); otherwise "I speak" and "I'm learning", each a wrapping list of chips (name and level) in the
+    member's order. A list with no language gets no heading.
+  - *A code the catalog doesn't name is shown as the code.* It can't happen against one server (029's foreign
+    key), and hiding the entry would show the member fewer languages than they have.
+  - *Read-only, and for now without a way in to the editor.* The button that opens the editor is added with the
+    editor and its route: a button to a route that doesn't exist would send the member back to home. Until then
+    the "none chosen" sentence states the fact and invites nothing.
+  - *Widgets.* `LanguageChip` and `LanguageRow` take every text as a string and import neither the models nor the
+    localizations; `languageLevelLabel` (in `lib/screens/`) is the one place a level becomes text. The chip is not
+    a control and is read as one item. The row's level button is labelled with the language as well as the level,
+    and when the name and the buttons don't fit side by side (large text, a narrow screen) the buttons move below
+    the name. Levels are shown by their short names ("B2", "Native"); the longer descriptions come with the
+    editor's level picker.
+  - *Tests:* the two widgets (semantics, tap targets, contrast in both themes, large text at 320 dp) and their
+    previews; the section (loading, none, both lists, one list, every level, an unnamed code, each kind of failed
+    load with the form still saving and a retry, a timeout, a session ending or a logout mid-load, an answer after
+    leaving, reopening); and the profile's accessibility and privacy runs with the section in them.
+- **The visibility notice goes on the editor.** That is where the member saves, so that is where "before they
+  save" is; the summary saves nothing and shows only what the member already chose, and the profile form's notice
+  (028) keeps speaking for the name and the text alone. Its wording and exact place are settled with the editor.
+- **Not decided here:** the layout of the editor and the names of its screen and states. They are settled in the
+  editor step and written here then.

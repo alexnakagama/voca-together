@@ -18,8 +18,8 @@ paths:
 
 # Languages rules (`GET /v1/languages`, `GET`/`PUT /v1/me/languages`, both sides)
 
-Records: 029 (backend, in force), 030 (client, **draft**: its data, API and session layer is implemented, its
-screens are not). The general rules for a member's own resource are in
+Records: 029 (backend, in force), 030 (client, **draft**: its data, API and session layer, its widgets and the
+Profile summary are implemented, its editor is not). The general rules for a member's own resource are in
 `backend.md`.
 
 ## Backend (implemented)
@@ -42,8 +42,7 @@ screens are not). The general rules for a member's own resource are in
 
 `lib/api/languages.dart` (`LanguageLevel`, `Language`, `UserLanguage`, `UserLanguages`), `ApiPaths.languages` and
 `myLanguages`, `AuthApi` and `SessionManager` (`languageCatalog()`, `languages()`, `saveLanguages()`), and the
-language cases of `presentFailure` (in `lib/screens/failure_presentation.dart`). No screen or widget calls the
-three `SessionManager` language methods yet.
+language cases of `presentFailure` (in `lib/screens/failure_presentation.dart`).
 
 - `UserLanguages` is the member's complete selection, never one list or a change to one. Its `toJson` always emits
   both `spoken` and `learning` as arrays (`[]` when empty, never `null`, never left out), and it is the whole body
@@ -64,14 +63,33 @@ three `SessionManager` language methods yet.
   to `spokenError`/`learningError`, one text per code for both lists, stating no number. There is no `required`
   code. The backend names the list, not the entry.
 
-## Client: screens (not implemented)
+## Client: widgets and the Profile summary (implemented)
 
-There is no language widget, no Profile summary, no editor and no `/profile/languages` route yet. These are the
-approved requirements for them (030). When they exist, update `mobile.md`'s `signedInRoutes`, add the new screen
-and widget files to this file's `paths` if their names don't already match, and remove "draft" here and in 030.
+`lib/ui/widgets/language_chip.dart` and `language_row.dart`, `lib/screens/language_labels.dart`
+(`languageLevelLabel`) and `lib/screens/profile_languages_section.dart` (`ProfileLanguagesSection`, mounted by
+`ProfileScreen` below its form).
+
+- The two widgets are pure UI and take every text as a string: they import neither the models nor the
+  localizations. A level becomes text only through `languageLevelLabel`, in `lib/screens/`.
+- `LanguageRow` is for the editor; no screen uses it yet.
+- The summary is read-only and calls only `languageCatalog()` and `languages()`, together, once when Profile
+  opens. It never saves and holds no selection for a save.
+- Its state is its own: a failed load shows an error and a retry inside the section, and the profile form, its
+  save and its banners don't depend on it. Don't merge the two loads or their errors.
+- The load fails whole: if either request fails, no language is shown (never a partial list, never "none yet").
+- A code the catalog doesn't name is shown as the code, so every language the member has stays visible.
+- A list with no language gets no heading; with both empty, one "none yet" text.
+
+## Client: the editor (not implemented)
+
+There is no editor, no `/profile/languages` route and no control on Profile that opens one yet. These are the
+approved requirements (030). When they exist, update `mobile.md`'s `signedInRoutes`, add the new screen files to
+this file's `paths` if their names don't already match, and remove "draft" here and in 030.
 
 - No minimum in the editor: add no "at least one" check, and saving two empty lists clears the selection.
 - The editor always saves the complete selection, both lists, whichever one was edited.
 - Languages are edited on their own screen at `/profile/languages`; Profile shows a read-only summary. The route
   names nobody and carries no language code.
-- Languages are public by intent: the app says so before the member saves. Where is decided with the screens.
+- Languages are public by intent: the app says so before the member saves, on the editor, where the save is. The
+  summary saves nothing and carries no notice.
+- After the editor saves, the summary on Profile must show the new selection (it loads only when it is created).

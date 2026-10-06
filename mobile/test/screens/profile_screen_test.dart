@@ -24,9 +24,16 @@ Finder get _bio => field(l10n.bioLabel);
 String _text(WidgetTester tester, Finder f) =>
     textFieldOf(tester, f).controller!.text;
 
-/// A backend for a signed-in user on home; the profile calls are scripted by
-/// each test.
+/// A backend for a signed-in user on home, with no languages chosen (the
+/// profile's languages section loads them); the profile calls are scripted
+/// by each test.
 FakeServer _backend() => FakeServer()
+  ..always('GET', ApiPaths.languages, (_) => jsonResponse(200, catalogBody()))
+  ..always(
+    'GET',
+    ApiPaths.myLanguages,
+    (_) => jsonResponse(200, languagesBody()),
+  )
   ..always('GET', ApiPaths.me, (_) => jsonResponse(200, meBody()))
   ..always('GET', ApiPaths.healthz, (_) => healthy())
   ..always('POST', ApiPaths.logout, (_) => noContent());

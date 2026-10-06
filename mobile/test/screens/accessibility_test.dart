@@ -74,6 +74,20 @@ Future<void> _saveProfile(WidgetTester tester) async {
 void _home(FakeServer s) =>
     s.once('GET', ApiPaths.me, (_) => jsonResponse(200, meBody()));
 
+/// The profile's languages section, for a member with [spoken] and
+/// [learning] (none by default).
+void _languages(
+  FakeServer s, {
+  List<(String, String)> spoken = const [],
+  List<(String, String)> learning = const [],
+}) => s
+  ..once('GET', ApiPaths.languages, (_) => jsonResponse(200, catalogBody()))
+  ..once(
+    'GET',
+    ApiPaths.myLanguages,
+    (_) => jsonResponse(200, languagesBody(spoken: spoken, learning: learning)),
+  );
+
 final _cases = <_Case>[
   _Case('login', action: l10n.logInButton),
   _Case(
@@ -212,6 +226,7 @@ final _cases = <_Case>[
     signedIn: true,
     script: (s) {
       _home(s);
+      _languages(s);
       s.once('GET', ApiPaths.profile, (_) => noProfile());
     },
     drive: _openProfile,
@@ -222,6 +237,7 @@ final _cases = <_Case>[
     signedIn: true,
     script: (s) {
       _home(s);
+      _languages(s);
       s.once('GET', ApiPaths.profile, networkFailure);
     },
     drive: _openProfile,
@@ -232,6 +248,7 @@ final _cases = <_Case>[
     signedIn: true,
     script: (s) {
       _home(s);
+      _languages(s);
       s
         ..once(
           'GET',
@@ -258,6 +275,7 @@ final _cases = <_Case>[
     signedIn: true,
     script: (s) {
       _home(s);
+      _languages(s);
       s
         ..once('GET', ApiPaths.profile, (_) => noProfile())
         ..once(
@@ -282,6 +300,7 @@ final _cases = <_Case>[
     signedIn: true,
     script: (s) {
       _home(s);
+      _languages(s);
       s
         ..once('GET', ApiPaths.profile, (_) => noProfile())
         ..once(
@@ -293,6 +312,42 @@ final _cases = <_Case>[
     },
     drive: _saveProfile,
     action: l10n.profileSaveButton,
+  ),
+  _Case(
+    'profile, languages',
+    signedIn: true,
+    script: (s) {
+      _home(s);
+      _languages(
+        s,
+        spoken: [('es', 'native'), ('en', 'c1')],
+        learning: [('ja', 'a2')],
+      );
+      s.once(
+        'GET',
+        ApiPaths.profile,
+        (_) => jsonResponse(200, profileBody(displayName: 'Ana')),
+      );
+    },
+    drive: _openProfile,
+    action: l10n.languagesLearningHeading,
+  ),
+  _Case(
+    'profile, languages failed',
+    signedIn: true,
+    script: (s) {
+      _home(s);
+      s
+        ..once('GET', ApiPaths.profile, (_) => noProfile())
+        ..once(
+          'GET',
+          ApiPaths.languages,
+          (_) => jsonResponse(200, catalogBody()),
+        )
+        ..once('GET', ApiPaths.myLanguages, networkFailure);
+    },
+    drive: _openProfile,
+    action: l10n.tryAgain,
   ),
 ];
 

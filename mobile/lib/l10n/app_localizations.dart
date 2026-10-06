@@ -579,6 +579,78 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'A language can only be added once, in one of the two lists. Remove the repeated one and try again.'**
   String get errorLanguageDuplicate;
+
+  /// Heading of the section of the profile screen that shows the languages the user speaks and is learning.
+  ///
+  /// In en, this message translates to:
+  /// **'Languages'**
+  String get languagesHeading;
+
+  /// Accessibility label of the progress indicator while the user’s languages load.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading your languages'**
+  String get languagesLoading;
+
+  /// Text of the languages section of the profile when the user has chosen no language, spoken or learning.
+  ///
+  /// In en, this message translates to:
+  /// **'You haven’t added any languages yet.'**
+  String get languagesEmpty;
+
+  /// Heading of the list of languages the user knows and can offer to other members.
+  ///
+  /// In en, this message translates to:
+  /// **'I speak'**
+  String get languagesSpokenHeading;
+
+  /// Heading of the list of languages the user wants to practise.
+  ///
+  /// In en, this message translates to:
+  /// **'I’m learning'**
+  String get languagesLearningHeading;
+
+  /// Short name of the CEFR level A1 (beginner), shown next to a language.
+  ///
+  /// In en, this message translates to:
+  /// **'A1'**
+  String get languageLevelA1;
+
+  /// Short name of the CEFR level A2 (elementary), shown next to a language.
+  ///
+  /// In en, this message translates to:
+  /// **'A2'**
+  String get languageLevelA2;
+
+  /// Short name of the CEFR level B1 (intermediate), shown next to a language.
+  ///
+  /// In en, this message translates to:
+  /// **'B1'**
+  String get languageLevelB1;
+
+  /// Short name of the CEFR level B2 (upper intermediate), shown next to a language.
+  ///
+  /// In en, this message translates to:
+  /// **'B2'**
+  String get languageLevelB2;
+
+  /// Short name of the CEFR level C1 (advanced), shown next to a language.
+  ///
+  /// In en, this message translates to:
+  /// **'C1'**
+  String get languageLevelC1;
+
+  /// Short name of the CEFR level C2 (proficient), shown next to a language.
+  ///
+  /// In en, this message translates to:
+  /// **'C2'**
+  String get languageLevelC2;
+
+  /// Short name of the level of a native language, shown next to a language the user speaks.
+  ///
+  /// In en, this message translates to:
+  /// **'Native'**
+  String get languageLevelNative;
 }
 
 class _AppLocalizationsDelegate

@@ -317,4 +317,40 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get errorLanguageDuplicate =>
       'A language can only be added once, in one of the two lists. Remove the repeated one and try again.';
+
+  @override
+  String get languagesHeading => 'Languages';
+
+  @override
+  String get languagesLoading => 'Loading your languages';
+
+  @override
+  String get languagesEmpty => 'You haven’t added any languages yet.';
+
+  @override
+  String get languagesSpokenHeading => 'I speak';
+
+  @override
+  String get languagesLearningHeading => 'I’m learning';
+
+  @override
+  String get languageLevelA1 => 'A1';
+
+  @override
+  String get languageLevelA2 => 'A2';
+
+  @override
+  String get languageLevelB1 => 'B1';
+
+  @override
+  String get languageLevelB2 => 'B2';
+
+  @override
+  String get languageLevelC1 => 'C1';
+
+  @override
+  String get languageLevelC2 => 'C2';
+
+  @override
+  String get languageLevelNative => 'Native';
 }

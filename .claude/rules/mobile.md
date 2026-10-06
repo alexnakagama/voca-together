@@ -47,7 +47,7 @@ load with that feature's files: `auth.md` (session internals), `google-sign-in.m
 - **Token boundary:** screens may use only `AccountApi` (register/resend/forgot, token-free) and `SessionManager`'s
   public API, which takes and returns no token (`signIn`/`signInWithGoogle()`/`logout` → `void`, `me()` → `Me`,
   `profile()` → `Profile?`, `saveProfile()` → `Profile`, `languageCatalog()` → `List<Language>`, `languages()` and
-  `saveLanguages()` → `UserLanguages`). No screen calls the three language methods yet (`languages.md`).
+  `saveLanguages()` → `UserLanguages`). No screen calls `saveLanguages()` yet (`languages.md`).
 - Adding a protected route: a path in `ApiPaths`, a call in `AuthApi` (which takes the raw access token and is held
   only by `SessionManager`), and a typed, token-free `SessionManager` method that makes one `_authorized` call.
   `_authorized` stays private. A model screens may import is added to the allowlist in `test/architecture_test.dart`.
