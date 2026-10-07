@@ -9,10 +9,9 @@ import '../router.dart';
 import '../session.dart';
 import '../ui/theme.dart';
 import '../ui/widgets/form_error_banner.dart';
-import '../ui/widgets/language_chip.dart';
 import '../ui/widgets/secondary_button.dart';
 import 'failure_presentation.dart';
-import 'language_labels.dart';
+import 'profile_language_lists.dart';
 
 /// The read-only summary of the signed-in user's own languages on the
 /// profile screen: the ones they speak and the ones they are learning, each
@@ -141,25 +140,8 @@ class _ProfileLanguagesSectionState extends State<ProfileLanguagesSection> {
         ],
         SecondaryButton(label: l10n.tryAgain, onPressed: _retry),
       ];
-    } else if (languages.spoken.isEmpty && languages.learning.isEmpty) {
-      content = [Text(l10n.languagesEmpty, style: theme.textTheme.bodyMedium)];
     } else {
-      content = [
-        if (languages.spoken.isNotEmpty)
-          _LanguageList(
-            heading: l10n.languagesSpokenHeading,
-            languages: languages.spoken,
-            names: _names,
-          ),
-        if (languages.spoken.isNotEmpty && languages.learning.isNotEmpty)
-          const SizedBox(height: Spacing.md),
-        if (languages.learning.isNotEmpty)
-          _LanguageList(
-            heading: l10n.languagesLearningHeading,
-            languages: languages.learning,
-            names: _names,
-          ),
-      ];
+      content = [ProfileLanguageLists(languages: languages, names: _names)];
     }
 
     return Column(
@@ -178,53 +160,6 @@ class _ProfileLanguagesSectionState extends State<ProfileLanguagesSection> {
             onPressed: () => unawaited(_openEditor()),
           ),
         ],
-      ],
-    );
-  }
-}
-
-/// One of the two lists, under its heading, in the member's order.
-class _LanguageList extends StatelessWidget {
-  const _LanguageList({
-    required this.heading,
-    required this.languages,
-    required this.names,
-  });
-
-  final String heading;
-  final List<UserLanguage> languages;
-  final Map<String, String> names;
-
-  @override
-  Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context);
-    final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Semantics(
-          header: true,
-          child: Text(
-            heading,
-            style: theme.textTheme.titleSmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ),
-        const SizedBox(height: Spacing.sm),
-        Wrap(
-          spacing: Spacing.sm,
-          runSpacing: Spacing.sm,
-          children: [
-            for (final language in languages)
-              LanguageChip(
-                // A code the catalog doesn't name is shown as it is, so the
-                // member still sees every language they have (030).
-                name: names[language.code] ?? language.code,
-                level: languageLevelLabel(language.level, l10n),
-              ),
-          ],
-        ),
       ],
     );
   }

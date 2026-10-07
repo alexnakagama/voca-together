@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -10,6 +11,7 @@ import 'package:vocatogether/auth/auth_clock.dart';
 import 'package:vocatogether/auth/auth_tokens.dart';
 import 'package:vocatogether/auth/google_identity.dart';
 import 'package:vocatogether/auth/token_store.dart';
+import 'package:vocatogether/media/photo_source.dart';
 import 'package:vocatogether/session.dart';
 
 /// A well-formed access token whose body starts with [marker], so tests can
@@ -381,5 +383,35 @@ class FakeGoogleIdentity implements GoogleIdentity {
     onClear?.call();
     await clearGate?.future;
     if (clearError case final e?) throw e;
+  }
+}
+
+/// A scripted [PhotoSource]: each [pick] call takes the next scripted
+/// outcome, and an unscripted call fails the test.
+class FakePhotoSource implements PhotoSource {
+  final _script = <Future<Uint8List?> Function()>[];
+
+  /// How many times the chooser was opened.
+  int calls = 0;
+
+  /// The next call returns a photo holding [bytes].
+  void next(List<int> bytes) =>
+      _script.add(() async => Uint8List.fromList(bytes));
+
+  /// The next call returns nothing, like a chooser closed without choosing.
+  void cancel() => _script.add(() async => null);
+
+  /// The next call throws, like a photo that can't be read.
+  void fail([Object error = const PhotoSourceException()]) =>
+      _script.add(() async => throw error);
+
+  /// The next call waits for [gate], like an open chooser.
+  void wait(Completer<Uint8List?> gate) => _script.add(() => gate.future);
+
+  @override
+  Future<Uint8List?> pick() {
+    calls++;
+    if (_script.isEmpty) throw StateError('unscripted photo choice');
+    return _script.removeAt(0)();
   }
 }

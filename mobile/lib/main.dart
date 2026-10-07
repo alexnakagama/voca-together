@@ -13,6 +13,7 @@ import 'app.dart';
 import 'auth/google_identity_plugin.dart';
 import 'auth/token_store.dart';
 import 'config.dart';
+import 'media/photo_source_plugin.dart';
 import 'session.dart';
 
 /// The composition root: every long-lived object is built here and passed
@@ -50,8 +51,17 @@ void main() {
   // The token-free account calls screens may make (decision 023).
   final accountApi = AccountApi(apiClient);
 
+  // The system's photo chooser (decision 032). Nothing opens it until the
+  // member asks to.
+  final photoSource = PluginPhotoSource();
+
   runApp(
-    VocaTogetherApp(config: config, session: session, accountApi: accountApi),
+    VocaTogetherApp(
+      config: config,
+      session: session,
+      accountApi: accountApi,
+      photoSource: photoSource,
+    ),
   );
   // The splash screen shows until the stored session has been read.
   unawaited(session.restore());

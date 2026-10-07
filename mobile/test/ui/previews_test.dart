@@ -9,6 +9,8 @@ import 'package:vocatogether/ui/previews/language_chip_previews.dart';
 import 'package:vocatogether/ui/previews/language_row_previews.dart';
 import 'package:vocatogether/ui/previews/preview_support.dart';
 import 'package:vocatogether/ui/previews/primary_button_previews.dart';
+import 'package:vocatogether/ui/previews/profile_avatar_previews.dart';
+import 'package:vocatogether/ui/previews/profile_header_previews.dart';
 import 'package:vocatogether/ui/previews/secondary_button_previews.dart';
 import 'package:vocatogether/ui/widgets/app_text_field.dart';
 
@@ -84,6 +86,19 @@ void main() {
     'languageRowDisabled': (languageRowDisabled, fallback),
     'languageRowLargeText': (
       languageRowLargeText,
+      const Size(320, double.infinity),
+    ),
+    'profileAvatarInitial': (profileAvatarInitial, fallback),
+    'profileAvatarPicture': (profileAvatarPicture, fallback),
+    'profileAvatarInitials': (profileAvatarInitials, fallback),
+    'profileAvatarLargeText': (
+      profileAvatarLargeText,
+      const Size(320, double.infinity),
+    ),
+    'profileHeader': (profileHeader, fallback),
+    'profileHeaderNameOnly': (profileHeaderNameOnly, fallback),
+    'profileHeaderLargeText': (
+      profileHeaderLargeText,
       const Size(320, double.infinity),
     ),
     'authScaffoldLight': (authScaffoldLight, const Size(390, 760)),

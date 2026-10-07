@@ -14,7 +14,7 @@ final l10n = lookupAppLocalizations(const Locale('en'));
 /// The real app over fakes: the real router, `SessionManager` and
 /// `AccountApi`, talking to [server].
 final class TestApp {
-  TestApp(this.server, this.session, this.store, this.google);
+  TestApp(this.server, this.session, this.store, this.google, this.photos);
 
   final FakeServer server;
   final SessionManager session;
@@ -23,6 +23,9 @@ final class TestApp {
   /// The scripted Google side, or null when the app was pumped without
   /// Google configuration.
   final FakeGoogleIdentity? google;
+
+  /// The scripted photo chooser.
+  final FakePhotoSource photos;
 
   /// The router's current location, as a URL would show it.
   String location(WidgetTester tester) =>
@@ -34,7 +37,8 @@ final class TestApp {
 /// which loads `/v1/me`: script it first).
 ///
 /// With [google], the app has Google sign-in over that fake; without, it is
-/// a build with no Google configuration (no button).
+/// a build with no Google configuration (no button). [photos] is the photo
+/// chooser; without one, the app gets a chooser with nothing scripted.
 ///
 /// [size] sets the logical screen size, [textScale] the system font scale,
 /// [keyboard] a bottom inset like an open keyboard. With [settle] false, only
@@ -44,6 +48,7 @@ Future<TestApp> pumpApp(
   WidgetTester tester, {
   FakeServer? server,
   FakeGoogleIdentity? google,
+  FakePhotoSource? photos,
   bool signedIn = false,
   Size? size,
   double textScale = 1,
@@ -52,6 +57,7 @@ Future<TestApp> pumpApp(
   bool settle = true,
 }) async {
   final backend = server ?? FakeServer();
+  final photoSource = photos ?? FakePhotoSource();
   if (size != null || keyboard > 0) {
     tester.view.devicePixelRatio = 1;
     if (size != null) tester.view.physicalSize = size;
@@ -83,6 +89,7 @@ Future<TestApp> pumpApp(
       config: AppConfig(apiBaseUrl: Uri.parse('http://10.0.2.2:8080')),
       session: session,
       accountApi: accountApiFor(backend.client),
+      photoSource: photoSource,
     ),
   );
   if (settle) {
@@ -91,7 +98,7 @@ Future<TestApp> pumpApp(
     await tester.pump();
     await tester.pump();
   }
-  return TestApp(backend, session, store, google);
+  return TestApp(backend, session, store, google, photoSource);
 }
 
 /// The text field labelled [label].

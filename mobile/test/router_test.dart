@@ -91,6 +91,7 @@ void main() {
           config: _config,
           session: session,
           accountApi: accountApiFor(server.client),
+          photoSource: FakePhotoSource(),
         ),
       );
       await tester.pump();
@@ -199,6 +200,7 @@ void main() {
           config: _config,
           session: session,
           accountApi: accountApiFor(server.client),
+          photoSource: FakePhotoSource(),
         ),
       );
       await tester.pump();
@@ -261,6 +263,7 @@ VocaTogetherApp _app(_CountingSession session) => VocaTogetherApp(
   config: _config,
   session: session,
   accountApi: accountApiFor(session.server.client),
+  photoSource: FakePhotoSource(),
 );
 
 /// A manager over fakes, brought to [status] through restore.

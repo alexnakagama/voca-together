@@ -104,13 +104,16 @@ void main() {
           'main.dart',
         },
         'package:http/': {'api/api_client.dart', 'main.dart'},
+        // The photo chooser (032): one adapter over the plugin, built in main.
+        'media/photo_source_plugin.dart': {'main.dart'},
+        'package:image_picker': {'media/photo_source_plugin.dart'},
       };
       final violations = <String>[];
       sources.forEach((path, source) {
         for (final imported in _importsOf(path, source)) {
           for (final MapEntry(key: library, value: importers)
               in allowed.entries) {
-            final matches = library.endsWith('/')
+            final matches = library.startsWith('package:')
                 ? imported.startsWith(library)
                 : imported == library;
             if (matches && !importers.contains(path)) {
@@ -150,7 +153,9 @@ void main() {
               imported == 'main.dart' ||
               imported.startsWith('package:http/') ||
               imported.startsWith('package:flutter_secure_storage/') ||
-              imported.startsWith('package:google_sign_in');
+              imported.startsWith('package:google_sign_in') ||
+              imported.startsWith('package:image_picker') ||
+              imported == 'media/photo_source_plugin.dart';
           if (layer && !uiAllowed.contains(imported)) {
             violations.add('$path imports $imported');
           }
@@ -308,16 +313,36 @@ void main() {
     expect(sources['router.dart'], isNot(contains('googleServerClientId')));
   });
 
+  test('main passes only config, session, AccountApi and the photo source to '
+      'the widget tree', () {
+    final main = sources['main.dart']!;
+    expect(
+      RegExp(r'VocaTogetherApp\(([^)]*)\)')
+          .firstMatch(main)!
+          .group(1)!
+          .replaceAll(RegExp(r'\s'), ''),
+      'config:config,session:session,accountApi:accountApi,'
+      'photoSource:photoSource,',
+    );
+  });
+
   test(
-    'main passes only config, session and AccountApi to the widget tree',
+    'the photo adapter opens the gallery for one image and nothing else',
     () {
-      final main = sources['main.dart']!;
+      final adapter = sources['media/photo_source_plugin.dart']!;
+      // No camera, no video or mixed media, no several photos, and no recovery
+      // of a pick lost when Android killed the activity (032).
+      final forbidden = RegExp(
+        r'ImageSource\.camera|CameraDevice|pickMultiImage|pickVideo|pickMedia|'
+        r'pickMultipleMedia|pickMultiVideo|retrieveLostData|\.path\b|\.name\b',
+      );
+      expect(forbidden.allMatches(adapter).map((m) => m.group(0)), isEmpty);
+      expect(RegExp(r'\.pickImage\(').allMatches(adapter), hasLength(1));
+      expect(adapter, contains('source: ImageSource.gallery'));
+      // main builds the one source; no screen or widget names the plugin.
       expect(
-        RegExp(r'VocaTogetherApp\(([^)]*)\)')
-            .firstMatch(main)!
-            .group(1)!
-            .replaceAll(RegExp(r'\s'), ''),
-        'config:config,session:session,accountApi:accountApi',
+        'PluginPhotoSource('.allMatches(sources['main.dart']!),
+        hasLength(1),
       );
     },
   );

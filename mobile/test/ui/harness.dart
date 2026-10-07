@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vocatogether/l10n/app_localizations.dart';
@@ -60,4 +63,24 @@ double contrastRatio(Color a, Color b) {
   final lb = b.computeLuminance();
   final (hi, lo) = la > lb ? (la, lb) : (lb, la);
   return (hi + 0.05) / (lo + 0.05);
+}
+
+/// Waits until [bytes], shown by a widget already pumped, has been decoded
+/// or refused, and renders the result. Decoding is real asynchronous work,
+/// which a widget test only does inside `runAsync`.
+Future<void> pumpDecoded(WidgetTester tester, Uint8List bytes) async {
+  await tester.runAsync(() async {
+    final done = Completer<void>();
+    // The same key as the widget's image, so this joins its decode.
+    MemoryImage(bytes)
+        .resolve(ImageConfiguration.empty)
+        .addListener(
+          ImageStreamListener(
+            (_, _) => done.complete(),
+            onError: (_, _) => done.complete(),
+          ),
+        );
+    await done.future;
+  });
+  await tester.pump();
 }

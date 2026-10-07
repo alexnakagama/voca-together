@@ -1,7 +1,7 @@
 import 'package:go_router/go_router.dart';
 
 import 'api/account_api.dart';
-
+import 'media/photo_source.dart';
 import 'screens/forgot_password_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/languages_screen.dart';
@@ -56,7 +56,11 @@ String? authRedirect(SessionStatus status, Uri location) {
 ///
 /// The caller owns the router and must [GoRouter.dispose] it, which also
 /// stops it listening to [session].
-GoRouter createRouter(SessionManager session, AccountApi accountApi) {
+GoRouter createRouter(
+  SessionManager session,
+  AccountApi accountApi,
+  PhotoSource photoSource,
+) {
   return GoRouter(
     initialLocation: Routes.splash,
     refreshListenable: session,

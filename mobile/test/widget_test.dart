@@ -22,6 +22,7 @@ void main() {
         config: AppConfig(apiBaseUrl: Uri.parse('http://10.0.2.2:8080')),
         session: session,
         accountApi: accountApiFor(server.client),
+        photoSource: FakePhotoSource(),
       ),
     );
     await tester.pumpAndSettle();

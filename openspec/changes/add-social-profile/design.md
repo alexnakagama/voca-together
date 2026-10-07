@@ -260,6 +260,15 @@ the member backs out; a `PhotoSourceException` when the photo can't be read).
 - On Android 13 and later this is the system photo picker; before that, the system document chooser. Neither
   needs a manifest permission.
 - The downscale is a transfer optimisation, not a rule: the server still crops, scales and validates.
+- *As built:* with `image_picker_android` 0.8.13 as it comes, the system photo picker is used on Android 16
+  and later, and the system document chooser (`ACTION_GET_CONTENT`) on every earlier version, 13 to 15
+  included. Using the photo picker there means setting `ImagePickerAndroid.useAndroidPhotoPicker`, which needs
+  `image_picker_android` and `image_picker_platform_interface` as direct dependencies; they were not approved,
+  so the default stays. Neither chooser needs a permission: the merged manifest of a debug build declares no
+  storage, media or camera permission.
+- *As built:* `VocaTogetherApp` and `createRouter` take the source, so the harness can pass a fake; no screen
+  receives it until the edit screen has its picture control. `PluginPhotoSource` takes an optional
+  `ImagePicker`, which is how its test scripts the plugin without a platform-interface dependency.
 
 ### 15. Routes and `authRedirect`
 
@@ -285,6 +294,11 @@ returns to the opener.
 The form's fields, validation, failure handling and strings move as they are. `ProfileHeader` and
 `ProfileLanguageLists` are what `/profile` and `/members/:id` share; the page adds the Friends area, "Edit
 Profile" and the app bar action around them.
+
+*As built:* `ProfileLanguageLists` takes a loaded selection and the catalog's names and also shows the "none
+chosen" text, so the member screen gets that state from the same place. `ProfileAvatar` and `ProfileHeader`
+take the screen reader's label as a string, like every other text of a widget; with an empty name (the edit
+screen before a profile exists) the placeholder is an icon.
 
 ### 17. The profile page loads three things, each on its own
 
