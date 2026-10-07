@@ -318,6 +318,10 @@ placeholder with no message; failed languages show the section's own error and r
   no languages request; the cost is that the languages wait for the profile, so a slow connection sees the
   two spinners one after the other. While the page loads it has no control, so a newer load can never start while one is
   pending: the request id only guards the answer that arrives after the page was left.
+- *As built (group 8):* the picture is asked for only once the profile has loaded, like the languages, so a
+  member with no profile and a failed load cause no picture request. Its answer carries the load's request id:
+  one that arrives after the reload started is dropped. The picture's screen-reader label says whether there
+  is a photo.
 
 ### 18. The edit screen: what changes around the moved form (amends 028)
 
@@ -346,6 +350,18 @@ editor reports "busy" to the screen, which disables everything and holds back le
 
 - *Why not with Save:* the picture and the text are two resources and two requests. Staging both behind one
   button creates the state "the name was saved and the picture was not", with no honest way to show it.
+- *As built:* "busy" starts when the chooser opens, not when the upload is sent, so the form can't be saved or
+  left under an open chooser and a chosen photo is never dropped. While the picture loads the control shows a
+  labelled spinner and no button: whether there is a picture decides what is offered, and it means no action
+  can race the load. A picture that fails to load shows the placeholder and "Add photo", with no message. The
+  placeholder's initial comes from the stored name, not from what is being typed. The removal question uses
+  the scrolling layout of the discard dialog. A photo the device can't give is a new `FailureKind`,
+  `photoUnusable`, mapped in `presentFailure` from `PhotoSourceException`, so the control has one path for
+  every message.
+- *As built, tests:* the screen tests have no "200 that is not `image/jpeg`" case, on purpose. Under the
+  widget tests' fake clock, `ApiClient`'s discard of that body never completes over `MockClient`, so the
+  request hangs until its timeout; it is an artifact of the test clock. The case is covered at the transport,
+  in `test/api/api_client_test.dart`.
 
 ### 20. The member screen
 

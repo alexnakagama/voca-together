@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,14 +8,17 @@ import 'package:http/http.dart' as http;
 import 'package:vocatogether/api/api_paths.dart';
 import 'package:vocatogether/screens/languages_screen.dart';
 import 'package:vocatogether/screens/login_screen.dart';
+import 'package:vocatogether/screens/profile_avatar_editor.dart';
 import 'package:vocatogether/screens/profile_edit_screen.dart';
 import 'package:vocatogether/screens/profile_screen.dart';
 import 'package:vocatogether/session.dart';
 import 'package:vocatogether/ui/widgets/form_error_banner.dart';
 import 'package:vocatogether/ui/widgets/primary_button.dart';
+import 'package:vocatogether/ui/widgets/profile_avatar.dart';
 import 'package:vocatogether/ui/widgets/secondary_button.dart';
 
 import '../support/fakes.dart';
+import '../support/pictures.dart';
 import 'harness.dart';
 
 Finder get _openProfile =>
@@ -36,6 +40,36 @@ Finder get _bio => field(l10n.bioLabel);
 Finder get _dialog => find.byType(AlertDialog);
 Finder get _editor => find.byType(LanguagesScreen);
 
+Finder get _picture => find.byType(ProfileAvatarEditor);
+Finder get _add =>
+    find.widgetWithText(OutlinedButton, l10n.profileAvatarAddButton);
+Finder get _change =>
+    find.widgetWithText(OutlinedButton, l10n.profileAvatarChangeButton);
+Finder get _remove =>
+    find.widgetWithText(OutlinedButton, l10n.profileAvatarRemoveButton);
+Finder get _pictureError =>
+    find.descendant(of: _picture, matching: find.byType(FormErrorBanner));
+
+/// The picture the control shows, or null for the placeholder.
+Uint8List? _shown(WidgetTester tester) => tester
+    .widget<ProfileAvatar>(
+      find.descendant(of: _picture, matching: find.byType(ProfileAvatar)),
+    )
+    .image;
+
+/// The picture control's button labelled [label], as the control built it.
+SecondaryButton _pictureButton(WidgetTester tester, String label) =>
+    tester.widget<SecondaryButton>(
+      find.descendant(
+        of: _picture,
+        matching: find.widgetWithText(SecondaryButton, label),
+      ),
+    );
+
+/// A photo as a device might give it. Nothing in the app reads it, so it
+/// need not be an image.
+final _photo = Uint8List.fromList([0x89, 0x50, 0x4E, 0x47, 1, 2, 3, 4, 5]);
+
 String _text(WidgetTester tester, Finder f) =>
     textFieldOf(tester, f).controller!.text;
 
@@ -50,6 +84,8 @@ FakeServer _backend() => FakeServer()
     (_) => jsonResponse(200, languagesBody()),
   )
   ..always('GET', ApiPaths.me, (_) => jsonResponse(200, meBody()))
+  // No picture, unless a test scripts one.
+  ..always('GET', ApiPaths.myAvatar, (_) => noAvatar())
   ..always('GET', ApiPaths.healthz, (_) => healthy())
   ..always('POST', ApiPaths.logout, (_) => noContent());
 
@@ -77,6 +113,16 @@ http.Response _validation(List<(String, String)> fields) => jsonResponse(422, {
 List<http.Request> _puts(FakeServer server) => [
   for (final request in server.to(ApiPaths.profile))
     if (request.method == 'PUT') request,
+];
+
+/// The member has this picture stored: every unscripted read answers it.
+void _hasPicture(FakeServer server) =>
+    server.always('GET', ApiPaths.myAvatar, (_) => imageResponse(testPicture));
+
+/// The uploads and the removals sent, in order.
+List<http.Request> _pictureWrites(FakeServer server) => [
+  for (final request in server.to(ApiPaths.myAvatar))
+    if (request.method != 'GET') request,
 ];
 
 /// Signs in on home and opens the profile page, whose load must be
@@ -930,6 +976,1041 @@ void main() {
         expect(put.body, isNot(contains('spoken')));
         expect(put.body, isNot(contains('learning')));
       }
+    });
+  });
+
+  group('the picture control', () {
+    testWidgets('with a picture: shown, with "Change photo" and "Remove '
+        'photo"', (tester) async {
+      final server = _backend();
+      _hasPicture(server);
+      final handle = tester.ensureSemantics();
+      await _openSaved(tester, server);
+
+      expect(_shown(tester), testPicture);
+      expect(_change, findsOneWidget);
+      expect(_remove, findsOneWidget);
+      expect(_add, findsNothing);
+      expect(_pictureError, findsNothing);
+      expect(
+        tester.getSemantics(
+          find.descendant(of: _picture, matching: find.byType(ProfileAvatar)),
+        ),
+        isSemantics(isImage: true, label: l10n.profileAvatarLabel),
+      );
+      handle.dispose();
+    });
+
+    testWidgets('without a picture: the placeholder with "Add photo", and no '
+        '"Remove photo"', (tester) async {
+      final server = _backend();
+      final handle = tester.ensureSemantics();
+      await _openSaved(tester, server);
+
+      expect(_shown(tester), isNull);
+      expect(
+        find.descendant(of: _picture, matching: find.text('A')),
+        findsOneWidget,
+      );
+      expect(_add, findsOneWidget);
+      expect(_change, findsNothing);
+      expect(_remove, findsNothing);
+      expect(
+        tester.getSemantics(
+          find.descendant(of: _picture, matching: find.byType(ProfileAvatar)),
+        ),
+        isSemantics(isImage: true, label: l10n.profileAvatarPlaceholderLabel),
+      );
+      handle.dispose();
+    });
+
+    testWidgets('before a profile exists the control is there', (tester) async {
+      final server = _backend();
+      await _openEmpty(tester, server);
+
+      expect(_add, findsOneWidget);
+      expect(
+        _pictureButton(tester, l10n.profileAvatarAddButton).onPressed,
+        isNotNull,
+      );
+      // No name yet, so no initial.
+      expect(
+        find.descendant(of: _picture, matching: find.byIcon(Icons.person)),
+        findsOneWidget,
+      );
+      // The page asked for nothing: nothing is shown of a member with no
+      // profile. The form asked once.
+      expect(server.count(ApiPaths.myAvatar), 1);
+    });
+
+    testWidgets('the placeholder\'s initial is the stored name\'s, not the '
+        'typed one', (tester) async {
+      final server = _backend();
+      await _openSaved(tester, server);
+      await tester.enterText(_name, 'Zoe');
+      await tester.pumpAndSettle();
+
+      expect(
+        find.descendant(of: _picture, matching: find.text('A')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('it loads on its own: a labelled spinner, and the form can '
+        'be edited and saved meanwhile', (tester) async {
+      final reply = Completer<http.Response>();
+      final server = _backend();
+      _stored(server);
+      await _openPage(tester, server);
+      server
+        ..once('GET', ApiPaths.myAvatar, (_) => reply.future)
+        ..once(
+          'PUT',
+          ApiPaths.profile,
+          (_) => jsonResponse(200, profileBody(displayName: 'Ana María')),
+        );
+      await _openForm(tester, settle: false);
+
+      expect(
+        find.descendant(
+          of: _picture,
+          matching: find.bySemanticsLabel(l10n.profileAvatarLoading),
+        ),
+        findsOneWidget,
+      );
+      // What is offered depends on the answer.
+      expect(_add, findsNothing);
+      expect(_change, findsNothing);
+      expect(_remove, findsNothing);
+      expect(textFieldOf(tester, _name).enabled, isTrue);
+      expect(textFieldOf(tester, _bio).enabled, isTrue);
+
+      await tester.enterText(_name, 'Ana María');
+      await tester.ensureVisible(_save);
+      await tester.pump();
+      await tester.tap(_save);
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(_puts(server), hasLength(1));
+      expect(_form, findsNothing);
+
+      // Answered after the form was left: dropped.
+      reply.complete(imageResponse(testPicture));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(_page, findsOneWidget);
+    });
+
+    group('a picture that fails to load is the placeholder, with the way to '
+        'choose one', () {
+      final cases = <String, Responder>{
+        'network': networkFailure,
+        '500': (_) => errorResponse(500, 'internal_error'),
+        '429': (_) => errorResponse(429, 'rate_limited'),
+        'a 404 without the code': (_) => http.Response('Not Found', 404),
+        'a body with text of its own': (_) => http.Response(
+          '{"error":{"code":"internal_error","message":"SERVERTEXT"}}',
+          500,
+          headers: {'content-type': 'application/json'},
+        ),
+      };
+      cases.forEach((name, responder) {
+        testWidgets(name, (tester) async {
+          final server = _backend();
+          _stored(server);
+          await _openPage(tester, server);
+          server
+            ..once('GET', ApiPaths.myAvatar, responder)
+            ..once(
+              'PUT',
+              ApiPaths.profile,
+              (_) => jsonResponse(200, profileBody(displayName: 'Ana María')),
+            );
+          await _openForm(tester);
+
+          expect(_shown(tester), isNull);
+          expect(_add, findsOneWidget);
+          expect(_remove, findsNothing);
+          expect(find.byType(FormErrorBanner), findsNothing);
+          expect(find.textContaining('SERVERTEXT'), findsNothing);
+          // Nothing retried it.
+          expect(server.count(ApiPaths.myAvatar), 2);
+
+          // The form is as usable as ever.
+          await tester.enterText(_name, 'Ana María');
+          await tapAndSettle(tester, _save);
+          expect(_puts(server), hasLength(1));
+          expect(_form, findsNothing);
+          expect(_page, findsOneWidget);
+        });
+      });
+    });
+
+    testWidgets('a form that failed to load shows no picture control and '
+        'asks for no picture', (tester) async {
+      final server = _backend();
+      _stored(server);
+      await _openPage(tester, server);
+      final asked = server.count(ApiPaths.myAvatar);
+      server.once('GET', ApiPaths.profile, networkFailure);
+      await _openForm(tester);
+
+      expect(_retry, findsOneWidget);
+      expect(_picture, findsNothing);
+      expect(server.count(ApiPaths.myAvatar), asked);
+    });
+
+    testWidgets('a session that ends while the picture loads shows no error', (
+      tester,
+    ) async {
+      final server = _backend();
+      _stored(server);
+      final app = await _openPage(tester, server);
+      server
+        ..once(
+          'GET',
+          ApiPaths.myAvatar,
+          (_) => errorResponse(401, 'invalid_access_token'),
+        )
+        ..once(
+          'POST',
+          ApiPaths.refresh,
+          (_) => errorResponse(401, 'invalid_refresh_token'),
+        );
+      final edit = _editProfile;
+      await tester.ensureVisible(edit);
+      await tester.pumpAndSettle();
+      await tester.tap(edit);
+      await tester.pumpAndSettle();
+
+      expect(app.session.status, SessionStatus.signedOut);
+      expect(find.byType(LoginScreen), findsOneWidget);
+      expect(_form, findsNothing);
+      expect(find.byType(FormErrorBanner), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('choosing a picture', () {
+    testWidgets('uploads the photo as the device gave it, at once, and shows '
+        'what the server stored', (tester) async {
+      final server = _backend();
+      final app = await _openSaved(tester, server, bio: 'Hi');
+      app.photos.next(_photo);
+      server.once('PUT', ApiPaths.myAvatar, (_) => imageResponse(testPicture));
+      await tester.enterText(_name, 'Ana María');
+      await tester.pumpAndSettle();
+
+      await tapAndSettle(tester, _add);
+
+      expect(app.photos.calls, 1);
+      final upload = _pictureWrites(server).single;
+      expect(upload.method, 'PUT');
+      expect(upload.url.path, ApiPaths.myAvatar);
+      expect(upload.url.hasQuery, isFalse);
+      expect(upload.bodyBytes, _photo);
+      expect(upload.headers['content-type'], 'application/octet-stream');
+      // The stored picture, not the photo that was sent.
+      expect(_shown(tester), testPicture);
+      expect(_change, findsOneWidget);
+      expect(_remove, findsOneWidget);
+      expect(_add, findsNothing);
+      expect(_pictureError, findsNothing);
+      // Apart from Save: the text is as typed and was sent nowhere.
+      expect(_puts(server), isEmpty);
+      expect(_text(tester, _name), 'Ana María');
+      expect(_text(tester, _bio), 'Hi');
+      expect(_form, findsOneWidget);
+      expect(app.location(tester), '/profile/edit');
+      // Nothing asked for the picture again.
+      expect(server.count(ApiPaths.myAvatar), 3);
+    });
+
+    testWidgets('"Change photo" replaces the picture', (tester) async {
+      final stored = Uint8List.fromList([...testPicture, 0]);
+      final server = _backend();
+      _hasPicture(server);
+      final app = await _openSaved(tester, server);
+      app.photos.next(_photo);
+      server.once('PUT', ApiPaths.myAvatar, (_) => imageResponse(stored));
+
+      await tapAndSettle(tester, _change);
+
+      expect(_pictureWrites(server).single.bodyBytes, _photo);
+      expect(_shown(tester), stored);
+      expect(_change, findsOneWidget);
+      expect(_remove, findsOneWidget);
+    });
+
+    testWidgets('the app applies no rule of its own: an empty photo is sent', (
+      tester,
+    ) async {
+      final server = _backend();
+      final app = await _openSaved(tester, server);
+      app.photos.next(const []);
+      server.once(
+        'PUT',
+        ApiPaths.myAvatar,
+        (_) => _validation([('avatar', 'required')]),
+      );
+
+      await tapAndSettle(tester, _add);
+
+      expect(_pictureWrites(server).single.bodyBytes, isEmpty);
+      expect(
+        find.descendant(
+          of: _pictureError,
+          matching: find.text(l10n.errorAvatarRequired),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('closing the chooser without choosing sends nothing and '
+        'changes nothing', (tester) async {
+      final server = _backend();
+      _hasPicture(server);
+      final app = await _openSaved(tester, server);
+      app.photos.cancel();
+
+      await tapAndSettle(tester, _change);
+
+      expect(app.photos.calls, 1);
+      expect(_pictureWrites(server), isEmpty);
+      expect(_shown(tester), testPicture);
+      expect(_pictureError, findsNothing);
+      // Everything is available again.
+      expect(
+        _pictureButton(tester, l10n.profileAvatarChangeButton).onPressed,
+        isNotNull,
+      );
+      expect(
+        _pictureButton(tester, l10n.profileAvatarRemoveButton).onPressed,
+        isNotNull,
+      );
+      expect(textFieldOf(tester, _name).enabled, isTrue);
+    });
+
+    for (final MapEntry(key: name, value: leave) in _waysOut.entries) {
+      testWidgets('after only a new picture, $name leaves with no question', (
+        tester,
+      ) async {
+        final server = _backend();
+        final app = await _openSaved(tester, server);
+        app.photos.next(_photo);
+        server.once(
+          'PUT',
+          ApiPaths.myAvatar,
+          (_) => imageResponse(testPicture),
+        );
+        await tapAndSettle(tester, _add);
+        _hasPicture(server);
+
+        await leave(tester);
+
+        expect(_dialog, findsNothing);
+        expect(_form, findsNothing);
+        expect(_page, findsOneWidget);
+        expect(_puts(server), isEmpty);
+      });
+    }
+
+    testWidgets('a new picture with typed text still asks about the text', (
+      tester,
+    ) async {
+      final server = _backend();
+      final app = await _openSaved(tester, server);
+      app.photos.next(_photo);
+      server.once('PUT', ApiPaths.myAvatar, (_) => imageResponse(testPicture));
+      await tester.enterText(_name, 'Ana María');
+      await tapAndSettle(tester, _add);
+
+      await tapAndSettle(tester, _cancel);
+
+      expect(_dialog, findsOneWidget);
+      expect(find.text(l10n.profileDiscardMessage), findsOneWidget);
+    });
+  });
+
+  group('removing the picture', () {
+    testWidgets('asks first, then removes it at once', (tester) async {
+      final server = _backend();
+      _hasPicture(server);
+      await _openSaved(tester, server);
+      server.once('DELETE', ApiPaths.myAvatar, (_) => noContent());
+      await tester.enterText(_name, 'Ana María');
+      await tester.pumpAndSettle();
+
+      await tapAndSettle(tester, _remove);
+      expect(_dialog, findsOneWidget);
+      expect(find.text(l10n.profileAvatarRemoveTitle), findsOneWidget);
+      expect(find.text(l10n.profileAvatarRemoveMessage), findsOneWidget);
+      // Nothing is sent before the answer.
+      expect(_pictureWrites(server), isEmpty);
+
+      await tapAndSettle(tester, find.text(l10n.profileAvatarRemoveConfirm));
+
+      expect(_dialog, findsNothing);
+      final removal = _pictureWrites(server).single;
+      expect(removal.method, 'DELETE');
+      expect(removal.url.path, ApiPaths.myAvatar);
+      expect(removal.url.hasQuery, isFalse);
+      expect(removal.bodyBytes, isEmpty);
+      expect(_shown(tester), isNull);
+      expect(_add, findsOneWidget);
+      expect(_change, findsNothing);
+      expect(_remove, findsNothing);
+      expect(_pictureError, findsNothing);
+      expect(_puts(server), isEmpty);
+      expect(_text(tester, _name), 'Ana María');
+      expect(_form, findsOneWidget);
+    });
+
+    final refusals = <String, Future<void> Function(WidgetTester)>{
+      '"Keep photo"': (tester) =>
+          tapAndSettle(tester, find.text(l10n.profileAvatarRemoveKeep)),
+      'a tap outside the question': (tester) async {
+        await tester.tapAt(const Offset(4, 4));
+        await tester.pumpAndSettle();
+      },
+      'the system\'s back': _systemBack,
+    };
+    refusals.forEach((name, refuse) {
+      testWidgets('$name sends nothing and keeps the picture', (tester) async {
+        final server = _backend();
+        _hasPicture(server);
+        await _openSaved(tester, server);
+
+        await tapAndSettle(tester, _remove);
+        expect(_dialog, findsOneWidget);
+        await refuse(tester);
+
+        expect(_dialog, findsNothing);
+        expect(_form, findsOneWidget);
+        expect(_pictureWrites(server), isEmpty);
+        expect(_shown(tester), testPicture);
+        expect(_remove, findsOneWidget);
+        expect(
+          _pictureButton(tester, l10n.profileAvatarRemoveButton).onPressed,
+          isNotNull,
+        );
+      });
+    });
+
+    testWidgets('after only a removal, leaving asks nothing', (tester) async {
+      final server = _backend();
+      _hasPicture(server);
+      await _openSaved(tester, server);
+      server
+        ..once('DELETE', ApiPaths.myAvatar, (_) => noContent())
+        ..always('GET', ApiPaths.myAvatar, (_) => noAvatar());
+      await tapAndSettle(tester, _remove);
+      await tapAndSettle(tester, find.text(l10n.profileAvatarRemoveConfirm));
+
+      await tapAndSettle(tester, _cancel);
+
+      expect(_dialog, findsNothing);
+      expect(_form, findsNothing);
+      expect(_page, findsOneWidget);
+    });
+
+    testWidgets('the session ending with the question open: log in, and '
+        'nothing removed', (tester) async {
+      final server = _backend();
+      _hasPicture(server);
+      final app = await _openSaved(tester, server);
+      await tapAndSettle(tester, _remove);
+      expect(_dialog, findsOneWidget);
+
+      await app.session.logout();
+      await tester.pumpAndSettle();
+
+      expect(app.location(tester), '/login');
+      expect(find.byType(LoginScreen), findsOneWidget);
+      expect(_dialog, findsNothing);
+      expect(_form, findsNothing);
+      expect(_pictureWrites(server), isEmpty);
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('picture failures', () {
+    /// A member with a picture, on the form, about to upload [_photo].
+    Future<TestApp> aboutToUpload(
+      WidgetTester tester,
+      FakeServer server,
+    ) async {
+      _hasPicture(server);
+      final app = await _openSaved(tester, server);
+      app.photos.next(_photo);
+      return app;
+    }
+
+    /// The control shows [message] and nothing else of the failure, the
+    /// earlier picture is still there, and the form saves.
+    Future<void> expectFailed(
+      WidgetTester tester,
+      FakeServer server,
+      String message,
+    ) async {
+      expect(
+        find.descendant(of: _pictureError, matching: find.text(message)),
+        findsOneWidget,
+      );
+      // By the control, and the only message on the screen.
+      expect(find.byType(FormErrorBanner), findsOneWidget);
+      expect(find.textContaining('SERVERTEXT'), findsNothing);
+      expect(_shown(tester), testPicture);
+      expect(_change, findsOneWidget);
+      expect(_remove, findsOneWidget);
+      expect(_form, findsOneWidget);
+      // Nothing was retried on its own.
+      expect(_pictureWrites(server), hasLength(1));
+      // The failure blocks nothing of the form.
+      expect(textFieldOf(tester, _name).enabled, isTrue);
+      expect(
+        _pictureButton(tester, l10n.profileAvatarChangeButton).onPressed,
+        isNotNull,
+      );
+      server.once(
+        'PUT',
+        ApiPaths.profile,
+        (_) => jsonResponse(200, profileBody(displayName: 'Ana María')),
+      );
+      await tester.enterText(_name, 'Ana María');
+      await tapAndSettle(tester, _save);
+      expect(_puts(server), hasLength(1));
+      expect(_form, findsNothing);
+      expect(_page, findsOneWidget);
+    }
+
+    group('a photo the server refuses says why', () {
+      final codes = <String, String>{
+        'required': l10n.errorAvatarRequired,
+        'too_large': l10n.errorAvatarTooLarge,
+        'unsupported_type': l10n.errorAvatarUnsupportedType,
+        'invalid_image': l10n.errorAvatarInvalidImage,
+        'dimensions_too_large': l10n.errorAvatarDimensionsTooLarge,
+      };
+      codes.forEach((code, message) {
+        testWidgets(code, (tester) async {
+          final server = _backend();
+          await aboutToUpload(tester, server);
+          server.once(
+            'PUT',
+            ApiPaths.myAvatar,
+            (_) => _validation([('avatar', code)]),
+          );
+
+          await tapAndSettle(tester, _change);
+
+          await expectFailed(tester, server, message);
+        });
+      });
+
+      testWidgets('a code this app doesn\'t know gets the general text', (
+        tester,
+      ) async {
+        final server = _backend();
+        await aboutToUpload(tester, server);
+        server.once(
+          'PUT',
+          ApiPaths.myAvatar,
+          (_) => _validation([('avatar', 'too_blurry')]),
+        );
+
+        await tapAndSettle(tester, _change);
+
+        await expectFailed(tester, server, l10n.errorCheckInput);
+      });
+    });
+
+    group('an upload that fails otherwise can be tried again', () {
+      final cases = <String, (Responder, String)>{
+        '429 with a wait': (
+          (_) =>
+              errorResponse(429, 'rate_limited', headers: {'retry-after': '6'}),
+          'Too many attempts. Try again in 6 seconds.',
+        ),
+        '429 without a wait': (
+          (_) => errorResponse(429, 'rate_limited'),
+          l10n.errorRateLimitedNoWait,
+        ),
+        '503 with a wait': (
+          (_) => errorResponse(
+            503,
+            'service_unavailable',
+            headers: {'retry-after': '5'},
+          ),
+          'VocaTogether is busy right now. Try again in 5 seconds.',
+        ),
+        '503 without a wait': (
+          (_) => errorResponse(503, 'service_unavailable'),
+          l10n.errorUnavailableNoWait,
+        ),
+        'network': (networkFailure, l10n.errorNetwork),
+        // The server's answer to an upload cut short: nothing about the
+        // photo, so nothing that tells the member to choose another.
+        '400 invalid_request': (
+          (_) => errorResponse(400, 'invalid_request'),
+          l10n.errorUnexpected,
+        ),
+        '500': (
+          (_) => errorResponse(500, 'internal_error'),
+          l10n.errorUnexpected,
+        ),
+        'a body with text of its own': (
+          (_) => http.Response(
+            '{"error":{"code":"validation_failed","message":"SERVERTEXT",'
+            '"fields":[{"field":"avatar","code":"too_large",'
+            '"message":"SERVERTEXT"}]}}',
+            422,
+            headers: {'content-type': 'application/json'},
+          ),
+          l10n.errorAvatarTooLarge,
+        ),
+      };
+      cases.forEach((name, c) {
+        final (responder, message) = c;
+        testWidgets(name, (tester) async {
+          final server = _backend();
+          await aboutToUpload(tester, server);
+          server.once('PUT', ApiPaths.myAvatar, responder);
+
+          await tapAndSettle(tester, _change);
+
+          await expectFailed(tester, server, message);
+        });
+      });
+
+      testWidgets('no answer in time', (tester) async {
+        final server = _backend();
+        await aboutToUpload(tester, server);
+        server.once('PUT', ApiPaths.myAvatar, neverAnswers);
+
+        await tester.ensureVisible(_change);
+        await tester.pumpAndSettle();
+        await tester.tap(_change);
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 16));
+        await tester.pumpAndSettle();
+
+        await expectFailed(tester, server, l10n.errorTimeout);
+      });
+
+      testWidgets('a 400 is not shown as a refusal of the photo', (
+        tester,
+      ) async {
+        final server = _backend();
+        await aboutToUpload(tester, server);
+        server.once(
+          'PUT',
+          ApiPaths.myAvatar,
+          (_) => errorResponse(400, 'invalid_request'),
+        );
+
+        await tapAndSettle(tester, _change);
+
+        for (final refusal in [
+          l10n.errorAvatarRequired,
+          l10n.errorAvatarTooLarge,
+          l10n.errorAvatarUnsupportedType,
+          l10n.errorAvatarInvalidImage,
+          l10n.errorAvatarDimensionsTooLarge,
+          l10n.errorPhotoUnusable,
+          l10n.errorCheckInput,
+        ]) {
+          expect(find.text(refusal), findsNothing);
+        }
+        expect(
+          find.descendant(
+            of: _pictureError,
+            matching: find.text(l10n.errorUnexpected),
+          ),
+          findsOneWidget,
+        );
+      });
+    });
+
+    group('a removal that fails keeps the picture', () {
+      final cases = <String, (Responder, String)>{
+        '429': (
+          (_) =>
+              errorResponse(429, 'rate_limited', headers: {'retry-after': '6'}),
+          'Too many attempts. Try again in 6 seconds.',
+        ),
+        '503': (
+          (_) => errorResponse(503, 'service_unavailable'),
+          l10n.errorUnavailableNoWait,
+        ),
+        'network': (networkFailure, l10n.errorNetwork),
+        'a body with text of its own': (
+          (_) => http.Response(
+            '{"error":{"code":"internal_error","message":"SERVERTEXT"}}',
+            500,
+            headers: {'content-type': 'application/json'},
+          ),
+          l10n.errorUnexpected,
+        ),
+      };
+      cases.forEach((name, c) {
+        final (responder, message) = c;
+        testWidgets(name, (tester) async {
+          final server = _backend();
+          _hasPicture(server);
+          await _openSaved(tester, server);
+          server.once('DELETE', ApiPaths.myAvatar, responder);
+
+          await tapAndSettle(tester, _remove);
+          await tapAndSettle(
+            tester,
+            find.text(l10n.profileAvatarRemoveConfirm),
+          );
+
+          await expectFailed(tester, server, message);
+        });
+      });
+
+      testWidgets('no answer in time', (tester) async {
+        final server = _backend();
+        _hasPicture(server);
+        await _openSaved(tester, server);
+        server.once('DELETE', ApiPaths.myAvatar, neverAnswers);
+
+        await tapAndSettle(tester, _remove);
+        await tester.tap(find.text(l10n.profileAvatarRemoveConfirm));
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 16));
+        await tester.pumpAndSettle();
+
+        await expectFailed(tester, server, l10n.errorTimeout);
+      });
+    });
+
+    testWidgets('a photo that can\'t be read says so and sends nothing', (
+      tester,
+    ) async {
+      final server = _backend();
+      _hasPicture(server);
+      final app = await _openSaved(tester, server);
+      app.photos.fail();
+
+      await tapAndSettle(tester, _change);
+
+      expect(
+        find.descendant(
+          of: _pictureError,
+          matching: find.text(l10n.errorPhotoUnusable),
+        ),
+        findsOneWidget,
+      );
+      expect(_pictureWrites(server), isEmpty);
+      expect(_shown(tester), testPicture);
+      expect(textFieldOf(tester, _name).enabled, isTrue);
+      expect(
+        _pictureButton(tester, l10n.profileAvatarChangeButton).onPressed,
+        isNotNull,
+      );
+    });
+
+    testWidgets('the next picture action clears the message', (tester) async {
+      final server = _backend();
+      final app = await _openSaved(tester, server);
+      app.photos
+        ..fail()
+        ..cancel()
+        ..next(_photo)
+        ..next(_photo);
+      server
+        ..once('PUT', ApiPaths.myAvatar, networkFailure)
+        ..once('PUT', ApiPaths.myAvatar, (_) => imageResponse(testPicture))
+        ..once('DELETE', ApiPaths.myAvatar, networkFailure);
+
+      await tapAndSettle(tester, _add);
+      expect(_pictureError, findsOneWidget);
+      // Opening the chooser is an action, also when nothing is chosen.
+      await tapAndSettle(tester, _add);
+      expect(_pictureError, findsNothing);
+
+      await tapAndSettle(tester, _add);
+      expect(find.text(l10n.errorNetwork), findsOneWidget);
+      // The retry sends the photo again, which is safe (031).
+      await tapAndSettle(tester, _add);
+      expect(_pictureError, findsNothing);
+      expect(_shown(tester), testPicture);
+      expect(_pictureWrites(server), hasLength(2));
+
+      await tapAndSettle(tester, _remove);
+      await tapAndSettle(tester, find.text(l10n.profileAvatarRemoveConfirm));
+      expect(find.text(l10n.errorNetwork), findsOneWidget);
+      // Asking again is an action too, also when it is then refused.
+      await tapAndSettle(tester, _remove);
+      await tapAndSettle(tester, find.text(l10n.profileAvatarRemoveKeep));
+      expect(_pictureError, findsNothing);
+      expect(_shown(tester), testPicture);
+    });
+
+    testWidgets('a picture failure and a save failure each show their own '
+        'message', (tester) async {
+      final server = _backend();
+      await aboutToUpload(tester, server);
+      server
+        ..once('PUT', ApiPaths.myAvatar, networkFailure)
+        ..once('PUT', ApiPaths.profile, (_) => errorResponse(503, 'x'));
+      await tapAndSettle(tester, _change);
+      await tapAndSettle(tester, _save);
+
+      expect(find.byType(FormErrorBanner), findsNWidgets(2));
+      expect(
+        find.descendant(
+          of: _pictureError,
+          matching: find.text(l10n.errorNetwork),
+        ),
+        findsOneWidget,
+      );
+      expect(find.text(l10n.errorUnavailableNoWait), findsOneWidget);
+    });
+
+    for (final write in ['an upload', 'a removal']) {
+      testWidgets('a session that ends during $write leaves for log in, with '
+          'no error', (tester) async {
+        final server = _backend();
+        final app = await aboutToUpload(tester, server);
+        server
+          ..once(
+            write == 'an upload' ? 'PUT' : 'DELETE',
+            ApiPaths.myAvatar,
+            (_) => errorResponse(401, 'invalid_access_token'),
+          )
+          ..once(
+            'POST',
+            ApiPaths.refresh,
+            (_) => errorResponse(401, 'invalid_refresh_token'),
+          );
+
+        if (write == 'an upload') {
+          await tapAndSettle(tester, _change);
+        } else {
+          await tapAndSettle(tester, _remove);
+          await tapAndSettle(
+            tester,
+            find.text(l10n.profileAvatarRemoveConfirm),
+          );
+        }
+
+        expect(app.session.status, SessionStatus.signedOut);
+        expect(find.byType(LoginScreen), findsOneWidget);
+        expect(_form, findsNothing);
+        expect(_page, findsNothing);
+        expect(find.byType(FormErrorBanner), findsNothing);
+        expect(_pictureWrites(server), hasLength(1));
+        expect(tester.takeException(), isNull);
+      });
+    }
+  });
+
+  group('a picture action in flight', () {
+    /// Every control of the screen is off, and [working] shows it is busy.
+    void expectLocked(WidgetTester tester, String working) {
+      expect(textFieldOf(tester, _name).enabled, isFalse);
+      expect(textFieldOf(tester, _bio).enabled, isFalse);
+      expect(tester.widget<ListTile>(_languages).enabled, isFalse);
+      expect(
+        tester.widget<PrimaryButton>(find.byType(PrimaryButton)).onPressed,
+        isNull,
+      );
+      // Save isn't what is working.
+      expect(
+        tester.widget<PrimaryButton>(find.byType(PrimaryButton)).busy,
+        isFalse,
+      );
+      for (final button in tester.widgetList<SecondaryButton>(
+        find.byType(SecondaryButton),
+      )) {
+        expect(button.onPressed, isNull, reason: button.label);
+        expect(button.busy, button.label == working, reason: button.label);
+      }
+    }
+
+    /// Nothing leaves, asks, opens or sends while the action runs.
+    Future<void> expectHeld(WidgetTester tester, TestApp app) async {
+      await tester.tap(_save, warnIfMissed: false);
+      await tester.pump();
+      await tester.tap(_languages, warnIfMissed: false);
+      await tester.pump();
+      await tester.tap(_cancel, warnIfMissed: false);
+      await tester.pump();
+      await tester.binding.handlePopRoute();
+      await tester.pump();
+      await tester.pageBack();
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(_form, findsOneWidget);
+      expect(_dialog, findsNothing);
+      expect(_editor, findsNothing);
+      expect(_puts(app.server), isEmpty);
+      expect(app.location(tester), '/profile/edit');
+    }
+
+    testWidgets('an upload that hasn\'t answered: everything is locked, back '
+        'does nothing, and a second tap sends nothing', (tester) async {
+      final reply = Completer<http.Response>();
+      final server = _backend();
+      _hasPicture(server);
+      final app = await _openSaved(tester, server);
+      app.photos.next(_photo);
+      server.once('PUT', ApiPaths.myAvatar, (_) => reply.future);
+      await tester.pumpAndSettle();
+
+      await tester.ensureVisible(_change);
+      await tester.pumpAndSettle();
+      // Twice before a frame: the second finds the action started.
+      await tester.tap(_change);
+      await tester.tap(_change, warnIfMissed: false);
+      await tester.pump();
+      await tester.pump();
+
+      expectLocked(tester, l10n.profileAvatarChangeButton);
+      await tester.tap(_change, warnIfMissed: false);
+      await tester.tap(_remove, warnIfMissed: false);
+      await tester.pump();
+      await expectHeld(tester, app);
+      expect(app.photos.calls, 1);
+      expect(_pictureWrites(server), hasLength(1));
+      // The earlier picture until the answer.
+      expect(_shown(tester), testPicture);
+
+      final stored = Uint8List.fromList([...testPicture, 0]);
+      reply.complete(imageResponse(stored));
+      await tester.pumpAndSettle();
+      expect(_shown(tester), stored);
+      expect(_pictureWrites(server), hasLength(1));
+      expect(textFieldOf(tester, _name).enabled, isTrue);
+      expect(
+        tester.widget<PrimaryButton>(find.byType(PrimaryButton)).onPressed,
+        isNotNull,
+      );
+      expect(
+        _pictureButton(tester, l10n.profileAvatarChangeButton).busy,
+        isFalse,
+      );
+      // And leaving works again.
+      await tapAndSettle(tester, _cancel);
+      expect(_form, findsNothing);
+    });
+
+    testWidgets('a removal that hasn\'t answered locks the screen the same '
+        'way', (tester) async {
+      final reply = Completer<http.Response>();
+      final server = _backend();
+      _hasPicture(server);
+      final app = await _openSaved(tester, server);
+      server.once('DELETE', ApiPaths.myAvatar, (_) => reply.future);
+
+      await tapAndSettle(tester, _remove);
+      await tester.tap(find.text(l10n.profileAvatarRemoveConfirm));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(_dialog, findsNothing);
+      expectLocked(tester, l10n.profileAvatarRemoveButton);
+      await tester.tap(_remove, warnIfMissed: false);
+      await tester.tap(_change, warnIfMissed: false);
+      await tester.pump();
+      await expectHeld(tester, app);
+      expect(app.photos.calls, 0);
+      expect(_pictureWrites(server), hasLength(1));
+      expect(_shown(tester), testPicture);
+
+      reply.complete(noContent());
+      await tester.pumpAndSettle();
+      expect(_shown(tester), isNull);
+      expect(_add, findsOneWidget);
+      expect(textFieldOf(tester, _name).enabled, isTrue);
+    });
+
+    testWidgets('while the chooser is open the screen is held too', (
+      tester,
+    ) async {
+      final chooser = Completer<Uint8List?>();
+      final server = _backend();
+      final app = await _openSaved(tester, server);
+      app.photos.wait(chooser);
+
+      await tester.ensureVisible(_add);
+      await tester.pumpAndSettle();
+      await tester.tap(_add);
+      await tester.pump();
+
+      expectLocked(tester, l10n.profileAvatarAddButton);
+      await expectHeld(tester, app);
+      expect(_pictureWrites(server), isEmpty);
+
+      chooser.complete(null);
+      await tester.pumpAndSettle();
+      expect(_pictureWrites(server), isEmpty);
+      expect(textFieldOf(tester, _name).enabled, isTrue);
+      expect(
+        _pictureButton(tester, l10n.profileAvatarAddButton).onPressed,
+        isNotNull,
+      );
+    });
+
+    testWidgets('a save in flight disables the picture controls', (
+      tester,
+    ) async {
+      final reply = Completer<http.Response>();
+      final server = _backend();
+      _hasPicture(server);
+      final app = await _openSaved(tester, server);
+      server.once('PUT', ApiPaths.profile, (_) => reply.future);
+
+      await tester.ensureVisible(_save);
+      await tester.pumpAndSettle();
+      await tester.tap(_save);
+      await tester.pump();
+
+      expect(
+        _pictureButton(tester, l10n.profileAvatarChangeButton).onPressed,
+        isNull,
+      );
+      expect(
+        _pictureButton(tester, l10n.profileAvatarRemoveButton).onPressed,
+        isNull,
+      );
+      await tester.tap(_change, warnIfMissed: false);
+      await tester.tap(_remove, warnIfMissed: false);
+      await tester.pump();
+      expect(app.photos.calls, 0);
+      expect(_dialog, findsNothing);
+      expect(_pictureWrites(server), isEmpty);
+
+      reply.complete(jsonResponse(200, profileBody()));
+      await tester.pumpAndSettle();
+      expect(_page, findsOneWidget);
+    });
+
+    testWidgets('a photo chosen after the form was left is not sent', (
+      tester,
+    ) async {
+      final chooser = Completer<Uint8List?>();
+      final server = _backend();
+      final app = await _openSaved(tester, server);
+      app.photos.wait(chooser);
+      await tester.ensureVisible(_add);
+      await tester.pumpAndSettle();
+      await tester.tap(_add);
+      await tester.pump();
+
+      // Only the session ending can take the form away meanwhile.
+      await app.session.logout();
+      await tester.pumpAndSettle();
+      expect(find.byType(LoginScreen), findsOneWidget);
+
+      chooser.complete(_photo);
+      await tester.pumpAndSettle();
+      expect(_pictureWrites(server), isEmpty);
+      expect(tester.takeException(), isNull);
     });
   });
 

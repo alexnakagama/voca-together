@@ -345,7 +345,43 @@
   },
   "profileAvatarPlaceholderLabel": "Your profile picture: no photo yet",
   "@profileAvatarPlaceholderLabel": {
-    "description": "Accessibility label of the placeholder shown on the user’s own profile page in place of a profile picture."
+    "description": "Accessibility label of the placeholder shown on the user’s own profile page and on the profile form in place of a profile picture."
+  },
+  "profileAvatarLabel": "Your profile picture",
+  "@profileAvatarLabel": {
+    "description": "Accessibility label of the user’s own profile picture, on their profile page and on the profile form."
+  },
+  "profileAvatarLoading": "Loading your profile picture",
+  "@profileAvatarLoading": {
+    "description": "Accessibility label of the progress indicator shown on the profile form while the user’s profile picture loads."
+  },
+  "profileAvatarAddButton": "Add photo",
+  "@profileAvatarAddButton": {
+    "description": "Button on the profile form, shown when the user has no profile picture, that opens the device’s photo chooser. The chosen photo becomes their picture at once."
+  },
+  "profileAvatarChangeButton": "Change photo",
+  "@profileAvatarChangeButton": {
+    "description": "Button on the profile form, shown when the user has a profile picture, that opens the device’s photo chooser to replace it. The chosen photo becomes their picture at once."
+  },
+  "profileAvatarRemoveButton": "Remove photo",
+  "@profileAvatarRemoveButton": {
+    "description": "Button on the profile form, shown when the user has a profile picture, that removes it after a confirmation."
+  },
+  "profileAvatarRemoveTitle": "Remove your photo?",
+  "@profileAvatarRemoveTitle": {
+    "description": "Title of the dialog that asks the user to confirm removing their profile picture."
+  },
+  "profileAvatarRemoveMessage": "Other members will no longer see it.",
+  "@profileAvatarRemoveMessage": {
+    "description": "Text of the dialog that asks the user to confirm removing their profile picture."
+  },
+  "profileAvatarRemoveConfirm": "Remove",
+  "@profileAvatarRemoveConfirm": {
+    "description": "Dialog button that removes the user’s profile picture."
+  },
+  "profileAvatarRemoveKeep": "Keep photo",
+  "@profileAvatarRemoveKeep": {
+    "description": "Dialog button that closes the dialog and keeps the user’s profile picture."
   },
   "profileFriendsHeading": "Friends",
   "@profileFriendsHeading": {
@@ -438,6 +474,10 @@
   "errorAvatarDimensionsTooLarge": "That photo has too many pixels. Choose a smaller one.",
   "@errorAvatarDimensionsTooLarge": {
     "description": "Error by the profile picture control when the photo is wider or taller than the server accepts. Must not state a number."
+  },
+  "errorPhotoUnusable": "That photo couldn’t be used. Choose a different one.",
+  "@errorPhotoUnusable": {
+    "description": "Error by the profile picture control when the device could not give the app the photo the user chose. Nothing was sent."
   },
   "languagesHeading": "Languages",
   "@languagesHeading": {

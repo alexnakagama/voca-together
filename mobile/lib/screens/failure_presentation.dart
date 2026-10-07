@@ -1,6 +1,7 @@
 import '../api/api_exception.dart';
 import '../auth/google_identity_exception.dart';
 import '../l10n/app_localizations.dart';
+import '../media/photo_source.dart';
 import '../session.dart';
 
 /// What a failed request means for the user. Screens branch on this, never
@@ -49,6 +50,9 @@ enum FailureKind {
   /// The Google account's address already has an account that isn't linked
   /// to it. Nothing is linked automatically (020).
   accountExists,
+
+  /// The device gave the app no usable photo; nothing was sent.
+  photoUnusable,
 
   /// Anything else: 5xx, a broken response, an unknown code, a local failure.
   unexpected,
@@ -118,6 +122,10 @@ FailurePresentation presentFailure(Object error, AppLocalizations l10n) {
     GoogleIdentityException() => FailurePresentation(
       FailureKind.googleUnavailable,
       message: l10n.errorGoogleUnavailable,
+    ),
+    PhotoSourceException() => FailurePresentation(
+      FailureKind.photoUnusable,
+      message: l10n.errorPhotoUnusable,
     ),
     // ApiProtocolException, a storage failure while signing in, and anything
     // else the screens can't explain.

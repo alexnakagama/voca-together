@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vocatogether/api/api_exception.dart';
 import 'package:vocatogether/auth/google_identity_exception.dart';
 import 'package:vocatogether/auth/token_store.dart';
+import 'package:vocatogether/media/photo_source.dart';
 import 'package:vocatogether/screens/failure_presentation.dart';
 import 'package:vocatogether/session.dart';
 
@@ -464,6 +465,14 @@ void main() {
         _present(const SignedOutException()).kind,
         FailureKind.sessionEnded,
       );
+    });
+
+    test('a photo the device could not give', () {
+      final p = _present(const PhotoSourceException());
+      expect(p.kind, FailureKind.photoUnusable);
+      expect(p.message, l10n.errorPhotoUnusable);
+      // Nothing was sent, so nothing was refused by the server.
+      expect(p.avatarError, isNull);
     });
 
     test('local failures and anything else are unexpected', () {

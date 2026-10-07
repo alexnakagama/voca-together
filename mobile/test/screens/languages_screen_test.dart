@@ -61,6 +61,8 @@ FakeServer _backend({
   Map<String, Object?>? catalog,
 }) => FakeServer()
   ..always('GET', ApiPaths.me, (_) => jsonResponse(200, meBody()))
+  // No picture, unless a test scripts one.
+  ..always('GET', ApiPaths.myAvatar, (_) => noAvatar())
   ..always('GET', ApiPaths.healthz, (_) => healthy())
   ..always('POST', ApiPaths.logout, (_) => noContent())
   ..always(

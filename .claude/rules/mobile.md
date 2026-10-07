@@ -42,13 +42,16 @@ load with that feature's files: `auth.md` (session internals), `google-sign-in.m
 
 ## Networking and the token boundary (decision 023)
 
-- `ApiClient` holds no auth state, never retries, never follows redirects and never logs. It sends GET, POST and
-  PUT; use PUT only for writes the backend makes idempotent, because `_authorized` resends once after a 401 (028):
-  the profile and the member's languages.
+- `ApiClient` holds no auth state, never retries, never follows redirects and never logs. It sends GET, POST, PUT
+  and DELETE, with a JSON body or a byte body (`application/octet-stream`), never both. `getImage` and
+  `putForImage` return an image answer as bytes: it must be a 200 `image/jpeg` and has its own size cap; error
+  answers are still parsed as JSON. Use PUT and DELETE only for writes the backend makes idempotent, because
+  `_authorized` resends once after a 401 (028): the profile, the member's languages and the profile picture.
 - **Token boundary:** screens may use only `AccountApi` (register/resend/forgot, token-free) and `SessionManager`'s
   public API, which takes and returns no token (`signIn`/`signInWithGoogle()`/`logout` → `void`, `me()` → `Me`,
   `profile()` → `Profile?`, `saveProfile()` → `Profile`, `languageCatalog()` → `List<Language>`, `languages()` and
-  `saveLanguages()` → `UserLanguages`). Only the languages editor calls `saveLanguages()` (`languages.md`).
+  `saveLanguages()` → `UserLanguages`, `avatar()` → `Uint8List?`, `saveAvatar()` → `Uint8List`, `removeAvatar()` →
+  `void`). Only the languages editor calls `saveLanguages()` (`languages.md`).
 - Adding a protected route: a path in `ApiPaths`, a call in `AuthApi` (which takes the raw access token and is held
   only by `SessionManager`), and a typed, token-free `SessionManager` method that makes one `_authorized` call.
   `_authorized` stays private. A model screens may import is added to the allowlist in `test/architecture_test.dart`.

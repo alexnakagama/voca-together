@@ -7,8 +7,10 @@ import 'package:vocatogether/auth/google_identity_exception.dart';
 import 'package:vocatogether/ui/widgets/google_sign_in_button.dart';
 import 'package:vocatogether/ui/widgets/form_error_banner.dart';
 import 'package:vocatogether/ui/widgets/form_notice_banner.dart';
+import 'package:vocatogether/ui/widgets/profile_avatar.dart';
 
 import '../support/fakes.dart';
+import '../support/pictures.dart';
 import 'harness.dart';
 
 /// One screen in one state: how to script the backend, whether it starts
@@ -18,6 +20,7 @@ final class _Case {
     this.name, {
     this.script,
     this.google,
+    this.photos,
     this.signedIn = false,
     this.drive,
     required this.action,
@@ -30,6 +33,9 @@ final class _Case {
 
   /// Scripts Google; when set, the app has Google sign-in.
   final void Function(FakeGoogleIdentity google)? google;
+
+  /// Scripts the photo chooser.
+  final void Function(FakePhotoSource photos)? photos;
   final bool signedIn;
   final Future<void> Function(WidgetTester tester)? drive;
   final String action;
@@ -97,8 +103,10 @@ Future<void> _saveProfile(WidgetTester tester) async {
   );
 }
 
-void _home(FakeServer s) =>
-    s.once('GET', ApiPaths.me, (_) => jsonResponse(200, meBody()));
+void _home(FakeServer s) => s
+  ..once('GET', ApiPaths.me, (_) => jsonResponse(200, meBody()))
+  // No picture, unless a case scripts one.
+  ..always('GET', ApiPaths.myAvatar, (_) => noAvatar());
 
 /// The profile page's languages section, for a member with [spoken] and
 /// [learning] (none by default).
@@ -175,6 +183,18 @@ void _savedProfile(FakeServer s) {
       profileBody(displayName: 'Ana', bio: 'Evenings work best for me.'),
     ),
   );
+}
+
+/// A member with a profile and a picture, on the page or on the form.
+void _withPicture(FakeServer s) {
+  _savedProfile(s);
+  s.always('GET', ApiPaths.myAvatar, (_) => imageResponse(testPicture));
+}
+
+/// From home: the form, then a tap on the picture control's [label].
+Future<void> _pictureAction(WidgetTester tester, String label) async {
+  await _openForm(tester);
+  await tapAndSettle(tester, find.widgetWithText(OutlinedButton, label));
 }
 
 /// Opens the picker of "I speak".
@@ -406,7 +426,11 @@ final _cases = <_Case>[
     script: _newProfile,
     drive: _openForm,
     action: l10n.profileSaveButton,
-    also: [l10n.profileEditLanguagesButton, l10n.profileCancelButton],
+    also: [
+      l10n.profileAvatarAddButton,
+      l10n.profileEditLanguagesButton,
+      l10n.profileCancelButton,
+    ],
     largeTextWithKeyboard: true,
   ),
   _Case(
@@ -432,7 +456,11 @@ final _cases = <_Case>[
     script: _savedProfile,
     drive: _openForm,
     action: l10n.profileSaveButton,
-    also: [l10n.profileEditLanguagesButton, l10n.profileCancelButton],
+    also: [
+      l10n.profileAvatarAddButton,
+      l10n.profileEditLanguagesButton,
+      l10n.profileCancelButton,
+    ],
     largeTextWithKeyboard: true,
   ),
   _Case(
@@ -505,6 +533,115 @@ final _cases = <_Case>[
     },
     action: l10n.languagesDiscardConfirm,
     also: [l10n.languagesDiscardKeep],
+    largeTextWithKeyboard: true,
+  ),
+  _Case(
+    'profile, with a picture',
+    signedIn: true,
+    script: _withPicture,
+    drive: _openProfile,
+    action: l10n.profileEditButton,
+  ),
+  _Case(
+    'profile edit, with a picture',
+    signedIn: true,
+    script: _withPicture,
+    drive: _openForm,
+    action: l10n.profileAvatarChangeButton,
+    also: [
+      l10n.profileAvatarRemoveButton,
+      l10n.profileSaveButton,
+      l10n.profileEditLanguagesButton,
+      l10n.profileCancelButton,
+    ],
+    largeTextWithKeyboard: true,
+  ),
+  _Case(
+    'profile edit, the picture failed to load',
+    signedIn: true,
+    script: (s) {
+      _savedProfile(s);
+      s
+        ..once('GET', ApiPaths.myAvatar, (_) => noAvatar())
+        ..once('GET', ApiPaths.myAvatar, networkFailure);
+    },
+    drive: _openForm,
+    action: l10n.profileAvatarAddButton,
+    also: [l10n.profileSaveButton],
+    largeTextWithKeyboard: true,
+  ),
+  _Case(
+    'profile edit, photo refused',
+    signedIn: true,
+    script: (s) {
+      _withPicture(s);
+      s.once(
+        'PUT',
+        ApiPaths.myAvatar,
+        (_) => jsonResponse(422, {
+          'error': {
+            'code': 'validation_failed',
+            'fields': [
+              {'field': 'avatar', 'code': 'dimensions_too_large'},
+            ],
+          },
+        }),
+      );
+    },
+    photos: (p) => p.next(const [1, 2, 3]),
+    drive: (t) => _pictureAction(t, l10n.profileAvatarChangeButton),
+    action: l10n.profileAvatarChangeButton,
+    also: [
+      l10n.errorAvatarDimensionsTooLarge,
+      l10n.profileAvatarRemoveButton,
+      l10n.profileSaveButton,
+      l10n.profileEditLanguagesButton,
+      l10n.profileCancelButton,
+    ],
+    largeTextWithKeyboard: true,
+  ),
+  _Case(
+    'profile edit, photo unreadable',
+    signedIn: true,
+    script: _savedProfile,
+    photos: (p) => p.fail(),
+    drive: (t) => _pictureAction(t, l10n.profileAvatarAddButton),
+    action: l10n.profileAvatarAddButton,
+    also: [l10n.errorPhotoUnusable, l10n.profileSaveButton],
+    largeTextWithKeyboard: true,
+  ),
+  _Case(
+    'profile edit, removal failed',
+    signedIn: true,
+    script: (s) {
+      _withPicture(s);
+      s.once(
+        'DELETE',
+        ApiPaths.myAvatar,
+        (_) =>
+            errorResponse(429, 'rate_limited', headers: {'retry-after': '90'}),
+      );
+    },
+    drive: (t) async {
+      await _pictureAction(t, l10n.profileAvatarRemoveButton);
+      await tapAndSettle(t, find.text(l10n.profileAvatarRemoveConfirm));
+      // Scrolling to "Remove photo" left the button above it cut by the
+      // top of the list, and a cut button measures short. Back to the top,
+      // where the whole control is in view.
+      await t.ensureVisible(find.byType(ProfileAvatar));
+      await t.pumpAndSettle();
+    },
+    action: l10n.profileAvatarRemoveButton,
+    also: [l10n.profileAvatarChangeButton, l10n.profileSaveButton],
+    largeTextWithKeyboard: true,
+  ),
+  _Case(
+    'profile edit, removal question',
+    signedIn: true,
+    script: _withPicture,
+    drive: (t) => _pictureAction(t, l10n.profileAvatarRemoveButton),
+    action: l10n.profileAvatarRemoveConfirm,
+    also: [l10n.profileAvatarRemoveKeep],
     largeTextWithKeyboard: true,
   ),
   _Case(
@@ -633,10 +770,13 @@ Future<void> _reach(
     google = FakeGoogleIdentity();
     script(google);
   }
+  final photos = FakePhotoSource();
+  c.photos?.call(photos);
   await pumpApp(
     tester,
     server: server,
     google: google,
+    photos: photos,
     signedIn: c.signedIn,
     size: size,
     textScale: textScale,
@@ -742,6 +882,53 @@ void main() {
         await tester.tap(edit);
       },
       l10n.profileLoading,
+    ),
+    'profile edit, picture loading': (
+      (tester) async {
+        final server = FakeServer();
+        _savedProfile(server);
+        await pumpApp(tester, server: server, signedIn: true);
+        await _openProfile(tester);
+        server.once('GET', ApiPaths.myAvatar, neverAnswers);
+        final edit = find.widgetWithText(
+          OutlinedButton,
+          l10n.profileEditButton,
+        );
+        await tester.ensureVisible(edit);
+        await tester.pumpAndSettle();
+        await tester.tap(edit);
+      },
+      l10n.profileAvatarLoading,
+    ),
+    // A busy button keeps its label, so that is what names the state.
+    'profile edit, uploading': (
+      (tester) async {
+        final server = FakeServer();
+        _withPicture(server);
+        server.once('PUT', ApiPaths.myAvatar, neverAnswers);
+        final photos = FakePhotoSource()..next(const [1, 2, 3]);
+        await pumpApp(tester, server: server, photos: photos, signedIn: true);
+        await _openForm(tester);
+        final change = find.widgetWithText(
+          OutlinedButton,
+          l10n.profileAvatarChangeButton,
+        );
+        await tester.ensureVisible(change);
+        await tester.pumpAndSettle();
+        await tester.tap(change);
+      },
+      l10n.profileAvatarChangeButton,
+    ),
+    'profile edit, removing': (
+      (tester) async {
+        final server = FakeServer();
+        _withPicture(server);
+        server.once('DELETE', ApiPaths.myAvatar, neverAnswers);
+        await pumpApp(tester, server: server, signedIn: true);
+        await _pictureAction(tester, l10n.profileAvatarRemoveButton);
+        await tester.tap(find.text(l10n.profileAvatarRemoveConfirm));
+      },
+      l10n.profileAvatarRemoveButton,
     ),
     'languages editor, loading': (
       (tester) async {
@@ -885,6 +1072,76 @@ void main() {
       _newProfile(server, save: networkFailure);
       await pumpApp(tester, server: server, signedIn: true);
       await _saveProfile(tester);
+      expect(
+        tester.getSemantics(find.byType(FormErrorBanner)),
+        isSemantics(
+          isLiveRegion: true,
+          label: '${l10n.errorLabel}\n${l10n.errorNetwork}',
+        ),
+      );
+      handle.dispose();
+    });
+
+    testWidgets('the picture control says whether there is a picture, and '
+        'names each of its buttons', (tester) async {
+      final handle = tester.ensureSemantics();
+      final server = FakeServer();
+      _savedProfile(server);
+      server
+        ..once('PUT', ApiPaths.myAvatar, (_) => imageResponse(testPicture))
+        ..once('DELETE', ApiPaths.myAvatar, networkFailure);
+      final photos = FakePhotoSource()..next(const [1, 2, 3]);
+      await pumpApp(tester, server: server, photos: photos, signedIn: true);
+      await _openForm(tester);
+
+      expect(
+        tester.getSemantics(find.byType(ProfileAvatar)),
+        isSemantics(isImage: true, label: l10n.profileAvatarPlaceholderLabel),
+      );
+      final add = find.widgetWithText(
+        OutlinedButton,
+        l10n.profileAvatarAddButton,
+      );
+      expect(
+        tester.getSemantics(add),
+        isSemantics(
+          label: l10n.profileAvatarAddButton,
+          isButton: true,
+          hasEnabledState: true,
+          isEnabled: true,
+          hasTapAction: true,
+          isFocusable: true,
+        ),
+      );
+
+      await tapAndSettle(tester, add);
+      expect(
+        tester.getSemantics(find.byType(ProfileAvatar)),
+        isSemantics(isImage: true, label: l10n.profileAvatarLabel),
+      );
+      for (final label in [
+        l10n.profileAvatarChangeButton,
+        l10n.profileAvatarRemoveButton,
+      ]) {
+        expect(
+          tester.getSemantics(find.widgetWithText(OutlinedButton, label)),
+          isSemantics(
+            label: label,
+            isButton: true,
+            hasEnabledState: true,
+            isEnabled: true,
+            hasTapAction: true,
+            isFocusable: true,
+          ),
+        );
+      }
+
+      // A failed picture action is announced like the other banners.
+      await tapAndSettle(
+        tester,
+        find.widgetWithText(OutlinedButton, l10n.profileAvatarRemoveButton),
+      );
+      await tapAndSettle(tester, find.text(l10n.profileAvatarRemoveConfirm));
       expect(
         tester.getSemantics(find.byType(FormErrorBanner)),
         isSemantics(

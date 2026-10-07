@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -16,10 +17,10 @@ import '../ui/widgets/secondary_button.dart';
 import 'failure_presentation.dart';
 import 'profile_languages_section.dart';
 
-/// The signed-in user's own profile page, read-only: their picture's
-/// placeholder, name and text as the server stored them (`GET
-/// /v1/me/profile` through [SessionManager]), a Friends area that only says
-/// the feature comes later, and their languages.
+/// The signed-in user's own profile page, read-only: their picture or its
+/// placeholder, their name and text as the server stored them (`GET
+/// /v1/me/profile` and `GET /v1/me/avatar` through [SessionManager]), a
+/// Friends area that only says the feature comes later, and their languages.
 ///
 /// Nothing is changed from here: "Edit Profile" opens the edit screen, and
 /// each time the member comes back, saved or not, the page drops what it
@@ -27,8 +28,10 @@ import 'profile_languages_section.dart';
 /// one. It never decides access; when the session ends the router leaves
 /// this screen on its own.
 ///
-/// [ProfileLanguagesSection] is mounted once the profile has loaded. It
-/// loads and fails by itself.
+/// The picture is asked for once the profile has loaded, and
+/// [ProfileLanguagesSection] is mounted then. Each loads by itself: the
+/// section shows its own failure, and a picture that fails to load is the
+/// placeholder, with no message.
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key, required this.session});
 
@@ -47,8 +50,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
   /// load succeeds.
   Profile? _profile;
 
-  /// Identifies the latest load; answers to earlier ones are dropped. The
-  /// languages section is rebuilt for each one.
+  /// The member's picture as the server stored it; null with none, while it
+  /// loads and when it couldn't be loaded.
+  Uint8List? _image;
+
+  /// Identifies the latest load; answers to earlier ones are dropped, the
+  /// picture's too. The languages section is rebuilt for each one.
   int _request = 0;
 
   /// The edit screen was opened from here and hasn't been left yet.
@@ -67,6 +74,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       // What was shown may no longer be what is stored: if this load fails,
       // the page shows the failure, not the old profile.
       _profile = null;
+      _image = null;
     });
     unawaited(_load());
   }
@@ -80,6 +88,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _profile = profile;
         _loading = false;
       });
+      // Nothing is shown of a member with no profile, so nothing is asked.
+      if (profile != null) unawaited(_loadPicture(request));
     } on Exception catch (e) {
       if (!mounted || request != _request) return;
       final failure = presentFailure(e, AppLocalizations.of(context));
@@ -90,6 +100,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _loadError = failure.message;
         _loading = false;
       });
+    }
+  }
+
+  /// Loads the picture for the page that [request] loaded.
+  Future<void> _loadPicture(int request) async {
+    try {
+      final image = await widget.session.avatar();
+      if (!mounted || request != _request) return;
+      setState(() => _image = image);
+    } on Exception {
+      // The placeholder stays, with no message: the rest of the page is
+      // what the member came for, and the next load asks again.
     }
   }
 
@@ -145,7 +167,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ProfileHeader(
           name: profile.displayName,
           bio: profile.bio,
-          avatarLabel: l10n.profileAvatarPlaceholderLabel,
+          avatarLabel: _image == null
+              ? l10n.profileAvatarPlaceholderLabel
+              : l10n.profileAvatarLabel,
+          image: _image,
         ),
         const SizedBox(height: Spacing.lg),
         SecondaryButton(

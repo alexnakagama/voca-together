@@ -62,6 +62,8 @@ Future<void> _backToPage(WidgetTester tester) async {
 /// language calls are scripted by each test.
 FakeServer _backend() => FakeServer()
   ..always('GET', ApiPaths.me, (_) => jsonResponse(200, meBody()))
+  // No picture, unless a test scripts one.
+  ..always('GET', ApiPaths.myAvatar, (_) => noAvatar())
   ..always('GET', ApiPaths.healthz, (_) => healthy())
   ..always('POST', ApiPaths.logout, (_) => noContent())
   ..always(

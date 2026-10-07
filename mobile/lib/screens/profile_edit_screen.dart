@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import '../api/profile.dart';
 import '../l10n/app_localizations.dart';
+import '../media/photo_source.dart';
 import '../router.dart';
 import '../session.dart';
 import '../ui/theme.dart';
@@ -14,6 +15,7 @@ import '../ui/widgets/form_error_banner.dart';
 import '../ui/widgets/primary_button.dart';
 import '../ui/widgets/secondary_button.dart';
 import 'failure_presentation.dart';
+import 'profile_avatar_editor.dart';
 
 /// The form where the signed-in user creates and edits their own profile:
 /// the name and the "about you" text other members will see (`GET`/`PUT
@@ -23,12 +25,25 @@ import 'failure_presentation.dart';
 /// text is sent as typed, and a successful save returns to the profile
 /// page, which shows what the server stored. Leaving with unsaved text asks
 /// first. Its "Languages" row opens the languages editor on top; the form
-/// holds no language itself. It never decides access; when the session ends
-/// the router leaves this screen on its own.
+/// holds no language itself.
+///
+/// [ProfileAvatarEditor] is mounted with the form and applies a picture at
+/// once, apart from Save, so a change of picture is never an unsaved change.
+/// While it works the form is locked as during a save.
+///
+/// It never decides access; when the session ends the router leaves this
+/// screen on its own.
 class ProfileEditScreen extends StatefulWidget {
-  const ProfileEditScreen({super.key, required this.session});
+  const ProfileEditScreen({
+    super.key,
+    required this.session,
+    required this.photoSource,
+  });
 
   final SessionManager session;
+
+  /// The device's photo chooser, for the picture control.
+  final PhotoSource photoSource;
 
   @override
   State<ProfileEditScreen> createState() => _ProfileEditScreenState();
@@ -52,7 +67,12 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
   String _loadedName = '';
   String _loadedBio = '';
 
+  /// A save is in flight.
   bool _busy = false;
+
+  /// The picture control is choosing, uploading or removing.
+  bool _pictureBusy = false;
+
   String? _banner;
   String? _nameError;
   String? _bioError;
@@ -66,6 +86,9 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
   bool _languagesOpen = false;
 
   bool get _changed => _name.text != _loadedName || _bio.text != _loadedBio;
+
+  /// Nothing can be started or left: a save or a picture action is running.
+  bool get _locked => _busy || _pictureBusy;
 
   @override
   void initState() {
@@ -137,7 +160,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
   }
 
   Future<void> _save() async {
-    if (_busy) return;
+    if (_locked) return;
     final l10n = AppLocalizations.of(context);
     if (_name.text.trim().isEmpty) {
       setState(() {
@@ -188,7 +211,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
   /// Nothing is loaded on coming back: the form shows no language.
   Future<void> _openLanguages() async {
     // A second tap before the editor covers the row would push it twice.
-    if (_busy || _languagesOpen) return;
+    if (_locked || _languagesOpen) return;
     _languagesOpen = true;
     await context.push<void>(Routes.languages);
     _languagesOpen = false;
@@ -198,8 +221,9 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
   /// Cancel button, the app bar's back button and the system's back all end
   /// here.
   void _requestLeave() {
-    // Leaving now would let the profile page load before the save is stored.
-    if (_busy) return;
+    // Leaving now would let the profile page load before the save or the
+    // picture is stored.
+    if (_locked) return;
     if (_changed) {
       unawaited(_confirmDiscard());
     } else {
@@ -291,6 +315,14 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
         const SizedBox(height: Spacing.sm),
         Text(l10n.profileVisibilityNotice, style: theme.textTheme.bodyMedium),
         const SizedBox(height: Spacing.lg),
+        ProfileAvatarEditor(
+          session: widget.session,
+          photoSource: widget.photoSource,
+          name: _loadedName,
+          enabled: !_busy,
+          onBusyChanged: (busy) => setState(() => _pictureBusy = busy),
+        ),
+        const SizedBox(height: Spacing.lg),
         if (banner != null) ...[
           FormErrorBanner(message: banner),
           const SizedBox(height: Spacing.md),
@@ -300,7 +332,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
           controller: _name,
           focusNode: _nameFocus,
           errorText: _nameError,
-          enabled: !_busy,
+          enabled: !_locked,
           textInputAction: TextInputAction.next,
           onSubmitted: (_) => _bioFocus.requestFocus(),
         ),
@@ -310,7 +342,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
           controller: _bio,
           focusNode: _bioFocus,
           errorText: _bioError,
-          enabled: !_busy,
+          enabled: !_locked,
         ),
         const SizedBox(height: Spacing.lg),
         const Divider(height: 1),
@@ -318,27 +350,27 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
           contentPadding: EdgeInsets.zero,
           title: Text(l10n.profileEditLanguagesButton),
           trailing: const Icon(Icons.chevron_right),
-          enabled: !_busy,
+          enabled: !_locked,
           onTap: () => unawaited(_openLanguages()),
         ),
         const Divider(height: 1),
         const SizedBox(height: Spacing.lg),
         PrimaryButton(
           label: l10n.profileSaveButton,
-          onPressed: _save,
+          onPressed: _pictureBusy ? null : _save,
           busy: _busy,
         ),
         const SizedBox(height: Spacing.md),
         SecondaryButton(
           label: l10n.profileCancelButton,
-          onPressed: _busy ? null : _requestLeave,
+          onPressed: _locked ? null : _requestLeave,
         ),
       ];
     }
 
     return PopScope(
       // The back button and the system's back ask before the text is lost.
-      canPop: !_changed && !_busy,
+      canPop: !_changed && !_locked,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _requestLeave();
       },

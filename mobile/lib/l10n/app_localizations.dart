@@ -514,11 +514,65 @@ abstract class AppLocalizations {
   /// **'Edit Profile'**
   String get profileEditButton;
 
-  /// Accessibility label of the placeholder shown on the user’s own profile page in place of a profile picture.
+  /// Accessibility label of the placeholder shown on the user’s own profile page and on the profile form in place of a profile picture.
   ///
   /// In en, this message translates to:
   /// **'Your profile picture: no photo yet'**
   String get profileAvatarPlaceholderLabel;
+
+  /// Accessibility label of the user’s own profile picture, on their profile page and on the profile form.
+  ///
+  /// In en, this message translates to:
+  /// **'Your profile picture'**
+  String get profileAvatarLabel;
+
+  /// Accessibility label of the progress indicator shown on the profile form while the user’s profile picture loads.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading your profile picture'**
+  String get profileAvatarLoading;
+
+  /// Button on the profile form, shown when the user has no profile picture, that opens the device’s photo chooser. The chosen photo becomes their picture at once.
+  ///
+  /// In en, this message translates to:
+  /// **'Add photo'**
+  String get profileAvatarAddButton;
+
+  /// Button on the profile form, shown when the user has a profile picture, that opens the device’s photo chooser to replace it. The chosen photo becomes their picture at once.
+  ///
+  /// In en, this message translates to:
+  /// **'Change photo'**
+  String get profileAvatarChangeButton;
+
+  /// Button on the profile form, shown when the user has a profile picture, that removes it after a confirmation.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove photo'**
+  String get profileAvatarRemoveButton;
+
+  /// Title of the dialog that asks the user to confirm removing their profile picture.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove your photo?'**
+  String get profileAvatarRemoveTitle;
+
+  /// Text of the dialog that asks the user to confirm removing their profile picture.
+  ///
+  /// In en, this message translates to:
+  /// **'Other members will no longer see it.'**
+  String get profileAvatarRemoveMessage;
+
+  /// Dialog button that removes the user’s profile picture.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove'**
+  String get profileAvatarRemoveConfirm;
+
+  /// Dialog button that closes the dialog and keeps the user’s profile picture.
+  ///
+  /// In en, this message translates to:
+  /// **'Keep photo'**
+  String get profileAvatarRemoveKeep;
 
   /// Heading of the friends area of the user’s own profile page. The feature doesn’t exist yet.
   ///
@@ -657,6 +711,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'That photo has too many pixels. Choose a smaller one.'**
   String get errorAvatarDimensionsTooLarge;
+
+  /// Error by the profile picture control when the device could not give the app the photo the user chose. Nothing was sent.
+  ///
+  /// In en, this message translates to:
+  /// **'That photo couldn’t be used. Choose a different one.'**
+  String get errorPhotoUnusable;
 
   /// Heading of the section of the profile screen that shows the languages the user speaks and is learning.
   ///

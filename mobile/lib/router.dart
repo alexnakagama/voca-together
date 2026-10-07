@@ -100,7 +100,8 @@ GoRouter createRouter(
       ),
       GoRoute(
         path: Routes.profileEdit,
-        builder: (context, state) => ProfileEditScreen(session: session),
+        builder: (context, state) =>
+            ProfileEditScreen(session: session, photoSource: photoSource),
       ),
       GoRoute(
         path: Routes.languages,

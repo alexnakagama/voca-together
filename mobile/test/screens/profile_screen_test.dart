@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -16,6 +17,7 @@ import 'package:vocatogether/ui/widgets/profile_avatar.dart';
 import 'package:vocatogether/ui/widgets/profile_header.dart';
 
 import '../support/fakes.dart';
+import '../support/pictures.dart';
 import 'harness.dart';
 
 Finder get _open => find.widgetWithText(OutlinedButton, l10n.profileButton);
@@ -44,6 +46,8 @@ FakeServer _backend() => FakeServer()
     (_) => jsonResponse(200, languagesBody()),
   )
   ..always('GET', ApiPaths.me, (_) => jsonResponse(200, meBody()))
+  // No picture, unless a test scripts one.
+  ..always('GET', ApiPaths.myAvatar, (_) => noAvatar())
   ..always('GET', ApiPaths.healthz, (_) => healthy())
   ..always('POST', ApiPaths.logout, (_) => noContent());
 
@@ -69,6 +73,13 @@ Future<TestApp> _openProfile(
   expect(_page, findsOneWidget);
   return app;
 }
+
+Responder get _picture =>
+    (_) => imageResponse(testPicture);
+
+/// The picture the page's header shows, or null for the placeholder.
+Uint8List? _shown(WidgetTester tester) =>
+    tester.widget<ProfileHeader>(find.byType(ProfileHeader)).image;
 
 /// The chips on screen as (name, level), in order.
 List<(String, String)> _chips(WidgetTester tester) => [
@@ -693,6 +704,270 @@ void main() {
       expect(tester.takeException(), isNull);
       expect(find.byType(HomeScreen), findsOneWidget);
       expect(find.byType(FormErrorBanner), findsNothing);
+    });
+  });
+
+  group('the picture', () {
+    testWidgets('a member with a picture sees it, read as their profile '
+        'picture', (tester) async {
+      final server = _backend()
+        ..always('GET', ApiPaths.profile, _profile())
+        ..always('GET', ApiPaths.myAvatar, _picture);
+      final handle = tester.ensureSemantics();
+      await _openProfile(tester, server);
+
+      expect(_shown(tester), testPicture);
+      expect(
+        tester.getSemantics(find.byType(ProfileAvatar)),
+        isSemantics(isImage: true, label: l10n.profileAvatarLabel),
+      );
+      expect(find.byType(FormErrorBanner), findsNothing);
+      final request = server.to(ApiPaths.myAvatar).single;
+      expect(request.method, 'GET');
+      expect(request.url.hasQuery, isFalse);
+      expect(request.body, isEmpty);
+      handle.dispose();
+    });
+
+    testWidgets('a member without one sees the placeholder, asked for once', (
+      tester,
+    ) async {
+      final server = _backend()..always('GET', ApiPaths.profile, _profile());
+      await _openProfile(tester, server);
+
+      expect(_shown(tester), isNull);
+      expect(
+        find.descendant(
+          of: find.byType(ProfileAvatar),
+          matching: find.text('A'),
+        ),
+        findsOneWidget,
+      );
+      expect(server.count(ApiPaths.myAvatar), 1);
+    });
+
+    testWidgets('it loads on its own: the name and the languages are shown '
+        'while it is still on its way', (tester) async {
+      final reply = Completer<http.Response>();
+      final server = _backend()
+        ..always('GET', ApiPaths.profile, _profile(bio: 'Hi'))
+        ..once('GET', ApiPaths.myAvatar, (_) => reply.future);
+      await _openProfile(tester, server);
+
+      expect(find.text('Ana'), findsOneWidget);
+      expect(find.text('Hi'), findsOneWidget);
+      expect(find.text(l10n.languagesEmpty), findsOneWidget);
+      expect(_edit, findsOneWidget);
+      expect(_shown(tester), isNull);
+
+      reply.complete(imageResponse(testPicture));
+      await tester.pumpAndSettle();
+      expect(_shown(tester), testPicture);
+    });
+
+    group('a picture that fails to load is the placeholder, with no error', () {
+      final cases = <String, Responder>{
+        'network': networkFailure,
+        '429': (_) =>
+            errorResponse(429, 'rate_limited', headers: {'retry-after': '6'}),
+        '503': (_) => errorResponse(503, 'service_unavailable'),
+        '500': (_) => errorResponse(500, 'internal_error'),
+        // Not the backend's "no picture".
+        'a 404 without the code': (_) => http.Response('Not Found', 404),
+        'a body with text of its own': (_) => http.Response(
+          '{"error":{"code":"internal_error","message":"SERVERTEXT"}}',
+          500,
+          headers: {'content-type': 'application/json'},
+        ),
+      };
+      cases.forEach((name, responder) {
+        testWidgets(name, (tester) async {
+          final server = _backend()
+            ..always('GET', ApiPaths.profile, _profile(bio: 'Hi'))
+            ..once('GET', ApiPaths.myAvatar, responder)
+            ..always(
+              'GET',
+              ApiPaths.myLanguages,
+              (_) => jsonResponse(200, languagesBody(spoken: [('es', 'c1')])),
+            );
+          final app = await _openProfile(tester, server);
+
+          expect(_shown(tester), isNull);
+          expect(
+            find.descendant(
+              of: find.byType(ProfileAvatar),
+              matching: find.text('A'),
+            ),
+            findsOneWidget,
+          );
+          expect(find.byType(FormErrorBanner), findsNothing);
+          expect(find.textContaining('SERVERTEXT'), findsNothing);
+          expect(find.text('Ana'), findsOneWidget);
+          expect(find.text('Hi'), findsOneWidget);
+          expect(_chips(tester), [('Spanish', 'C1')]);
+          expect(_edit, findsOneWidget);
+          // Nothing retried it.
+          expect(server.count(ApiPaths.myAvatar), 1);
+          expect(app.session.status, SessionStatus.signedIn);
+          expect(tester.takeException(), isNull);
+        });
+      });
+
+      testWidgets('no answer in time', (tester) async {
+        final server = _backend()
+          ..always('GET', ApiPaths.profile, _profile())
+          ..once('GET', ApiPaths.myAvatar, neverAnswers);
+        await _openProfile(tester, server);
+        await tester.pump(const Duration(seconds: 16));
+        await tester.pumpAndSettle();
+
+        expect(_shown(tester), isNull);
+        expect(find.byType(FormErrorBanner), findsNothing);
+        expect(find.text('Ana'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
+    });
+
+    testWidgets('a member with no profile is asked for no picture', (
+      tester,
+    ) async {
+      final server = _backend()
+        ..always('GET', ApiPaths.profile, (_) => noProfile());
+      await _openProfile(tester, server);
+
+      expect(_create, findsOneWidget);
+      expect(find.byType(ProfileAvatar), findsNothing);
+      expect(server.count(ApiPaths.myAvatar), 0);
+    });
+
+    testWidgets('a failed profile load asks for no picture', (tester) async {
+      final server = _backend()..once('GET', ApiPaths.profile, networkFailure);
+      await _openProfile(tester, server);
+
+      expect(_retry, findsOneWidget);
+      expect(server.count(ApiPaths.myAvatar), 0);
+    });
+
+    testWidgets('after a picture was set on the edit screen, the page shows '
+        'it', (tester) async {
+      final server = _backend()..always('GET', ApiPaths.profile, _profile());
+      await _openProfile(tester, server);
+      expect(_shown(tester), isNull);
+
+      // Stored from now on: the edit screen's own load, then the page's.
+      server.always('GET', ApiPaths.myAvatar, _picture);
+      await tapAndSettle(tester, _edit);
+      expect(_form, findsOneWidget);
+      await tapAndSettle(tester, _cancel);
+
+      expect(_form, findsNothing);
+      expect(_shown(tester), testPicture);
+      // The page, the edit screen, the page again.
+      expect(server.count(ApiPaths.myAvatar), 3);
+    });
+
+    testWidgets('after the picture was removed on the edit screen, the page '
+        'shows the placeholder', (tester) async {
+      final server = _backend()
+        ..always('GET', ApiPaths.profile, _profile())
+        ..once('GET', ApiPaths.myAvatar, _picture);
+      await _openProfile(tester, server);
+      expect(_shown(tester), testPicture);
+
+      await tapAndSettle(tester, _edit);
+      await tapAndSettle(tester, _cancel);
+
+      expect(_shown(tester), isNull);
+      expect(
+        find.descendant(
+          of: find.byType(ProfileAvatar),
+          matching: find.text('A'),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('the reload drops the picture it showed, also when the new '
+        'one fails', (tester) async {
+      final server = _backend()
+        ..always('GET', ApiPaths.profile, _profile())
+        ..once('GET', ApiPaths.myAvatar, _picture);
+      await _openProfile(tester, server);
+      expect(_shown(tester), testPicture);
+
+      server
+        ..once('GET', ApiPaths.myAvatar, _picture)
+        ..once('GET', ApiPaths.myAvatar, networkFailure);
+      await tapAndSettle(tester, _edit);
+      await tapAndSettle(tester, _cancel);
+
+      expect(_shown(tester), isNull);
+      expect(find.byType(FormErrorBanner), findsNothing);
+    });
+
+    testWidgets('a picture answered after a newer load started is dropped', (
+      tester,
+    ) async {
+      final early = Completer<http.Response>();
+      final server = _backend()
+        ..always('GET', ApiPaths.profile, _profile())
+        ..once('GET', ApiPaths.myAvatar, (_) => early.future);
+      await _openProfile(tester, server);
+
+      await tapAndSettle(tester, _edit);
+      await tapAndSettle(tester, _cancel);
+      // The reload's own answer: no picture.
+      expect(_shown(tester), isNull);
+
+      early.complete(imageResponse(testPicture));
+      await tester.pumpAndSettle();
+      expect(_shown(tester), isNull);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a picture answered after leaving the page is dropped', (
+      tester,
+    ) async {
+      final reply = Completer<http.Response>();
+      final server = _backend()
+        ..always('GET', ApiPaths.profile, _profile())
+        ..once('GET', ApiPaths.myAvatar, (_) => reply.future);
+      await _openProfile(tester, server);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(_page, findsNothing);
+
+      reply.complete(imageResponse(testPicture));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.byType(HomeScreen), findsOneWidget);
+    });
+
+    testWidgets('a session that ends while the picture loads shows no error', (
+      tester,
+    ) async {
+      final server = _backend()
+        ..always('GET', ApiPaths.profile, _profile())
+        ..once(
+          'GET',
+          ApiPaths.myAvatar,
+          (_) => errorResponse(401, 'invalid_access_token'),
+        )
+        ..once(
+          'POST',
+          ApiPaths.refresh,
+          (_) => errorResponse(401, 'invalid_refresh_token'),
+        );
+      final app = await pumpApp(tester, server: server, signedIn: true);
+      await tester.ensureVisible(_open);
+      await tester.tap(_open);
+      await tester.pumpAndSettle();
+
+      expect(app.session.status, SessionStatus.signedOut);
+      expect(find.byType(LoginScreen), findsOneWidget);
+      expect(_page, findsNothing);
+      expect(find.byType(FormErrorBanner), findsNothing);
+      expect(tester.takeException(), isNull);
     });
   });
 

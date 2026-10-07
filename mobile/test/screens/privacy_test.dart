@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -9,6 +10,7 @@ import 'package:vocatogether/ui/widgets/form_error_banner.dart';
 import 'package:vocatogether/ui/widgets/google_sign_in_button.dart';
 
 import '../support/fakes.dart';
+import '../support/pictures.dart';
 import 'harness.dart';
 
 /// Secrets with distinctive markers, so any copy can be found.
@@ -23,6 +25,20 @@ const _idToken2 = 'LEAKidtokenTwo.payload.signature';
 /// purpose, and found nowhere else.
 const _name = 'PRIVname Ana';
 const _bio = 'PRIVbio evenings';
+
+/// A photo from the member's device, with a marker of its own: sent only in
+/// the body of their own upload, and never shown as text.
+final _photo = utf8.encode('PHOTOmark-bytes-of-a-photo');
+
+/// An error body about a picture, with [code] and text of its own that
+/// echoes secrets and the photo's marker.
+http.Response _echoPicture(int status, String code) => http.Response(
+  '{"error":{"code":"$code","detail":"$_password $_email $_access '
+  'PHOTOmark","fields":[{"field":"avatar","code":"too_large",'
+  '"detail":"PHOTOmark $_email"}]}}',
+  status,
+  headers: {'content-type': 'application/json'},
+);
 
 /// An error body that echoes secrets, as a broken proxy might.
 http.Response _echo(int status) => http.Response(
@@ -59,6 +75,7 @@ void main() {
       for (final location in locations) {
         expect(location, isNot(contains('LEAK')), reason: location);
         expect(location, isNot(contains('PRIV')), reason: location);
+        expect(location, isNot(contains('PHOTO')), reason: location);
         expect(location, isNot(contains('leak.email')), reason: location);
         expect(location, isNot(contains('@')), reason: location);
         expect(Uri.parse(location).hasQuery, isFalse, reason: location);
@@ -80,6 +97,7 @@ void _checkScreen(WidgetTester tester, {bool emailAllowed = false}) {
   for (final text in _texts(tester)) {
     expect(text, isNot(contains(_password)), reason: text);
     expect(text, isNot(contains('LEAK')), reason: text);
+    expect(text, isNot(contains('PHOTO')), reason: text);
     expect(text, isNot(contains('vt_')), reason: text);
     expect(text, isNot(contains('detail')), reason: text);
     if (!emailAllowed) {
@@ -126,6 +144,23 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
       ApiPaths.profile,
       (_) => jsonResponse(200, profileBody(displayName: _name, bio: _bio)),
     )
+    // The picture: an echoing load failure on the edit screen, an echoing
+    // refusal of the upload, then stored; an echoing failure of the removal,
+    // then removed. Every other read answers that there is none.
+    ..once('GET', ApiPaths.myAvatar, (_) => _echo(500))
+    ..always('GET', ApiPaths.myAvatar, (_) => noAvatar())
+    ..once(
+      'PUT',
+      ApiPaths.myAvatar,
+      (_) => _echoPicture(422, 'validation_failed'),
+    )
+    ..once('PUT', ApiPaths.myAvatar, (_) => imageResponse(testPicture))
+    ..once(
+      'DELETE',
+      ApiPaths.myAvatar,
+      (_) => _echoPicture(503, 'service_unavailable'),
+    )
+    ..once('DELETE', ApiPaths.myAvatar, (_) => noContent())
     // The page's languages: an echoing load failure, then a selection with
     // a language the catalog doesn't name.
     ..always('GET', ApiPaths.languages, (_) => jsonResponse(200, catalogBody()))
@@ -193,7 +228,15 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
     ..fail(const GoogleIdentityException(GoogleIdentityFailure.cancelled))
     ..next(_idToken2)
     ..next(_idToken);
-  final app = await pumpApp(tester, server: server, google: google);
+  final photos = FakePhotoSource()
+    ..next(_photo)
+    ..next(_photo);
+  final app = await pumpApp(
+    tester,
+    server: server,
+    google: google,
+    photos: photos,
+  );
   void record() => locations.add(app.location(tester));
   final logIn = find.widgetWithText(FilledButton, l10n.logInButton);
 
@@ -278,6 +321,53 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
     find.widgetWithText(FilledButton, l10n.profileEmptyButton),
   );
   onForm();
+
+  // The picture control, whose load failed with an echoing body: a refused
+  // photo, the photo stored, a failed removal, the removal. Each message is
+  // the app's own, and nothing of the photo is ever text.
+  final addPhoto = find.widgetWithText(
+    OutlinedButton,
+    l10n.profileAvatarAddButton,
+  );
+  final removePhoto = find.widgetWithText(
+    OutlinedButton,
+    l10n.profileAvatarRemoveButton,
+  );
+  expect(find.byType(FormErrorBanner), findsNothing);
+  await tapAndSettle(tester, addPhoto);
+  onForm();
+  expect(find.text(l10n.errorAvatarTooLarge), findsOneWidget);
+  await tapAndSettle(tester, addPhoto);
+  onForm();
+  expect(find.byType(FormErrorBanner), findsNothing);
+  await tapAndSettle(tester, removePhoto);
+  onForm();
+  expect(find.text(l10n.profileAvatarRemoveTitle), findsOneWidget);
+  await tapAndSettle(tester, find.text(l10n.profileAvatarRemoveConfirm));
+  onForm();
+  expect(find.byType(FormErrorBanner), findsOneWidget);
+  await tapAndSettle(tester, removePhoto);
+  onForm();
+  await tapAndSettle(tester, find.text(l10n.profileAvatarRemoveConfirm));
+  onForm();
+  expect(find.byType(FormErrorBanner), findsNothing);
+  expect(addPhoto, findsOneWidget);
+  // The photo travels only in the bodies of the member's own uploads.
+  final uploads = [
+    for (final r in server.requests)
+      if (latin1.decode(r.bodyBytes).contains('PHOTOmark') ||
+          r.url.toString().contains('PHOTO') ||
+          r.headers.values.any((v) => v.contains('PHOTO')))
+        r,
+  ];
+  expect(uploads, hasLength(2));
+  for (final r in uploads) {
+    expect(r.method, 'PUT');
+    expect(r.url.path, ApiPaths.myAvatar);
+    expect(r.url.hasQuery, isFalse);
+    expect(r.bodyBytes, _photo);
+  }
+
   final save = find.widgetWithText(FilledButton, l10n.profileSaveButton);
   await tester.enterText(field(l10n.displayNameLabel), _name);
   await tester.enterText(field(l10n.bioLabel), _bio);

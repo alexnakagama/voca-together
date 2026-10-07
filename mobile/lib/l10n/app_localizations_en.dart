@@ -283,6 +283,34 @@ class AppLocalizationsEn extends AppLocalizations {
       'Your profile picture: no photo yet';
 
   @override
+  String get profileAvatarLabel => 'Your profile picture';
+
+  @override
+  String get profileAvatarLoading => 'Loading your profile picture';
+
+  @override
+  String get profileAvatarAddButton => 'Add photo';
+
+  @override
+  String get profileAvatarChangeButton => 'Change photo';
+
+  @override
+  String get profileAvatarRemoveButton => 'Remove photo';
+
+  @override
+  String get profileAvatarRemoveTitle => 'Remove your photo?';
+
+  @override
+  String get profileAvatarRemoveMessage =>
+      'Other members will no longer see it.';
+
+  @override
+  String get profileAvatarRemoveConfirm => 'Remove';
+
+  @override
+  String get profileAvatarRemoveKeep => 'Keep photo';
+
+  @override
   String get profileFriendsHeading => 'Friends';
 
   @override
@@ -364,6 +392,10 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get errorAvatarDimensionsTooLarge =>
       'That photo has too many pixels. Choose a smaller one.';
+
+  @override
+  String get errorPhotoUnusable =>
+      'That photo couldn’t be used. Choose a different one.';
 
   @override
   String get languagesHeading => 'Languages';
