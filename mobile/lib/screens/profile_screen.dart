@@ -1,30 +1,34 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../api/profile.dart';
 import '../l10n/app_localizations.dart';
+import '../router.dart';
 import '../session.dart';
 import '../ui/theme.dart';
-import '../ui/widgets/app_text_field.dart';
 import '../ui/widgets/auth_scaffold.dart';
 import '../ui/widgets/form_error_banner.dart';
-import '../ui/widgets/form_notice_banner.dart';
 import '../ui/widgets/primary_button.dart';
+import '../ui/widgets/profile_header.dart';
+import '../ui/widgets/secondary_button.dart';
 import 'failure_presentation.dart';
 import 'profile_languages_section.dart';
 
-/// The signed-in user's own profile: the name and the "about you" text other
-/// members will see (`GET`/`PUT /v1/me/profile` through [SessionManager],
-/// decision 028).
+/// The signed-in user's own profile page, read-only: their picture's
+/// placeholder, name and text as the server stored them (`GET
+/// /v1/me/profile` through [SessionManager]), a Friends area that only says
+/// the feature comes later, and their languages.
 ///
-/// One form creates and edits: a user without a profile gets it empty. The
-/// text is sent as typed and the form then shows what the server stored. It
-/// never decides access; when the session ends the router leaves this screen
-/// on its own.
+/// Nothing is changed from here: "Edit Profile" opens the edit screen, and
+/// each time the member comes back, saved or not, the page drops what it
+/// showed and loads again. A user without a profile is invited to create
+/// one. It never decides access; when the session ends the router leaves
+/// this screen on its own.
 ///
-/// Below the form, [ProfileLanguagesSection] shows the user's languages. It
-/// loads and fails by itself, and the form's save doesn't touch it.
+/// [ProfileLanguagesSection] is mounted once the profile has loaded. It
+/// loads and fails by itself.
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key, required this.session});
 
@@ -35,80 +39,34 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  final _name = TextEditingController();
-  final _bio = TextEditingController();
-  final _nameFocus = FocusNode();
-  final _bioFocus = FocusNode();
-
-  /// The first load hasn't answered yet (or is being retried).
+  /// The load hasn't answered yet (or is being retried).
   bool _loading = true;
   String? _loadError;
 
-  /// Whether the user has a saved profile; decides the heading.
-  bool _exists = false;
+  /// The profile as the server stored it; null with none saved, and until a
+  /// load succeeds.
+  Profile? _profile;
 
-  bool _busy = false;
-  bool _saved = false;
-  String? _banner;
-  String? _nameError;
-  String? _bioError;
-  String _lastName = '';
-  String _lastBio = '';
-
-  /// Identifies the latest load; answers to earlier ones are dropped.
+  /// Identifies the latest load; answers to earlier ones are dropped. The
+  /// languages section is rebuilt for each one.
   int _request = 0;
+
+  /// The edit screen was opened from here and hasn't been left yet.
+  bool _editOpen = false;
 
   @override
   void initState() {
     super.initState();
-    _name.addListener(_nameEdited);
-    _bio.addListener(_bioEdited);
     unawaited(_load());
   }
 
-  @override
-  void dispose() {
-    _name.dispose();
-    _bio.dispose();
-    _nameFocus.dispose();
-    _bioFocus.dispose();
-    super.dispose();
-  }
-
-  void _nameEdited() {
-    if (_name.text == _lastName) return;
-    _lastName = _name.text;
-    if (_nameError != null || _saved) {
-      setState(() {
-        _nameError = null;
-        _saved = false;
-      });
-    }
-  }
-
-  void _bioEdited() {
-    if (_bio.text == _lastBio) return;
-    _lastBio = _bio.text;
-    if (_bioError != null || _saved) {
-      setState(() {
-        _bioError = null;
-        _saved = false;
-      });
-    }
-  }
-
-  /// Puts [profile]'s text in the form without it counting as an edit.
-  void _show(Profile profile) {
-    _lastName = profile.displayName;
-    _lastBio = profile.bio;
-    _name.text = profile.displayName;
-    _bio.text = profile.bio;
-  }
-
-  void _retry() {
+  void _reload() {
     setState(() {
       _loading = true;
       _loadError = null;
+      // What was shown may no longer be what is stored: if this load fails,
+      // the page shows the failure, not the old profile.
+      _profile = null;
     });
     unawaited(_load());
   }
@@ -119,8 +77,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final profile = await widget.session.profile();
       if (!mounted || request != _request) return;
       setState(() {
-        if (profile != null) _show(profile);
-        _exists = profile != null;
+        _profile = profile;
         _loading = false;
       });
     } on Exception catch (e) {
@@ -136,61 +93,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  Future<void> _save() async {
-    if (_busy) return;
-    final l10n = AppLocalizations.of(context);
-    if (_name.text.trim().isEmpty) {
-      setState(() {
-        _banner = null;
-        _saved = false;
-        _nameError = l10n.displayNameRequired;
-      });
-      _nameFocus.requestFocus();
-      return;
-    }
-
-    setState(() {
-      _busy = true;
-      _saved = false;
-      _banner = null;
-      _nameError = null;
-      _bioError = null;
-    });
-    try {
-      // As typed: the server normalizes and validates (027).
-      final stored = await widget.session.saveProfile(
-        displayName: _name.text,
-        bio: _bio.text,
-      );
-      if (!mounted) return;
-      setState(() {
-        _show(stored);
-        _exists = true;
-        _saved = true;
-        _busy = false;
-      });
-    } on Exception catch (e) {
-      if (!mounted) return;
-      final failure = presentFailure(e, l10n);
-      if (failure.kind == FailureKind.sessionEnded) return;
-      setState(() {
-        _banner = failure.message;
-        _nameError = failure.displayNameError;
-        _bioError = failure.bioError;
-        _busy = false;
-      });
-      final focus = failure.displayNameError != null
-          ? _nameFocus
-          : failure.bioError != null
-          ? _bioFocus
-          : null;
-      if (focus != null) {
-        // The fields are enabled again only after this frame.
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) focus.requestFocus();
-        });
-      }
-    }
+  /// Opens the edit screen on top of the page, and on coming back, saved or
+  /// not, loads what the server has: a save whose answer was lost may still
+  /// have been stored.
+  Future<void> _openEdit() async {
+    // A second tap before the screen covers the button would push it twice.
+    if (_editOpen) return;
+    _editOpen = true;
+    await context.push<void>(Routes.profileEdit);
+    _editOpen = false;
+    if (!mounted) return;
+    _reload();
   }
 
   @override
@@ -198,7 +111,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
     final loadError = _loadError;
-    final banner = _banner;
+    final profile = _profile;
 
     final List<Widget> content;
     if (_loading) {
@@ -216,50 +129,49 @@ class _ProfileScreenState extends State<ProfileScreen> {
       content = [
         FormErrorBanner(message: loadError),
         const SizedBox(height: Spacing.md),
-        PrimaryButton(label: l10n.tryAgain, onPressed: _retry),
+        PrimaryButton(label: l10n.tryAgain, onPressed: _reload),
+      ];
+    } else if (profile == null) {
+      content = [
+        Text(l10n.profileEmptyMessage, style: theme.textTheme.bodyLarge),
+        const SizedBox(height: Spacing.lg),
+        PrimaryButton(
+          label: l10n.profileEmptyButton,
+          onPressed: () => unawaited(_openEdit()),
+        ),
       ];
     } else {
       content = [
+        ProfileHeader(
+          name: profile.displayName,
+          bio: profile.bio,
+          avatarLabel: l10n.profileAvatarPlaceholderLabel,
+        ),
+        const SizedBox(height: Spacing.lg),
+        SecondaryButton(
+          label: l10n.profileEditButton,
+          onPressed: () => unawaited(_openEdit()),
+        ),
+        const Divider(height: Spacing.xl * 2),
         Semantics(
           header: true,
           child: Text(
-            _exists ? l10n.profileEditHeading : l10n.profileCreateHeading,
-            style: theme.textTheme.headlineSmall,
+            l10n.profileFriendsHeading,
+            style: theme.textTheme.titleLarge,
           ),
         ),
         const SizedBox(height: Spacing.sm),
-        Text(l10n.profileVisibilityNotice, style: theme.textTheme.bodyMedium),
-        const SizedBox(height: Spacing.lg),
-        if (banner != null) ...[
-          FormErrorBanner(message: banner),
-          const SizedBox(height: Spacing.md),
-        ],
-        if (_saved) ...[
-          FormNoticeBanner(message: l10n.profileSaved),
-          const SizedBox(height: Spacing.md),
-        ],
-        AppTextField.text(
-          label: l10n.displayNameLabel,
-          controller: _name,
-          focusNode: _nameFocus,
-          errorText: _nameError,
-          enabled: !_busy,
-          textInputAction: TextInputAction.next,
-          onSubmitted: (_) => _bioFocus.requestFocus(),
+        Text(
+          l10n.profileFriendsComingLater,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
         ),
-        const SizedBox(height: Spacing.md),
-        AppTextField.multiline(
-          label: l10n.bioLabel,
-          controller: _bio,
-          focusNode: _bioFocus,
-          errorText: _bioError,
-          enabled: !_busy,
-        ),
-        const SizedBox(height: Spacing.lg),
-        PrimaryButton(
-          label: l10n.profileSaveButton,
-          onPressed: _save,
-          busy: _busy,
+        const Divider(height: Spacing.xl * 2),
+        // A new section for each load, so it loads again with the page.
+        ProfileLanguagesSection(
+          key: ValueKey(_request),
+          session: widget.session,
         ),
       ];
     }
@@ -276,23 +188,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  ...content,
-                  // The languages load by themselves from the moment the
-                  // screen opens, and are shown once the form is: the
-                  // section keeps its state while it is hidden.
-                  Visibility(
-                    visible: !_loading && loadError == null,
-                    maintainState: true,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        const Divider(height: Spacing.xl * 2),
-                        ProfileLanguagesSection(session: widget.session),
-                      ],
-                    ),
-                  ),
-                ],
+                children: content,
               ),
             ),
           ),

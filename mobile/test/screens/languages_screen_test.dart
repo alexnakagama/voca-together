@@ -7,9 +7,11 @@ import 'package:http/http.dart' as http;
 import 'package:vocatogether/api/api_paths.dart';
 import 'package:vocatogether/screens/languages_screen.dart';
 import 'package:vocatogether/screens/login_screen.dart';
+import 'package:vocatogether/screens/profile_edit_screen.dart';
 import 'package:vocatogether/screens/profile_screen.dart';
 import 'package:vocatogether/session.dart';
 import 'package:vocatogether/ui/widgets/form_error_banner.dart';
+import 'package:vocatogether/ui/widgets/language_chip.dart';
 import 'package:vocatogether/ui/widgets/language_row.dart';
 import 'package:vocatogether/ui/widgets/primary_button.dart';
 import 'package:vocatogether/ui/widgets/secondary_button.dart';
@@ -21,8 +23,13 @@ typedef _Entries = List<(String, String)>;
 
 Finder get _openProfile =>
     find.widgetWithText(OutlinedButton, l10n.profileButton);
+Finder get _editProfile =>
+    find.widgetWithText(OutlinedButton, l10n.profileEditButton);
+
+/// The "Languages" row of the profile edit screen: the way in.
 Finder get _edit =>
-    find.widgetWithText(OutlinedButton, l10n.languagesEditButton);
+    find.widgetWithText(ListTile, l10n.profileEditLanguagesButton);
+Finder get _form => find.byType(ProfileEditScreen);
 Finder get _save => find.widgetWithText(FilledButton, l10n.languagesSaveButton);
 Finder get _cancel =>
     find.widgetWithText(OutlinedButton, l10n.languagesCancelButton);
@@ -93,7 +100,15 @@ List<http.Request> _puts(FakeServer server) => [
     if (request.method == 'PUT') request,
 ];
 
-/// Opens the profile and, from its languages section, the editor.
+/// From home: the profile page, then its edit screen, which has the way in
+/// to the editor.
+Future<void> _openForm(WidgetTester tester) async {
+  await tapAndSettle(tester, _openProfile);
+  await tapAndSettle(tester, _editProfile);
+  expect(_form, findsOneWidget);
+}
+
+/// Opens the profile, its edit screen and, from that, the editor.
 Future<TestApp> _openEditor(
   WidgetTester tester,
   FakeServer server, {
@@ -109,7 +124,7 @@ Future<TestApp> _openEditor(
     textScale: textScale,
     keyboard: keyboard,
   );
-  await tapAndSettle(tester, _openProfile);
+  await _openForm(tester);
   await tapAndSettle(tester, _edit);
   expect(_editor, findsOneWidget);
   expect(app.location(tester), '/profile/languages');
@@ -181,7 +196,7 @@ void main() {
         ..once('GET', ApiPaths.myLanguages, (_) => reply.future);
       final handle = tester.ensureSemantics();
       final app = await pumpApp(tester, server: server, signedIn: true);
-      await tapAndSettle(tester, _openProfile);
+      await _openForm(tester);
       await tester.ensureVisible(_edit);
       await tester.tap(_edit);
       await tester.pump();
@@ -234,7 +249,8 @@ void main() {
     ) async {
       final server = _backend(spoken: [('es', 'native')]);
       await _openEditor(tester, server);
-      // Once for the profile's summary, once for the editor.
+      // Once for the profile page's summary, once for the editor: the edit
+      // screen in between asks for neither.
       expect(server.count(ApiPaths.languages), 2);
       expect(server.count(ApiPaths.myLanguages), 2);
       for (final request
@@ -284,7 +300,7 @@ void main() {
       ) async {
         final server = _backend(spoken: [('es', 'native')]);
         final app = await pumpApp(tester, server: server, signedIn: true);
-        await tapAndSettle(tester, _openProfile);
+        await _openForm(tester);
         script(server);
         await tapAndSettle(tester, _edit);
 
@@ -317,7 +333,7 @@ void main() {
     testWidgets('a load that gets no answer times out', (tester) async {
       final server = _backend();
       final app = await pumpApp(tester, server: server, signedIn: true);
-      await tapAndSettle(tester, _openProfile);
+      await _openForm(tester);
       server.once('GET', ApiPaths.myLanguages, neverAnswers);
       await tester.ensureVisible(_edit);
       await tester.tap(_edit);
@@ -332,7 +348,7 @@ void main() {
     ) async {
       final server = _backend();
       final app = await pumpApp(tester, server: server, signedIn: true);
-      await tapAndSettle(tester, _openProfile);
+      await _openForm(tester);
       server
         ..always(
           'GET',
@@ -363,7 +379,7 @@ void main() {
       final reply = Completer<http.Response>();
       final server = _backend();
       await pumpApp(tester, server: server, signedIn: true);
-      await tapAndSettle(tester, _openProfile);
+      await _openForm(tester);
       server.once('GET', ApiPaths.myLanguages, (_) => reply.future);
       await tester.ensureVisible(_edit);
       await tester.tap(_edit);
@@ -374,7 +390,7 @@ void main() {
       await tester.pageBack();
       await tester.pumpAndSettle();
       expect(_dialog, findsNothing);
-      expect(find.byType(ProfileScreen), findsOneWidget);
+      expect(_form, findsOneWidget);
       expect(_editor, findsNothing);
 
       reply.complete(errorResponse(500, 'internal_error'));
@@ -386,14 +402,14 @@ void main() {
     testWidgets('leaving from the load error asks nothing', (tester) async {
       final server = _backend();
       await pumpApp(tester, server: server, signedIn: true);
-      await tapAndSettle(tester, _openProfile);
+      await _openForm(tester);
       server.once('GET', ApiPaths.languages, networkFailure);
       await tapAndSettle(tester, _edit);
       expect(find.text(l10n.errorNetwork), findsOneWidget);
 
       await _systemBack(tester);
       expect(_dialog, findsNothing);
-      expect(find.byType(ProfileScreen), findsOneWidget);
+      expect(_form, findsOneWidget);
     });
 
     testWidgets('a language the catalog doesn\'t name is shown by its code, '
@@ -544,7 +560,7 @@ void main() {
       // Nothing changed, so leaving asks nothing.
       await _systemBack(tester);
       expect(_dialog, findsNothing);
-      expect(find.byType(ProfileScreen), findsOneWidget);
+      expect(_form, findsOneWidget);
     });
 
     testWidgets('a large catalog is built lazily and scrolls to its end, '
@@ -730,7 +746,7 @@ void main() {
 
   group('saving', () {
     testWidgets('sends both lists though only one was edited, and returns to '
-        'the profile', (tester) async {
+        'the profile edit screen', (tester) async {
       final server = _backend(
         spoken: [('es', 'native'), ('en', 'c1')],
         learning: [('ja', 'a2')],
@@ -750,8 +766,8 @@ void main() {
       // No question about unsaved changes on the way out.
       expect(_dialog, findsNothing);
       expect(_editor, findsNothing);
-      expect(find.byType(ProfileScreen), findsOneWidget);
-      expect(app.location(tester), '/profile');
+      expect(_form, findsOneWidget);
+      expect(app.location(tester), '/profile/edit');
     });
 
     testWidgets('an empty "I speak" is sent as an empty array', (tester) async {
@@ -1173,7 +1189,7 @@ void main() {
         await leave(tester);
         expect(_dialog, findsNothing);
         expect(_editor, findsNothing);
-        expect(app.location(tester), '/profile');
+        expect(app.location(tester), '/profile/edit');
         expect(_puts(server), isEmpty);
       });
 
@@ -1205,11 +1221,11 @@ void main() {
 
         expect(_dialog, findsNothing);
         expect(_editor, findsNothing);
-        expect(app.location(tester), '/profile');
+        expect(app.location(tester), '/profile/edit');
         expect(_puts(server), isEmpty);
-        // The profile shows what is stored.
+        // Back on the edit screen, which shows no language.
+        expect(_form, findsOneWidget);
         expect(find.text('Japanese'), findsNothing);
-        expect(find.text('Spanish'), findsOneWidget);
       });
     });
 
@@ -1296,6 +1312,156 @@ void main() {
         expect(tester.takeException(), isNull);
         expect(_puts(server), isEmpty);
       });
+    });
+  });
+
+  group('opened from the profile edit screen', () {
+    Finder name() => field(l10n.displayNameLabel);
+    Finder bio() => field(l10n.bioLabel);
+    String text(WidgetTester tester, Finder f) =>
+        textFieldOf(tester, f).controller!.text;
+    List<String> profileMethods(FakeServer server) => [
+      for (final request in server.to(ApiPaths.profile)) request.method,
+    ];
+
+    /// Types in the profile form, without saving, and opens the editor.
+    Future<TestApp> openWithTypedText(
+      WidgetTester tester,
+      FakeServer server,
+    ) async {
+      final app = await pumpApp(tester, server: server, signedIn: true);
+      await _openForm(tester);
+      await tester.enterText(name(), 'Ana López');
+      await tester.enterText(bio(), 'Not saved yet');
+      await tester.pumpAndSettle();
+      await tapAndSettle(tester, _edit);
+      expect(_editor, findsOneWidget);
+      expect(app.location(tester), '/profile/languages');
+      return app;
+    }
+
+    void expectFormAsLeft(WidgetTester tester, TestApp app) {
+      expect(_editor, findsNothing);
+      expect(_form, findsOneWidget);
+      expect(app.location(tester), '/profile/edit');
+      expect(text(tester, name()), 'Ana López');
+      expect(text(tester, bio()), 'Not saved yet');
+      // The page's load and the form's: the visit sent no profile save and
+      // loaded nothing again.
+      expect(profileMethods(app.server), ['GET', 'GET']);
+    }
+
+    testWidgets('the member\'s languages are in the editor', (tester) async {
+      final server = _backend(
+        spoken: [('es', 'native')],
+        learning: [('ja', 'a2')],
+      );
+      await _openEditor(tester, server);
+      expect(_spoken(tester), [('Spanish', 'Native')]);
+      expect(_learning(tester), [('Japanese', 'A2')]);
+    });
+
+    testWidgets('a save returns to the form with the typed text kept', (
+      tester,
+    ) async {
+      final server = _backend(spoken: [('es', 'native')]);
+      final app = await openWithTypedText(tester, server);
+      await _pick(tester, 1, 'Japanese', 'A1');
+      _accept(server);
+      await tapAndSettle(tester, _save);
+
+      expect(_puts(server), hasLength(1));
+      expect(_dialog, findsNothing);
+      expectFormAsLeft(tester, app);
+    });
+
+    testWidgets('a discard returns to the form with the typed text kept', (
+      tester,
+    ) async {
+      final server = _backend(spoken: [('es', 'native')]);
+      final app = await openWithTypedText(tester, server);
+      await _pick(tester, 1, 'Japanese', 'A1');
+      await _systemBack(tester);
+      await tapAndSettle(tester, find.text(l10n.languagesDiscardConfirm));
+
+      expect(_puts(server), isEmpty);
+      expectFormAsLeft(tester, app);
+      // The form's own unsaved text is still asked about, by its own dialog.
+      await _systemBack(tester);
+      expect(find.text(l10n.profileDiscardMessage), findsOneWidget);
+      expect(find.text(l10n.languagesDiscardMessage), findsNothing);
+    });
+
+    testWidgets('going back with nothing changed returns to the form as it '
+        'was', (tester) async {
+      final server = _backend(spoken: [('es', 'native')]);
+      final app = await openWithTypedText(tester, server);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+
+      expect(_dialog, findsNothing);
+      expectFormAsLeft(tester, app);
+    });
+
+    testWidgets('after a save, going back from the edit screen shows the new '
+        'selection on the profile page', (tester) async {
+      final server = _backend(spoken: [('es', 'native')]);
+      final app = await _openEditor(tester, server);
+      await _pick(tester, 1, 'Japanese', 'A1');
+      _accept(server);
+      await tapAndSettle(tester, _save);
+      expect(_form, findsOneWidget);
+
+      // What the save stored is what the page now loads.
+      server.always(
+        'GET',
+        ApiPaths.myLanguages,
+        (_) => jsonResponse(
+          200,
+          languagesBody(spoken: [('es', 'native')], learning: [('ja', 'a1')]),
+        ),
+      );
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(_form, findsNothing);
+      expect(find.byType(ProfileScreen), findsOneWidget);
+      expect(app.location(tester), '/profile');
+      expect(
+        [
+          for (final chip in tester.widgetList<LanguageChip>(
+            find.byType(LanguageChip),
+          ))
+            (chip.name, chip.level),
+        ],
+        [('Spanish', 'Native'), ('Japanese', 'A1')],
+      );
+    });
+
+    testWidgets('the profile page has no way in to the editor', (tester) async {
+      for (final spoken in <_Entries>[
+        [('es', 'native')],
+        [],
+      ]) {
+        final server = _backend(spoken: spoken);
+        await pumpApp(tester, server: server, signedIn: true);
+        await tapAndSettle(tester, _openProfile);
+
+        expect(find.byType(ProfileScreen), findsOneWidget);
+        expect(find.text('Edit languages'), findsNothing);
+        expect(_edit, findsNothing);
+        // The page's one control under its app bar is "Edit Profile".
+        expect(
+          find.descendant(
+            of: find.byType(SingleChildScrollView),
+            matching: find.byWidgetPredicate(
+              (w) => w is ButtonStyleButton || w is ListTile,
+            ),
+          ),
+          findsOneWidget,
+        );
+        expect(_editProfile, findsOneWidget);
+        await tester.pumpWidget(const SizedBox());
+      }
     });
   });
 

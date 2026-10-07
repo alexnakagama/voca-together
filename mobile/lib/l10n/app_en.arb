@@ -317,7 +317,7 @@
   },
   "profileTitle": "Your profile",
   "@profileTitle": {
-    "description": "Title of the screen where the user edits their own profile."
+    "description": "Title of the user’s own profile page and of the screen where they edit their profile."
   },
   "profileLoading": "Loading your profile",
   "@profileLoading": {
@@ -331,7 +331,31 @@
   "@profileEditHeading": {
     "description": "Heading of the profile form when the user already has a profile."
   },
-  "profileVisibilityNotice": "Other members will be able to see your name and what you write about yourself. Your email address stays private.",
+  "profileEmptyMessage": "You haven’t created your profile yet. Add your name so other members can get to know you.",
+  "@profileEmptyMessage": {
+    "description": "Text of the user’s own profile page when they haven’t saved a profile yet."
+  },
+  "profileEmptyButton": "Create your profile",
+  "@profileEmptyButton": {
+    "description": "Button on the user’s own profile page, shown when they haven’t saved a profile yet, that opens the screen where they create it."
+  },
+  "profileEditButton": "Edit Profile",
+  "@profileEditButton": {
+    "description": "Button on the user’s own profile page that opens the screen where they edit their name, their text, their picture and their languages."
+  },
+  "profileAvatarPlaceholderLabel": "Your profile picture: no photo yet",
+  "@profileAvatarPlaceholderLabel": {
+    "description": "Accessibility label of the placeholder shown on the user’s own profile page in place of a profile picture."
+  },
+  "profileFriendsHeading": "Friends",
+  "@profileFriendsHeading": {
+    "description": "Heading of the friends area of the user’s own profile page. The feature doesn’t exist yet."
+  },
+  "profileFriendsComingLater": "Coming later",
+  "@profileFriendsComingLater": {
+    "description": "Text under the Friends heading of the profile page saying the feature isn’t available yet. Must not state a number or a date."
+  },
+  "profileVisibilityNotice": "Other members will be able to see your name, your picture and what you write about yourself. Your email address stays private.",
   "@profileVisibilityNotice": {
     "description": "Notice on the profile form saying which information other members will see."
   },
@@ -347,9 +371,17 @@
   "@profileSaveButton": {
     "description": "Button that saves the profile form."
   },
-  "profileSaved": "Profile saved.",
-  "@profileSaved": {
-    "description": "Confirmation shown after the profile was saved."
+  "profileCancelButton": "Cancel",
+  "@profileCancelButton": {
+    "description": "Button that leaves the profile form without saving."
+  },
+  "profileEditLanguagesButton": "Languages",
+  "@profileEditLanguagesButton": {
+    "description": "Row on the profile form that opens the screen where the user edits the languages they speak and are learning."
+  },
+  "profileDiscardMessage": "Your changes to your profile haven’t been saved.",
+  "@profileDiscardMessage": {
+    "description": "Text of the dialog shown when the user leaves the profile form with unsaved changes to their name or their text."
   },
   "displayNameRequired": "Enter your name",
   "@displayNameRequired": {
@@ -455,10 +487,6 @@
   "@languageLevelNative": {
     "description": "Short name of the level of a native language, shown next to a language the user speaks."
   },
-  "languagesEditButton": "Edit languages",
-  "@languagesEditButton": {
-    "description": "Button in the languages section of the profile that opens the screen where the user edits their languages."
-  },
   "languagesEditorTitle": "Your languages",
   "@languagesEditorTitle": {
     "description": "Title of the screen where the user edits the languages they speak and are learning."
@@ -481,7 +509,7 @@
   },
   "languagesDiscardTitle": "Discard changes?",
   "@languagesDiscardTitle": {
-    "description": "Title of the dialog shown when the user leaves the languages editor with unsaved changes."
+    "description": "Title of the dialog shown when the user leaves the languages editor or the profile form with unsaved changes."
   },
   "languagesDiscardMessage": "Your changes to your languages haven’t been saved.",
   "@languagesDiscardMessage": {
@@ -489,11 +517,11 @@
   },
   "languagesDiscardConfirm": "Discard",
   "@languagesDiscardConfirm": {
-    "description": "Dialog button that leaves the languages editor and drops the unsaved changes."
+    "description": "Dialog button that leaves the languages editor or the profile form and drops the unsaved changes."
   },
   "languagesDiscardKeep": "Keep editing",
   "@languagesDiscardKeep": {
-    "description": "Dialog button that closes the dialog and stays in the languages editor."
+    "description": "Dialog button that closes the dialog and stays in the languages editor or the profile form."
   },
   "languagePickerTitle": "Choose a language",
   "@languagePickerTitle": {

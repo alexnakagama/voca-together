@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,26 +6,36 @@ import 'package:http/http.dart' as http;
 import 'package:vocatogether/api/api_paths.dart';
 import 'package:vocatogether/screens/home_screen.dart';
 import 'package:vocatogether/screens/login_screen.dart';
+import 'package:vocatogether/screens/profile_edit_screen.dart';
+import 'package:vocatogether/screens/profile_languages_section.dart';
 import 'package:vocatogether/screens/profile_screen.dart';
 import 'package:vocatogether/session.dart';
 import 'package:vocatogether/ui/widgets/form_error_banner.dart';
-import 'package:vocatogether/ui/widgets/form_notice_banner.dart';
+import 'package:vocatogether/ui/widgets/language_chip.dart';
+import 'package:vocatogether/ui/widgets/profile_avatar.dart';
+import 'package:vocatogether/ui/widgets/profile_header.dart';
 
 import '../support/fakes.dart';
 import 'harness.dart';
 
 Finder get _open => find.widgetWithText(OutlinedButton, l10n.profileButton);
-Finder get _save => find.widgetWithText(FilledButton, l10n.profileSaveButton);
+Finder get _page => find.byType(ProfileScreen);
+Finder get _form => find.byType(ProfileEditScreen);
+Finder get _edit => find.widgetWithText(OutlinedButton, l10n.profileEditButton);
+Finder get _create =>
+    find.widgetWithText(FilledButton, l10n.profileEmptyButton);
 Finder get _retry => find.widgetWithText(FilledButton, l10n.tryAgain);
-Finder get _name => field(l10n.displayNameLabel);
-Finder get _bio => field(l10n.bioLabel);
+Finder get _save => find.widgetWithText(FilledButton, l10n.profileSaveButton);
+Finder get _cancel =>
+    find.widgetWithText(OutlinedButton, l10n.profileCancelButton);
+Finder get _section => find.byType(ProfileLanguagesSection);
 
-String _text(WidgetTester tester, Finder f) =>
-    textFieldOf(tester, f).controller!.text;
+/// Anything that takes text, or that would change the profile from here.
+Finder get _textFields =>
+    find.byWidgetPredicate((w) => w is TextField || w is EditableText);
 
-/// A backend for a signed-in user on home, with no languages chosen (the
-/// profile's languages section loads them); the profile calls are scripted
-/// by each test.
+/// A backend for a signed-in user on home, with the three-language catalog
+/// and no languages chosen; the profile calls are scripted by each test.
 FakeServer _backend() => FakeServer()
   ..always('GET', ApiPaths.languages, (_) => jsonResponse(200, catalogBody()))
   ..always(
@@ -38,16 +47,11 @@ FakeServer _backend() => FakeServer()
   ..always('GET', ApiPaths.healthz, (_) => healthy())
   ..always('POST', ApiPaths.logout, (_) => noContent());
 
-http.Response _validation(List<(String, String)> fields) => jsonResponse(422, {
-  'error': {
-    'code': 'validation_failed',
-    'fields': [
-      for (final (field, code) in fields) {'field': field, 'code': code},
-    ],
-  },
-});
+Responder _profile({String name = 'Ana', String bio = ''}) =>
+    (_) => jsonResponse(200, profileBody(displayName: name, bio: bio));
 
-/// Signs in on home and opens the profile, whose load must be scripted.
+/// Signs in on home and opens the profile page, whose load must be
+/// scripted.
 Future<TestApp> _openProfile(
   WidgetTester tester,
   FakeServer server, {
@@ -62,21 +66,480 @@ Future<TestApp> _openProfile(
     await tester.pump();
     await tester.pump();
   }
-  expect(find.byType(ProfileScreen), findsOneWidget);
+  expect(_page, findsOneWidget);
   return app;
 }
 
-/// Opens the profile of a user who hasn't saved one: an empty form.
-Future<TestApp> _openEmpty(WidgetTester tester, FakeServer server) {
-  server.once('GET', ApiPaths.profile, (_) => noProfile());
-  return _openProfile(tester, server);
-}
+/// The chips on screen as (name, level), in order.
+List<(String, String)> _chips(WidgetTester tester) => [
+  for (final chip in tester.widgetList<LanguageChip>(find.byType(LanguageChip)))
+    (chip.name, chip.level),
+];
 
 void main() {
-  group('loading', () {
-    testWidgets('a labelled spinner, then an empty form for a new profile', (
+  group('the page is read-only', () {
+    testWidgets('a profile with a name, a text and languages shows all of '
+        'them, "Edit Profile", and nothing to type in', (tester) async {
+      final server = _backend()
+        ..always(
+          'GET',
+          ApiPaths.profile,
+          _profile(name: 'Ana López', bio: 'Hi'),
+        )
+        ..always(
+          'GET',
+          ApiPaths.myLanguages,
+          (_) => jsonResponse(
+            200,
+            languagesBody(
+              spoken: [('es', 'native'), ('en', 'c1')],
+              learning: [('ja', 'a2')],
+            ),
+          ),
+        );
+      final handle = tester.ensureSemantics();
+      final app = await _openProfile(tester, server);
+
+      expect(app.location(tester), '/profile');
+      final header = tester.widget<ProfileHeader>(find.byType(ProfileHeader));
+      expect(header.name, 'Ana López');
+      expect(header.bio, 'Hi');
+      expect(find.text('Ana López'), findsOneWidget);
+      expect(find.text('Hi'), findsOneWidget);
+      expect(
+        tester.getSemantics(find.text('Ana López')),
+        isSemantics(label: 'Ana López', isHeader: true),
+      );
+      // No picture yet: the placeholder, with the name's first character,
+      // read as the profile picture.
+      expect(header.image, isNull);
+      expect(
+        find.descendant(
+          of: find.byType(ProfileAvatar),
+          matching: find.text('A'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        tester.getSemantics(find.byType(ProfileAvatar)),
+        isSemantics(isImage: true, label: l10n.profileAvatarPlaceholderLabel),
+      );
+      expect(_chips(tester), [
+        ('Spanish', 'Native'),
+        ('English', 'C1'),
+        ('Japanese', 'A2'),
+      ]);
+      expect(_edit, findsOneWidget);
+      expect(_textFields, findsNothing);
+      expect(_save, findsNothing);
+      // The one control under the app bar opens the edit screen: nothing
+      // here changes the profile, the picture or the languages.
+      final controls = find.descendant(
+        of: find.descendant(
+          of: _page,
+          matching: find.byType(SingleChildScrollView),
+        ),
+        matching: find.byWidgetPredicate(
+          (w) => w is ButtonStyleButton || w is ListTile || w is Checkbox,
+        ),
+      );
+      expect(controls, findsOneWidget);
+      expect(tester.widget(controls), tester.widget(_edit));
+      expect(find.text(l10n.profileEmptyMessage), findsNothing);
+      handle.dispose();
+    });
+
+    testWidgets('with no text, the name and nothing in the text\'s place', (
       tester,
     ) async {
+      final server = _backend()..always('GET', ApiPaths.profile, _profile());
+      await _openProfile(tester, server);
+
+      final header = find.byType(ProfileHeader);
+      expect(tester.widget<ProfileHeader>(header).bio, '');
+      // The picture and the name, and no third text or label under them.
+      expect(
+        tester
+            .widgetList<Text>(
+              find.descendant(of: header, matching: find.byType(Text)),
+            )
+            .map((t) => t.data),
+        ['A', 'Ana'],
+      );
+      expect(find.text(l10n.bioLabel), findsNothing);
+    });
+
+    testWidgets('the name and the text are the ones the server returned', (
+      tester,
+    ) async {
+      // As stored: nothing is trimmed, cut or rewritten on the way.
+      const name = 'Ana  María  O’Neill-López';
+      const bio = 'Line one\n\nLine two   ';
+      final server = _backend()
+        ..always('GET', ApiPaths.profile, _profile(name: name, bio: bio));
+      await _openProfile(tester, server);
+
+      expect(find.text(name), findsOneWidget);
+      expect(find.text(bio), findsOneWidget);
+      expect(server.to(ApiPaths.profile).single.method, 'GET');
+      expect(server.to(ApiPaths.profile).single.url.hasQuery, isFalse);
+    });
+  });
+
+  group('the Friends placeholder', () {
+    testWidgets('a heading and "Coming later", with no count', (tester) async {
+      final server = _backend()..always('GET', ApiPaths.profile, _profile());
+      final handle = tester.ensureSemantics();
+      await _openProfile(tester, server);
+
+      expect(find.text(l10n.profileFriendsHeading), findsOneWidget);
+      expect(
+        tester.getSemantics(find.text(l10n.profileFriendsHeading)),
+        isSemantics(label: l10n.profileFriendsHeading, isHeader: true),
+      );
+      expect(find.text(l10n.profileFriendsComingLater), findsOneWidget);
+      for (final text in [
+        l10n.profileFriendsHeading,
+        l10n.profileFriendsComingLater,
+      ]) {
+        expect(text, isNot(contains(RegExp(r'\d'))));
+      }
+      // Between the name and the languages.
+      final friends = tester.getTopLeft(find.text(l10n.profileFriendsHeading));
+      expect(tester.getTopLeft(find.text('Ana')).dy, lessThan(friends.dy));
+      expect(friends.dy, lessThan(tester.getTopLeft(_section).dy));
+      handle.dispose();
+    });
+
+    testWidgets('tapping it does nothing and asks for nothing', (tester) async {
+      final server = _backend()..always('GET', ApiPaths.profile, _profile());
+      final app = await _openProfile(tester, server);
+      final requests = server.requests.length;
+
+      for (final text in [
+        l10n.profileFriendsHeading,
+        l10n.profileFriendsComingLater,
+      ]) {
+        await tester.ensureVisible(find.text(text));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(text));
+        await tester.pumpAndSettle();
+        expect(
+          find.ancestor(
+            of: find.text(text),
+            matching: find.byWidgetPredicate(
+              (w) => w is ButtonStyleButton || w is InkResponse,
+            ),
+          ),
+          findsNothing,
+        );
+      }
+      expect(app.location(tester), '/profile');
+      expect(_page, findsOneWidget);
+      expect(_form, findsNothing);
+      expect(server.requests, hasLength(requests));
+    });
+  });
+
+  group('languages on the page', () {
+    testWidgets('are asked for once the profile has loaded, and shown under '
+        'it', (tester) async {
+      final reply = Completer<http.Response>();
+      final server = _backend()
+        ..once('GET', ApiPaths.profile, (_) => reply.future)
+        ..always(
+          'GET',
+          ApiPaths.myLanguages,
+          (_) => jsonResponse(200, languagesBody(spoken: [('es', 'native')])),
+        );
+      await _openProfile(tester, server, settle: false);
+
+      expect(_section, findsNothing);
+      expect(server.count(ApiPaths.languages), 0);
+      expect(server.count(ApiPaths.myLanguages), 0);
+
+      reply.complete(jsonResponse(200, profileBody(displayName: 'Ana')));
+      await tester.pumpAndSettle();
+      expect(find.text(l10n.languagesHeading), findsOneWidget);
+      expect(_chips(tester), [('Spanish', 'Native')]);
+      expect(server.count(ApiPaths.languages), 1);
+      expect(server.count(ApiPaths.myLanguages), 1);
+    });
+
+    testWidgets('with none chosen, one text and neither heading', (
+      tester,
+    ) async {
+      final server = _backend()..always('GET', ApiPaths.profile, _profile());
+      await _openProfile(tester, server);
+
+      expect(find.text(l10n.languagesEmpty), findsOneWidget);
+      expect(find.text(l10n.languagesSpokenHeading), findsNothing);
+      expect(find.text(l10n.languagesLearningHeading), findsNothing);
+    });
+
+    testWidgets('a failure of theirs leaves the rest of the page as it is', (
+      tester,
+    ) async {
+      final server = _backend()
+        ..always('GET', ApiPaths.profile, _profile(bio: 'Hi'))
+        ..once('GET', ApiPaths.myLanguages, networkFailure);
+      await _openProfile(tester, server);
+
+      expect(
+        find.descendant(of: _section, matching: find.text(l10n.errorNetwork)),
+        findsOneWidget,
+      );
+      expect(find.byType(FormErrorBanner), findsOneWidget);
+      expect(find.text('Ana'), findsOneWidget);
+      expect(find.text('Hi'), findsOneWidget);
+      expect(find.byType(ProfileAvatar), findsOneWidget);
+      expect(_edit, findsOneWidget);
+      // The page's own retry is not shown: the profile loaded.
+      expect(_retry, findsNothing);
+
+      await tapAndSettle(
+        tester,
+        find.widgetWithText(OutlinedButton, l10n.tryAgain),
+      );
+      expect(find.text(l10n.languagesEmpty), findsOneWidget);
+      // The section's retry asked for the languages, not for the profile.
+      expect(server.count(ApiPaths.profile), 1);
+    });
+  });
+
+  group('a member without a profile', () {
+    testWidgets('is invited to create one, and sees nothing of a profile', (
+      tester,
+    ) async {
+      final server = _backend()
+        ..always('GET', ApiPaths.profile, (_) => noProfile());
+      final app = await _openProfile(tester, server);
+
+      expect(find.text(l10n.profileEmptyMessage), findsOneWidget);
+      expect(_create, findsOneWidget);
+      expect(find.byType(ProfileHeader), findsNothing);
+      expect(find.byType(ProfileAvatar), findsNothing);
+      expect(find.text(l10n.profileFriendsHeading), findsNothing);
+      expect(_section, findsNothing);
+      expect(find.text(l10n.languagesHeading), findsNothing);
+      expect(_edit, findsNothing);
+      expect(_textFields, findsNothing);
+      expect(find.byType(FormErrorBanner), findsNothing);
+      // Nothing of a profile was asked for either.
+      expect(server.count(ApiPaths.languages), 0);
+      expect(server.count(ApiPaths.myLanguages), 0);
+
+      await tapAndSettle(tester, _create);
+      expect(_form, findsOneWidget);
+      expect(app.location(tester), '/profile/edit');
+      expect(find.text(l10n.profileCreateHeading), findsOneWidget);
+    });
+
+    testWidgets('after creating one, the page shows it', (tester) async {
+      final server = _backend()
+        ..always('GET', ApiPaths.profile, (_) => noProfile());
+      final app = await _openProfile(tester, server);
+      await tapAndSettle(tester, _create);
+
+      server
+        ..once(
+          'PUT',
+          ApiPaths.profile,
+          _profile(name: 'Ana López', bio: 'New here'),
+        )
+        ..always(
+          'GET',
+          ApiPaths.profile,
+          _profile(name: 'Ana López', bio: 'New here'),
+        );
+      await tester.enterText(field(l10n.displayNameLabel), 'Ana López');
+      await tester.enterText(field(l10n.bioLabel), 'New here');
+      await tapAndSettle(tester, _save);
+
+      expect(_form, findsNothing);
+      expect(app.location(tester), '/profile');
+      expect(find.text(l10n.profileEmptyMessage), findsNothing);
+      expect(find.text('Ana López'), findsOneWidget);
+      expect(find.text('New here'), findsOneWidget);
+      expect(find.text(l10n.profileFriendsHeading), findsOneWidget);
+      expect(find.text(l10n.languagesEmpty), findsOneWidget);
+      expect(_edit, findsOneWidget);
+    });
+  });
+
+  group('the edit screen and its result', () {
+    testWidgets('"Edit Profile" opens /profile/edit on top of the page', (
+      tester,
+    ) async {
+      final server = _backend()..always('GET', ApiPaths.profile, _profile());
+      final app = await _openProfile(tester, server);
+      await tapAndSettle(tester, _edit);
+
+      expect(_form, findsOneWidget);
+      expect(app.location(tester), '/profile/edit');
+      // One step back is the page, and another is home.
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(_form, findsNothing);
+      expect(_page, findsOneWidget);
+      expect(app.location(tester), '/profile');
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.byType(HomeScreen), findsOneWidget);
+    });
+
+    testWidgets('a rapid double tap opens the edit screen once', (
+      tester,
+    ) async {
+      final server = _backend()..always('GET', ApiPaths.profile, _profile());
+      final app = await _openProfile(tester, server);
+      // Twice in the same frame, before the screen covers the button.
+      final button = tester.getCenter(_edit);
+      await tester.tapAt(button);
+      await tester.tapAt(button);
+      await tester.pumpAndSettle();
+      expect(_form, findsOneWidget);
+
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(_form, findsNothing);
+      expect(_page, findsOneWidget);
+      expect(app.location(tester), '/profile');
+      // The page, the form, and the page again.
+      expect(server.count(ApiPaths.profile), 3);
+
+      // And the button opens it again afterwards.
+      await tapAndSettle(tester, _edit);
+      expect(_form, findsOneWidget);
+    });
+
+    testWidgets('after a save, the page shows the new name without being '
+        'opened again', (tester) async {
+      final server = _backend()..always('GET', ApiPaths.profile, _profile());
+      final app = await _openProfile(tester, server);
+      await tapAndSettle(tester, _edit);
+
+      server
+        ..once('PUT', ApiPaths.profile, _profile(name: 'Ana María'))
+        ..always('GET', ApiPaths.profile, _profile(name: 'Ana María'));
+      await tester.enterText(field(l10n.displayNameLabel), 'Ana María');
+      await tapAndSettle(tester, _save);
+
+      expect(app.location(tester), '/profile');
+      expect(find.text('Ana María'), findsOneWidget);
+      expect(find.text('Ana'), findsNothing);
+      // The page, the form, and the page again, with its languages.
+      expect(server.to(ApiPaths.profile).map((r) => r.method), [
+        'GET',
+        'GET',
+        'PUT',
+        'GET',
+      ]);
+      expect(server.count(ApiPaths.languages), 2);
+      expect(server.count(ApiPaths.myLanguages), 2);
+    });
+
+    final waysBack = <String, Future<void> Function(WidgetTester)>{
+      'Cancel': (tester) => tapAndSettle(tester, _cancel),
+      'the app bar\'s back': (tester) async {
+        await tester.pageBack();
+        await tester.pumpAndSettle();
+      },
+      'the system\'s back': (tester) async {
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+      },
+    };
+    waysBack.forEach((name, leave) {
+      testWidgets('after leaving by $name without saving, the page loads '
+          'again and shows what is stored', (tester) async {
+        final server = _backend()
+          ..always('GET', ApiPaths.profile, _profile(bio: 'Old'));
+        await _openProfile(tester, server);
+        await tapAndSettle(tester, _edit);
+
+        // What the server has by now, whoever stored it.
+        server
+          ..always('GET', ApiPaths.profile, _profile(bio: 'Newer'))
+          ..always(
+            'GET',
+            ApiPaths.myLanguages,
+            (_) => jsonResponse(200, languagesBody(learning: [('ja', 'b1')])),
+          );
+        await leave(tester);
+
+        expect(_form, findsNothing);
+        expect(find.text('Newer'), findsOneWidget);
+        expect(find.text('Old'), findsNothing);
+        expect(_chips(tester), [('Japanese', 'B1')]);
+        expect(server.to(ApiPaths.profile).map((r) => r.method), [
+          'GET',
+          'GET',
+          'GET',
+        ]);
+      });
+    });
+
+    testWidgets('the reload shows the spinner, not the profile it showed '
+        'before', (tester) async {
+      final reply = Completer<http.Response>();
+      final server = _backend()..always('GET', ApiPaths.profile, _profile());
+      final handle = tester.ensureSemantics();
+      await _openProfile(tester, server);
+      await tapAndSettle(tester, _edit);
+
+      server.once('GET', ApiPaths.profile, (_) => reply.future);
+      await tester.pageBack();
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.bySemanticsLabel(l10n.profileLoading), findsOneWidget);
+      expect(find.byType(ProfileHeader), findsNothing);
+      expect(_section, findsNothing);
+      expect(_edit, findsNothing);
+
+      reply.complete(jsonResponse(200, profileBody(displayName: 'Ana')));
+      await tester.pumpAndSettle();
+      expect(find.text('Ana'), findsOneWidget);
+      handle.dispose();
+    });
+
+    testWidgets('a failed reload shows the failure and a retry, and nothing '
+        'of the earlier profile', (tester) async {
+      final server = _backend()
+        ..always('GET', ApiPaths.profile, _profile(bio: 'Old'))
+        ..always(
+          'GET',
+          ApiPaths.myLanguages,
+          (_) => jsonResponse(200, languagesBody(spoken: [('es', 'native')])),
+        );
+      final app = await _openProfile(tester, server);
+      expect(_chips(tester), [('Spanish', 'Native')]);
+      await tapAndSettle(tester, _edit);
+
+      server.once('GET', ApiPaths.profile, networkFailure);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+
+      expect(app.location(tester), '/profile');
+      expect(find.text(l10n.errorNetwork), findsOneWidget);
+      expect(_retry, findsOneWidget);
+      expect(find.text('Ana'), findsNothing);
+      expect(find.text('Old'), findsNothing);
+      expect(find.byType(ProfileHeader), findsNothing);
+      expect(find.text(l10n.profileFriendsHeading), findsNothing);
+      expect(find.byType(LanguageChip), findsNothing);
+      expect(_section, findsNothing);
+      expect(_edit, findsNothing);
+      expect(find.text(l10n.profileEmptyMessage), findsNothing);
+
+      await tapAndSettle(tester, _retry);
+      expect(find.text('Old'), findsOneWidget);
+      expect(_chips(tester), [('Spanish', 'Native')]);
+    });
+  });
+
+  group('loading and failure', () {
+    testWidgets('a labelled spinner until the profile answers', (tester) async {
       final reply = Completer<http.Response>();
       final server = _backend()
         ..once('GET', ApiPaths.profile, (_) => reply.future);
@@ -85,41 +548,21 @@ void main() {
 
       expect(app.location(tester), '/profile');
       expect(find.bySemanticsLabel(l10n.profileLoading), findsOneWidget);
-      expect(_save, findsNothing);
+      expect(find.byType(ProfileHeader), findsNothing);
+      expect(find.text(l10n.profileFriendsHeading), findsNothing);
+      expect(find.text(l10n.profileEmptyMessage), findsNothing);
+      expect(_edit, findsNothing);
+      expect(_create, findsNothing);
 
-      reply.complete(noProfile());
+      reply.complete(jsonResponse(200, profileBody(displayName: 'Ana')));
       await tester.pumpAndSettle();
       expect(find.bySemanticsLabel(l10n.profileLoading), findsNothing);
-      expect(find.text(l10n.profileCreateHeading), findsOneWidget);
-      // The user is told what others will see before writing anything.
-      expect(find.text(l10n.profileVisibilityNotice), findsOneWidget);
-      expect(_text(tester, _name), '');
-      expect(_text(tester, _bio), '');
-      expect(find.byType(FormErrorBanner), findsNothing);
-      expect(find.byType(FormNoticeBanner), findsNothing);
+      expect(find.text('Ana'), findsOneWidget);
       handle.dispose();
     });
 
-    testWidgets('a saved profile fills the form', (tester) async {
-      final server = _backend()
-        ..once(
-          'GET',
-          ApiPaths.profile,
-          (_) => jsonResponse(
-            200,
-            profileBody(displayName: 'Ana López', bio: 'Line one\nLine two'),
-          ),
-        );
-      await _openProfile(tester, server);
-
-      expect(find.text(l10n.profileEditHeading), findsOneWidget);
-      expect(find.text(l10n.profileCreateHeading), findsNothing);
-      expect(_text(tester, _name), 'Ana López');
-      expect(_text(tester, _bio), 'Line one\nLine two');
-      expect(find.text(l10n.profileVisibilityNotice), findsOneWidget);
-    });
-
-    group('a failed load keeps the session and offers a retry', () {
+    group('a failed load shows its message and a retry, and nothing of the '
+        'profile', () {
       final cases = <String, (Responder, String)>{
         '500': (
           (_) => errorResponse(500, 'internal_error'),
@@ -134,40 +577,80 @@ void main() {
           ),
           'Too many attempts. Try again in 10 seconds.',
         ),
+        '503': (
+          (_) => errorResponse(
+            503,
+            'service_unavailable',
+            headers: {'retry-after': '5'},
+          ),
+          'VocaTogether is busy right now. Try again in 5 seconds.',
+        ),
         'malformed 200': (
           (_) => jsonResponse(200, {'display_name': 'Ana'}),
           l10n.errorUnexpected,
         ),
-        // Not the backend's "none saved": never shown as an empty profile.
+        // Not the backend's "none saved": never shown as the empty state.
         'a 404 without the code': (
           (_) => http.Response('Not Found', 404),
+          l10n.errorUnexpected,
+        ),
+        // Whatever a body says, the text shown is the app's own.
+        'a body with text of its own': (
+          (_) => http.Response(
+            '{"error":{"code":"internal_error","message":"SERVERTEXT"}}',
+            500,
+            headers: {'content-type': 'application/json'},
+          ),
           l10n.errorUnexpected,
         ),
       };
       cases.forEach((name, c) {
         final (responder, message) = c;
         testWidgets(name, (tester) async {
+          final reply = Completer<http.Response>();
           final server = _backend()
             ..once('GET', ApiPaths.profile, responder)
-            ..once(
-              'GET',
-              ApiPaths.profile,
-              (_) => jsonResponse(200, profileBody(displayName: 'Ana')),
-            );
+            ..once('GET', ApiPaths.profile, (_) => reply.future);
+          final handle = tester.ensureSemantics();
           final app = await _openProfile(tester, server);
 
           expect(find.text(message), findsOneWidget);
-          expect(_save, findsNothing);
-          expect(_name, findsNothing);
+          expect(find.textContaining('SERVERTEXT'), findsNothing);
+          expect(find.byType(ProfileHeader), findsNothing);
+          expect(find.text(l10n.profileFriendsHeading), findsNothing);
+          expect(find.text(l10n.profileEmptyMessage), findsNothing);
+          expect(_section, findsNothing);
+          expect(_edit, findsNothing);
+          expect(_create, findsNothing);
+          expect(server.count(ApiPaths.myLanguages), 0);
           expect(app.session.status, SessionStatus.signedIn);
           expect(app.location(tester), '/profile');
 
-          await tapAndSettle(tester, _retry);
+          // The retry shows the spinner and asks again.
+          await tester.tap(_retry);
+          await tester.pump();
+          expect(find.bySemanticsLabel(l10n.profileLoading), findsOneWidget);
           expect(find.byType(FormErrorBanner), findsNothing);
-          expect(_text(tester, _name), 'Ana');
+          expect(_retry, findsNothing);
+
+          reply.complete(jsonResponse(200, profileBody(displayName: 'Ana')));
+          await tester.pumpAndSettle();
+          expect(find.byType(FormErrorBanner), findsNothing);
+          expect(find.text('Ana'), findsOneWidget);
           expect(server.count(ApiPaths.profile), 2);
+          handle.dispose();
         });
       });
+    });
+
+    testWidgets('a load that gets no answer times out', (tester) async {
+      final server = _backend()..once('GET', ApiPaths.profile, neverAnswers);
+      await _openProfile(tester, server, settle: false);
+
+      await tester.pump(const Duration(seconds: 16));
+      await tester.pumpAndSettle();
+      expect(find.text(l10n.errorTimeout), findsOneWidget);
+      expect(_retry, findsOneWidget);
     });
 
     testWidgets('a session that ended while loading shows no error', (
@@ -191,342 +674,8 @@ void main() {
 
       expect(app.session.status, SessionStatus.signedOut);
       expect(find.byType(LoginScreen), findsOneWidget);
+      expect(_page, findsNothing);
       expect(find.byType(FormErrorBanner), findsNothing);
-    });
-  });
-
-  group('saving', () {
-    testWidgets('an empty name is caught here and nothing is sent', (
-      tester,
-    ) async {
-      final server = _backend();
-      await _openEmpty(tester, server);
-
-      await tester.enterText(_name, '   ');
-      await tester.enterText(_bio, 'Something');
-      await tapAndSettle(tester, _save);
-
-      expect(errorOf(tester, l10n.displayNameLabel), l10n.displayNameRequired);
-      expect(hasFocus(tester, l10n.displayNameLabel), isTrue);
-      expect(
-        server.to(ApiPaths.profile).where((r) => r.method == 'PUT'),
-        isEmpty,
-      );
-      // Typing clears the error.
-      await tester.enterText(_name, 'A');
-      await tester.pump();
-      expect(errorOf(tester, l10n.displayNameLabel), isNull);
-    });
-
-    testWidgets('sends the text as typed and shows what the server stored', (
-      tester,
-    ) async {
-      final server = _backend()
-        ..once(
-          'PUT',
-          ApiPaths.profile,
-          (_) => jsonResponse(
-            200,
-            profileBody(displayName: 'Ana López', bio: 'Hi'),
-          ),
-        );
-      await _openEmpty(tester, server);
-
-      await tester.enterText(_name, '  Ana   López ');
-      await tester.enterText(_bio, 'Hi \n');
-      await tapAndSettle(tester, _save);
-
-      final put = server.requests.singleWhere((r) => r.method == 'PUT');
-      expect(jsonDecode(put.body), {
-        'display_name': '  Ana   López ',
-        'bio': 'Hi \n',
-      });
-      // The form now holds the stored, normalized text.
-      expect(_text(tester, _name), 'Ana López');
-      expect(_text(tester, _bio), 'Hi');
-      expect(find.text(l10n.profileSaved), findsOneWidget);
-      expect(find.text(l10n.profileEditHeading), findsOneWidget);
-      expect(find.byType(FormErrorBanner), findsNothing);
-
-      // The confirmation goes once the user edits again.
-      await tester.enterText(_bio, 'Hi again');
-      await tester.pump();
-      expect(find.text(l10n.profileSaved), findsNothing);
-    });
-
-    testWidgets('an existing profile is saved the same way', (tester) async {
-      final server = _backend()
-        ..once(
-          'GET',
-          ApiPaths.profile,
-          (_) => jsonResponse(200, profileBody(displayName: 'Ana', bio: 'Old')),
-        )
-        ..once(
-          'PUT',
-          ApiPaths.profile,
-          (_) => jsonResponse(200, profileBody(displayName: 'Ana', bio: '')),
-        );
-      await _openProfile(tester, server);
-
-      await tester.enterText(_bio, '');
-      await tapAndSettle(tester, _save);
-
-      final put = server.requests.singleWhere((r) => r.method == 'PUT');
-      expect(jsonDecode(put.body), {'display_name': 'Ana', 'bio': ''});
-      expect(find.text(l10n.profileSaved), findsOneWidget);
-    });
-
-    testWidgets('while saving the form is locked and a second tap is ignored', (
-      tester,
-    ) async {
-      final reply = Completer<http.Response>();
-      final server = _backend()
-        ..once('PUT', ApiPaths.profile, (_) => reply.future);
-      await _openEmpty(tester, server);
-      await tester.enterText(_name, 'Ana');
-
-      await tester.ensureVisible(_save);
-      await tester.tap(_save);
-      await tester.pump();
-      expect(textFieldOf(tester, _name).enabled, isFalse);
-      expect(textFieldOf(tester, _bio).enabled, isFalse);
-      await tester.tap(_save, warnIfMissed: false);
-      await tester.pump();
-      await tester.tap(_save, warnIfMissed: false);
-      await tester.pump();
-      expect(server.requests.where((r) => r.method == 'PUT'), hasLength(1));
-
-      reply.complete(jsonResponse(200, profileBody(displayName: 'Ana')));
-      await tester.pumpAndSettle();
-      expect(textFieldOf(tester, _name).enabled, isTrue);
-      expect(find.text(l10n.profileSaved), findsOneWidget);
-    });
-
-    testWidgets('the name\'s keyboard action moves on to the bio, not a save', (
-      tester,
-    ) async {
-      final server = _backend();
-      await _openEmpty(tester, server);
-
-      await tester.tap(_name);
-      await tester.enterText(_name, 'Ana');
-      await tester.testTextInput.receiveAction(TextInputAction.next);
-      await tester.pump();
-      expect(hasFocus(tester, l10n.bioLabel), isTrue);
-      expect(server.requests.where((r) => r.method == 'PUT'), isEmpty);
-    });
-
-    testWidgets('server validation goes on the fields and keeps the text', (
-      tester,
-    ) async {
-      final server = _backend()
-        ..once(
-          'PUT',
-          ApiPaths.profile,
-          (_) =>
-              _validation([('display_name', 'too_long'), ('bio', 'invalid')]),
-        )
-        ..once(
-          'PUT',
-          ApiPaths.profile,
-          (_) => _validation([('bio', 'too_long')]),
-        );
-      await _openEmpty(tester, server);
-      await tester.enterText(_name, 'A very long name');
-      await tester.enterText(_bio, 'Some text');
-
-      await tapAndSettle(tester, _save);
-      expect(
-        errorOf(tester, l10n.displayNameLabel),
-        l10n.errorDisplayNameTooLong,
-      );
-      expect(errorOf(tester, l10n.bioLabel), l10n.errorBioInvalid);
-      expect(find.byType(FormErrorBanner), findsNothing);
-      expect(find.byType(FormNoticeBanner), findsNothing);
-      expect(hasFocus(tester, l10n.displayNameLabel), isTrue);
-      expect(_text(tester, _name), 'A very long name');
-      expect(_text(tester, _bio), 'Some text');
-
-      // Only the bio is wrong the second time: it gets the focus.
-      await tapAndSettle(tester, _save);
-      expect(errorOf(tester, l10n.displayNameLabel), isNull);
-      expect(errorOf(tester, l10n.bioLabel), l10n.errorBioTooLong);
-      expect(hasFocus(tester, l10n.bioLabel), isTrue);
-    });
-
-    // The app sets no limit of its own (the server owns the rules, 027): a
-    // long text goes out whole and the server's answer names the field.
-    testWidgets('a pasted text far over the limit is sent whole and gets the '
-        'too-long error on its field', (tester) async {
-      final server = _backend()
-        ..once(
-          'PUT',
-          ApiPaths.profile,
-          (_) => _validation([('bio', 'too_long')]),
-        );
-      await _openEmpty(tester, server);
-      final pasted = List.filled(1000, 'a line of text').join('\n');
-      expect(pasted.length, greaterThan(10000));
-      await tester.enterText(_name, 'Ana');
-      await tester.enterText(_bio, pasted);
-      await tester.pumpAndSettle();
-      await tapAndSettle(tester, _save);
-
-      final put = server.requests.singleWhere((r) => r.method == 'PUT');
-      expect((jsonDecode(put.body) as Map<String, Object?>)['bio'], pasted);
-      expect(errorOf(tester, l10n.bioLabel), l10n.errorBioTooLong);
-      expect(find.text(l10n.errorUnexpected), findsNothing);
-      expect(find.byType(FormErrorBanner), findsNothing);
-      expect(_text(tester, _bio), pasted);
-    });
-
-    group('other failures keep the text and can be retried', () {
-      final cases = <String, (Responder, String)>{
-        '429': (
-          (_) =>
-              errorResponse(429, 'rate_limited', headers: {'retry-after': '6'}),
-          'Too many attempts. Try again in 6 seconds.',
-        ),
-        '503': (
-          (_) => errorResponse(
-            503,
-            'service_unavailable',
-            headers: {'retry-after': '5'},
-          ),
-          'VocaTogether is busy right now. Try again in 5 seconds.',
-        ),
-        '500': (
-          (_) => errorResponse(500, 'internal_error'),
-          l10n.errorUnexpected,
-        ),
-        '400': (
-          (_) => errorResponse(400, 'invalid_request'),
-          l10n.errorUnexpected,
-        ),
-        'network': (networkFailure, l10n.errorNetwork),
-        'a 201': (
-          (_) => jsonResponse(201, profileBody()),
-          l10n.errorUnexpected,
-        ),
-      };
-      cases.forEach((name, c) {
-        final (responder, message) = c;
-        testWidgets(name, (tester) async {
-          final server = _backend()
-            ..once('PUT', ApiPaths.profile, responder)
-            ..once(
-              'PUT',
-              ApiPaths.profile,
-              (_) =>
-                  jsonResponse(200, profileBody(displayName: 'Ana', bio: 'Hi')),
-            );
-          final app = await _openEmpty(tester, server);
-          await tester.enterText(_name, 'Ana');
-          await tester.enterText(_bio, 'Hi');
-
-          await tapAndSettle(tester, _save);
-          expect(find.text(message), findsOneWidget);
-          expect(find.byType(FormNoticeBanner), findsNothing);
-          expect(_text(tester, _name), 'Ana');
-          expect(_text(tester, _bio), 'Hi');
-          expect(app.session.status, SessionStatus.signedIn);
-          // Nothing was retried on its own.
-          expect(server.requests.where((r) => r.method == 'PUT'), hasLength(1));
-
-          // The user's retry sends the same save, which is safe (027).
-          await tapAndSettle(tester, _save);
-          expect(find.byType(FormErrorBanner), findsNothing);
-          expect(find.text(l10n.profileSaved), findsOneWidget);
-        });
-      });
-    });
-
-    testWidgets('a save that gets no answer times out and keeps the text', (
-      tester,
-    ) async {
-      final server = _backend()..once('PUT', ApiPaths.profile, neverAnswers);
-      await _openEmpty(tester, server);
-      await tester.enterText(_name, 'Ana');
-
-      await tester.ensureVisible(_save);
-      await tester.tap(_save);
-      await tester.pump();
-      await tester.pump(const Duration(seconds: 16));
-      await tester.pumpAndSettle();
-
-      expect(find.text(l10n.errorTimeout), findsOneWidget);
-      expect(_text(tester, _name), 'Ana');
-      expect(textFieldOf(tester, _name).enabled, isTrue);
-    });
-
-    testWidgets('a session that ends during a save leaves for log in', (
-      tester,
-    ) async {
-      final server = _backend()
-        ..once(
-          'PUT',
-          ApiPaths.profile,
-          (_) => errorResponse(401, 'invalid_access_token'),
-        )
-        ..once(
-          'POST',
-          ApiPaths.refresh,
-          (_) => errorResponse(401, 'invalid_refresh_token'),
-        );
-      final app = await _openEmpty(tester, server);
-      await tester.enterText(_name, 'Ana');
-      await tapAndSettle(tester, _save);
-
-      expect(app.session.status, SessionStatus.signedOut);
-      expect(find.byType(LoginScreen), findsOneWidget);
-      expect(find.byType(ProfileScreen), findsNothing);
-      expect(find.byType(FormErrorBanner), findsNothing);
-    });
-  });
-
-  group('navigation', () {
-    testWidgets('back returns to home', (tester) async {
-      final app = await _openEmpty(tester, _backend());
-      await tester.pageBack();
-      await tester.pumpAndSettle();
-
-      expect(find.byType(HomeScreen), findsOneWidget);
-      expect(find.byType(ProfileScreen), findsNothing);
-      expect(app.location(tester), '/home');
-    });
-
-    testWidgets('logging out elsewhere leaves the profile for log in', (
-      tester,
-    ) async {
-      final app = await _openEmpty(tester, _backend());
-      await app.session.logout();
-      await tester.pumpAndSettle();
-
-      expect(find.byType(LoginScreen), findsOneWidget);
-      expect(find.byType(ProfileScreen), findsNothing);
-      expect(app.location(tester), '/login');
-    });
-
-    testWidgets('an answer that arrives after leaving is dropped', (
-      tester,
-    ) async {
-      final reply = Completer<http.Response>();
-      final server = _backend()
-        ..once('PUT', ApiPaths.profile, (_) => reply.future);
-      await _openEmpty(tester, server);
-      await tester.enterText(_name, 'Ana');
-      await tester.ensureVisible(_save);
-      await tester.tap(_save);
-      await tester.pump();
-
-      await tester.pageBack();
-      await tester.pumpAndSettle();
-      expect(find.byType(HomeScreen), findsOneWidget);
-
-      reply.complete(jsonResponse(200, profileBody(displayName: 'Ana')));
-      await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull);
-      expect(find.byType(HomeScreen), findsOneWidget);
     });
 
     testWidgets('a load answered after leaving is dropped', (tester) async {
@@ -544,6 +693,44 @@ void main() {
       expect(tester.takeException(), isNull);
       expect(find.byType(HomeScreen), findsOneWidget);
       expect(find.byType(FormErrorBanner), findsNothing);
+    });
+  });
+
+  group('navigation', () {
+    testWidgets('back returns to home', (tester) async {
+      final server = _backend()..always('GET', ApiPaths.profile, _profile());
+      final app = await _openProfile(tester, server);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+
+      expect(find.byType(HomeScreen), findsOneWidget);
+      expect(_page, findsNothing);
+      expect(app.location(tester), '/home');
+    });
+
+    testWidgets('logging out elsewhere leaves the profile for log in', (
+      tester,
+    ) async {
+      final server = _backend()..always('GET', ApiPaths.profile, _profile());
+      final app = await _openProfile(tester, server);
+      await app.session.logout();
+      await tester.pumpAndSettle();
+
+      expect(find.byType(LoginScreen), findsOneWidget);
+      expect(_page, findsNothing);
+      expect(app.location(tester), '/login');
+    });
+
+    testWidgets('opening the profile again loads it again', (tester) async {
+      final server = _backend()..always('GET', ApiPaths.profile, _profile());
+      await _openProfile(tester, server);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+
+      server.always('GET', ApiPaths.profile, _profile(name: 'Ana María'));
+      await tapAndSettle(tester, _open);
+      expect(find.text('Ana María'), findsOneWidget);
+      expect(server.count(ApiPaths.profile), 2);
     });
   });
 

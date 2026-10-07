@@ -19,6 +19,11 @@ final _refresh = refreshToken('LEAKrefresh');
 const _idToken = 'LEAKidtoken.payload.signature';
 const _idToken2 = 'LEAKidtokenTwo.payload.signature';
 
+/// A member's name and text, with markers of their own: shown on screen on
+/// purpose, and found nowhere else.
+const _name = 'PRIVname Ana';
+const _bio = 'PRIVbio evenings';
+
 /// An error body that echoes secrets, as a broken proxy might.
 http.Response _echo(int status) => http.Response(
   '{"error":{"code":"invalid_credentials","detail":"$_password $_email '
@@ -53,6 +58,7 @@ void main() {
       expect(locations, isNotEmpty);
       for (final location in locations) {
         expect(location, isNot(contains('LEAK')), reason: location);
+        expect(location, isNot(contains('PRIV')), reason: location);
         expect(location, isNot(contains('leak.email')), reason: location);
         expect(location, isNot(contains('@')), reason: location);
         expect(Uri.parse(location).hasQuery, isFalse, reason: location);
@@ -103,18 +109,25 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
     ..once('GET', ApiPaths.me, (_) => _echo(500))
     ..once('GET', ApiPaths.me, (_) => jsonResponse(200, meBody(email: _email)))
     ..once('POST', ApiPaths.logout, (_) => _echo(500))
-    // The profile: an echoing load failure, none saved, an echoing refusal
-    // of the save, then saved.
+    // The profile page: an echoing load failure, then none saved. The edit
+    // screen: none saved, an echoing refusal of the save, then saved. Every
+    // load after that answers the saved profile.
     ..once('GET', ApiPaths.profile, (_) => _echo(500))
+    ..once('GET', ApiPaths.profile, (_) => noProfile())
     ..once('GET', ApiPaths.profile, (_) => noProfile())
     ..once('PUT', ApiPaths.profile, (_) => _echo(422))
     ..once(
       'PUT',
       ApiPaths.profile,
-      (_) => jsonResponse(200, profileBody(displayName: 'Ana', bio: 'Hi')),
+      (_) => jsonResponse(200, profileBody(displayName: _name, bio: _bio)),
     )
-    // The profile's languages: an echoing load failure, then a selection
-    // with a language the catalog doesn't name.
+    ..always(
+      'GET',
+      ApiPaths.profile,
+      (_) => jsonResponse(200, profileBody(displayName: _name, bio: _bio)),
+    )
+    // The page's languages: an echoing load failure, then a selection with
+    // a language the catalog doesn't name.
     ..always('GET', ApiPaths.languages, (_) => jsonResponse(200, catalogBody()))
     ..once('GET', ApiPaths.myLanguages, (_) => _echo(500))
     ..once(
@@ -126,7 +139,7 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
       ),
     )
     // The languages editor: loaded, an echoing refusal of the save, then
-    // saved, and the profile's section loading what was stored.
+    // saved, and the page's section loading what was stored.
     ..once(
       'GET',
       ApiPaths.myLanguages,
@@ -234,39 +247,78 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
   record();
   _checkScreen(tester, emailAllowed: true);
 
-  // The profile: its route names nobody, and neither the account's email
-  // nor anything a server echoes is shown on it.
+  // The profile page: its route names nobody, and neither the account's
+  // email nor anything a server echoes is shown on it.
+  void onPage() {
+    record();
+    expect(app.location(tester), '/profile');
+    _checkScreen(tester);
+  }
+
   await tapAndSettle(
     tester,
     find.widgetWithText(OutlinedButton, l10n.profileButton),
   );
-  record();
-  expect(app.location(tester), '/profile');
-  _checkScreen(tester);
+  onPage();
+  expect(find.byType(FormErrorBanner), findsOneWidget);
   await tapAndSettle(tester, find.widgetWithText(FilledButton, l10n.tryAgain));
-  _checkScreen(tester);
-  // The languages section failed with an echoing body; its retry shows the
-  // member's languages, which appear on the screen and never in the route.
+  onPage();
+  expect(find.text(l10n.profileEmptyMessage), findsOneWidget);
+
+  // The edit screen: its route names nobody either, whatever is typed,
+  // refused or saved on it.
+  void onForm() {
+    record();
+    expect(app.location(tester), '/profile/edit');
+    _checkScreen(tester);
+  }
+
+  await tapAndSettle(
+    tester,
+    find.widgetWithText(FilledButton, l10n.profileEmptyButton),
+  );
+  onForm();
+  final save = find.widgetWithText(FilledButton, l10n.profileSaveButton);
+  await tester.enterText(field(l10n.displayNameLabel), _name);
+  await tester.enterText(field(l10n.bioLabel), _bio);
+  await tester.pumpAndSettle();
+  onForm();
+  await tapAndSettle(tester, save);
+  onForm();
+  expect(find.byType(FormErrorBanner), findsOneWidget);
+  await tapAndSettle(tester, save);
+
+  // Saved: the page shows the member's own name and text. Its languages
+  // failed with an echoing body; their retry shows them, on the screen and
+  // never in the route.
+  onPage();
+  expect(find.text(_name), findsOneWidget);
+  expect(find.text(_bio), findsOneWidget);
   expect(find.widgetWithText(OutlinedButton, l10n.tryAgain), findsOneWidget);
   await tapAndSettle(
     tester,
     find.widgetWithText(OutlinedButton, l10n.tryAgain),
   );
-  record();
-  _checkScreen(tester);
+  onPage();
   expect(find.text('Spanish'), findsOneWidget);
   expect(find.text('xx'), findsOneWidget);
-  expect(app.location(tester), '/profile');
-  final save = find.widgetWithText(FilledButton, l10n.profileSaveButton);
-  await tester.enterText(field(l10n.displayNameLabel), 'Ana');
-  await tester.enterText(field(l10n.bioLabel), 'Hi');
-  await tapAndSettle(tester, save);
-  record();
-  _checkScreen(tester);
-  await tapAndSettle(tester, save);
-  record();
-  _checkScreen(tester);
-  expect(find.text(l10n.profileSaved), findsOneWidget);
+
+  // The edit screen again, and its question about unsaved text.
+  await tapAndSettle(
+    tester,
+    find.widgetWithText(OutlinedButton, l10n.profileEditButton),
+  );
+  onForm();
+  await tester.enterText(field(l10n.bioLabel), '$_bio, weekends');
+  await tester.pumpAndSettle();
+  await tapAndSettle(
+    tester,
+    find.widgetWithText(OutlinedButton, l10n.profileCancelButton),
+  );
+  onForm();
+  expect(find.text(l10n.profileDiscardMessage), findsOneWidget);
+  await tapAndSettle(tester, find.text(l10n.languagesDiscardKeep));
+  onForm();
 
   // The languages editor: its route names nobody and holds no language,
   // whatever is picked, refused or saved on it.
@@ -278,7 +330,7 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
 
   await tapAndSettle(
     tester,
-    find.widgetWithText(OutlinedButton, l10n.languagesEditButton),
+    find.widgetWithText(ListTile, l10n.profileEditLanguagesButton),
   );
   onEditor();
   expect(find.text(l10n.languagesVisibilityNotice), findsOneWidget);
@@ -301,10 +353,9 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
   expect(find.text(l10n.languagesDiscardTitle), findsOneWidget);
   await tapAndSettle(tester, find.text(l10n.languagesDiscardKeep));
   await tapAndSettle(tester, saveLanguages);
-  record();
-  expect(app.location(tester), '/profile');
-  _checkScreen(tester);
-  expect(find.text('Japanese'), findsOneWidget);
+  // Back on the edit screen, with the text as it was left.
+  onForm();
+  expect(find.text('Japanese'), findsNothing);
   // A member's languages travel only in the body of their own save.
   final saves = [
     for (final r in server.requests)
@@ -316,6 +367,32 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
     expect(r.url.path, ApiPaths.myLanguages);
     expect(r.url.hasQuery, isFalse);
     expect(r.body, contains('"ja"'));
+  }
+
+  // Leaving with the unsaved text, discarded: the page loads what is stored.
+  await tester.pageBack();
+  await tester.pumpAndSettle();
+  onForm();
+  expect(find.text(l10n.profileDiscardMessage), findsOneWidget);
+  await tapAndSettle(tester, find.text(l10n.languagesDiscardConfirm));
+  onPage();
+  expect(find.text(_bio), findsOneWidget);
+  expect(find.text('Japanese'), findsOneWidget);
+  // The name and the text travel only in the bodies of the member's own
+  // saves of the profile: the discarded text was sent nowhere.
+  final carriers = [
+    for (final r in server.requests)
+      if (r.body.contains('PRIV') ||
+          r.url.toString().contains('PRIV') ||
+          r.headers.values.any((v) => v.contains('PRIV')))
+        r,
+  ];
+  expect(carriers, hasLength(2));
+  for (final r in carriers) {
+    expect(r.method, 'PUT');
+    expect(r.url.path, ApiPaths.profile);
+    expect(r.url.hasQuery, isFalse);
+    expect(r.body, isNot(contains('weekends')));
   }
 
   await tester.pageBack();

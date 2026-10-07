@@ -472,7 +472,7 @@ abstract class AppLocalizations {
   /// **'Profile'**
   String get profileButton;
 
-  /// Title of the screen where the user edits their own profile.
+  /// Title of the user’s own profile page and of the screen where they edit their profile.
   ///
   /// In en, this message translates to:
   /// **'Your profile'**
@@ -496,10 +496,46 @@ abstract class AppLocalizations {
   /// **'Edit your profile'**
   String get profileEditHeading;
 
+  /// Text of the user’s own profile page when they haven’t saved a profile yet.
+  ///
+  /// In en, this message translates to:
+  /// **'You haven’t created your profile yet. Add your name so other members can get to know you.'**
+  String get profileEmptyMessage;
+
+  /// Button on the user’s own profile page, shown when they haven’t saved a profile yet, that opens the screen where they create it.
+  ///
+  /// In en, this message translates to:
+  /// **'Create your profile'**
+  String get profileEmptyButton;
+
+  /// Button on the user’s own profile page that opens the screen where they edit their name, their text, their picture and their languages.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit Profile'**
+  String get profileEditButton;
+
+  /// Accessibility label of the placeholder shown on the user’s own profile page in place of a profile picture.
+  ///
+  /// In en, this message translates to:
+  /// **'Your profile picture: no photo yet'**
+  String get profileAvatarPlaceholderLabel;
+
+  /// Heading of the friends area of the user’s own profile page. The feature doesn’t exist yet.
+  ///
+  /// In en, this message translates to:
+  /// **'Friends'**
+  String get profileFriendsHeading;
+
+  /// Text under the Friends heading of the profile page saying the feature isn’t available yet. Must not state a number or a date.
+  ///
+  /// In en, this message translates to:
+  /// **'Coming later'**
+  String get profileFriendsComingLater;
+
   /// Notice on the profile form saying which information other members will see.
   ///
   /// In en, this message translates to:
-  /// **'Other members will be able to see your name and what you write about yourself. Your email address stays private.'**
+  /// **'Other members will be able to see your name, your picture and what you write about yourself. Your email address stays private.'**
   String get profileVisibilityNotice;
 
   /// Label of the field for the name shown to other members.
@@ -520,11 +556,23 @@ abstract class AppLocalizations {
   /// **'Save'**
   String get profileSaveButton;
 
-  /// Confirmation shown after the profile was saved.
+  /// Button that leaves the profile form without saving.
   ///
   /// In en, this message translates to:
-  /// **'Profile saved.'**
-  String get profileSaved;
+  /// **'Cancel'**
+  String get profileCancelButton;
+
+  /// Row on the profile form that opens the screen where the user edits the languages they speak and are learning.
+  ///
+  /// In en, this message translates to:
+  /// **'Languages'**
+  String get profileEditLanguagesButton;
+
+  /// Text of the dialog shown when the user leaves the profile form with unsaved changes to their name or their text.
+  ///
+  /// In en, this message translates to:
+  /// **'Your changes to your profile haven’t been saved.'**
+  String get profileDiscardMessage;
 
   /// Error when the profile form is submitted without a name.
   ///
@@ -682,12 +730,6 @@ abstract class AppLocalizations {
   /// **'Native'**
   String get languageLevelNative;
 
-  /// Button in the languages section of the profile that opens the screen where the user edits their languages.
-  ///
-  /// In en, this message translates to:
-  /// **'Edit languages'**
-  String get languagesEditButton;
-
   /// Title of the screen where the user edits the languages they speak and are learning.
   ///
   /// In en, this message translates to:
@@ -718,7 +760,7 @@ abstract class AppLocalizations {
   /// **'Cancel'**
   String get languagesCancelButton;
 
-  /// Title of the dialog shown when the user leaves the languages editor with unsaved changes.
+  /// Title of the dialog shown when the user leaves the languages editor or the profile form with unsaved changes.
   ///
   /// In en, this message translates to:
   /// **'Discard changes?'**
@@ -730,13 +772,13 @@ abstract class AppLocalizations {
   /// **'Your changes to your languages haven’t been saved.'**
   String get languagesDiscardMessage;
 
-  /// Dialog button that leaves the languages editor and drops the unsaved changes.
+  /// Dialog button that leaves the languages editor or the profile form and drops the unsaved changes.
   ///
   /// In en, this message translates to:
   /// **'Discard'**
   String get languagesDiscardConfirm;
 
-  /// Dialog button that closes the dialog and stays in the languages editor.
+  /// Dialog button that closes the dialog and stays in the languages editor or the profile form.
   ///
   /// In en, this message translates to:
   /// **'Keep editing'**

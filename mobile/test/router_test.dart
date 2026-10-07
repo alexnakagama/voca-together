@@ -42,6 +42,11 @@ void main() {
       '/profile?x=1': [s, l, null],
       '/profile/': [s, l, h],
       '/profile/other-user': [s, l, h],
+      // The edit screen is the caller's own too: nothing is below it.
+      '/profile/edit': [s, l, null],
+      '/profile/edit?x=1': [s, l, null],
+      '/profile/edit/': [s, l, h],
+      '/profile/edit/x': [s, l, h],
       // The languages editor is the caller's own too, and no language is
       // ever part of a path (030).
       '/profile/languages': [s, l, null],

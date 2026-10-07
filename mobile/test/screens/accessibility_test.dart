@@ -12,7 +12,7 @@ import '../support/fakes.dart';
 import 'harness.dart';
 
 /// One screen in one state: how to script the backend, whether it starts
-/// signed in, how to get there, and the control that must stay reachable.
+/// signed in, how to get there, and the controls that must stay reachable.
 final class _Case {
   const _Case(
     this.name, {
@@ -21,6 +21,8 @@ final class _Case {
     this.signedIn = false,
     this.drive,
     required this.action,
+    this.also = const [],
+    this.largeTextWithKeyboard = false,
   });
 
   final String name;
@@ -31,6 +33,13 @@ final class _Case {
   final bool signedIn;
   final Future<void> Function(WidgetTester tester)? drive;
   final String action;
+
+  /// More texts that must be reachable, besides [action].
+  final List<String> also;
+
+  /// Whether the state must also work at twice the text size on the small
+  /// screen with the keyboard open: the states of a form one types in.
+  final bool largeTextWithKeyboard;
 }
 
 Future<void> _logInAttempt(WidgetTester tester) async {
@@ -53,18 +62,35 @@ Future<void> _openProfile(WidgetTester tester) => tapAndSettle(
   find.widgetWithText(OutlinedButton, l10n.profileButton),
 );
 
-Future<void> _saveProfile(WidgetTester tester) async {
+/// From home: the profile page, then its edit screen, by "Edit Profile" or,
+/// with no profile saved, by the empty state's button.
+Future<void> _openForm(WidgetTester tester) async {
   await _openProfile(tester);
+  final edit = find.widgetWithText(OutlinedButton, l10n.profileEditButton);
+  await tapAndSettle(
+    tester,
+    edit.evaluate().isNotEmpty
+        ? edit
+        : find.widgetWithText(FilledButton, l10n.profileEmptyButton),
+  );
+}
+
+Future<void> _typeProfile(WidgetTester tester) async {
+  await _openForm(tester);
   await tester.enterText(field(l10n.displayNameLabel), 'Ana López');
   await tester.enterText(
     field(l10n.bioLabel),
     'I’m learning Japanese.\n\nEvenings work best for me.',
   );
   // Typing makes the field scroll its caret into view a moment later. Let
-  // that finish before scrolling to the button, as it has by the time a
+  // that finish before scrolling to a button, as it has by the time a
   // person does: on a device the form scrolls to Save with the keyboard
   // open and stays there, so this orders the test, it hides no layout fault.
   await tester.pumpAndSettle();
+}
+
+Future<void> _saveProfile(WidgetTester tester) async {
+  await _typeProfile(tester);
   await tapAndSettle(
     tester,
     find.widgetWithText(FilledButton, l10n.profileSaveButton),
@@ -74,7 +100,7 @@ Future<void> _saveProfile(WidgetTester tester) async {
 void _home(FakeServer s) =>
     s.once('GET', ApiPaths.me, (_) => jsonResponse(200, meBody()));
 
-/// The profile's languages section, for a member with [spoken] and
+/// The profile page's languages section, for a member with [spoken] and
 /// [learning] (none by default).
 void _languages(
   FakeServer s, {
@@ -89,8 +115,9 @@ void _languages(
   );
 
 /// A signed-in member with a profile and [spoken] and [learning] stored,
-/// for the languages editor: the profile's section and the editor each
-/// load the catalog and the selection.
+/// for the languages editor: the profile page and its edit screen each load
+/// the profile, and the page's section and the editor each load the catalog
+/// and the selection.
 void _editor(
   FakeServer s, {
   List<(String, String)> spoken = const [],
@@ -98,7 +125,7 @@ void _editor(
 }) {
   _home(s);
   s
-    ..once(
+    ..always(
       'GET',
       ApiPaths.profile,
       (_) => jsonResponse(200, profileBody(displayName: 'Ana')),
@@ -113,10 +140,40 @@ void _editor(
 }
 
 Future<void> _openEditor(WidgetTester tester) async {
-  await _openProfile(tester);
+  await _openForm(tester);
   await tapAndSettle(
     tester,
-    find.widgetWithText(OutlinedButton, l10n.languagesEditButton),
+    find.widgetWithText(ListTile, l10n.profileEditLanguagesButton),
+  );
+}
+
+/// A long name and a long text, as a profile page must fit them.
+const _longName = 'Wolfeschlegelsteinhausenbergerdorff Maria-Magdalena';
+const _longBio =
+    'I teach German and Dutch in the evenings and I am looking for someone '
+    'patient to practise Portuguese with.\n\nWeekends only, mornings if '
+    'you are in Asia, and I am happy to help with exam preparation.';
+
+/// A member with no profile saved: the page's empty state, then the form
+/// to create one. [save] answers the form's save.
+void _newProfile(FakeServer s, {Responder? save}) {
+  _home(s);
+  s.always('GET', ApiPaths.profile, (_) => noProfile());
+  if (save != null) s.once('PUT', ApiPaths.profile, save);
+}
+
+/// A member with a profile, on the page (which loads their languages) or
+/// on the form.
+void _savedProfile(FakeServer s) {
+  _home(s);
+  _languages(s, spoken: [('es', 'native')], learning: [('ja', 'a2')]);
+  s.always(
+    'GET',
+    ApiPaths.profile,
+    (_) => jsonResponse(
+      200,
+      profileBody(displayName: 'Ana', bio: 'Evenings work best for me.'),
+    ),
   );
 }
 
@@ -260,99 +317,40 @@ final _cases = <_Case>[
     action: l10n.profileButton,
   ),
   _Case(
-    'profile, new',
+    'profile, none saved',
     signedIn: true,
-    script: (s) {
-      _home(s);
-      _languages(s);
-      s.once('GET', ApiPaths.profile, (_) => noProfile());
-    },
+    script: _newProfile,
     drive: _openProfile,
-    action: l10n.profileSaveButton,
+    action: l10n.profileEmptyButton,
   ),
   _Case(
     'profile, load failed',
     signedIn: true,
     script: (s) {
       _home(s);
-      _languages(s);
       s.once('GET', ApiPaths.profile, networkFailure);
     },
     drive: _openProfile,
     action: l10n.tryAgain,
   ),
   _Case(
-    'profile, saved',
+    'profile, name only',
     signedIn: true,
     script: (s) {
       _home(s);
       _languages(s);
-      s
-        ..once(
-          'GET',
-          ApiPaths.profile,
-          (_) => jsonResponse(200, profileBody(displayName: 'Ana')),
-        )
-        ..once(
-          'PUT',
-          ApiPaths.profile,
-          (_) => jsonResponse(
-            200,
-            profileBody(
-              displayName: 'Ana López',
-              bio: 'I’m learning Japanese.\n\nEvenings work best for me.',
-            ),
-          ),
-        );
+      s.once(
+        'GET',
+        ApiPaths.profile,
+        (_) => jsonResponse(200, profileBody(displayName: 'Ana')),
+      );
     },
-    drive: _saveProfile,
-    action: l10n.profileSaveButton,
+    drive: _openProfile,
+    action: l10n.profileEditButton,
+    also: [l10n.profileFriendsComingLater, l10n.languagesEmpty],
   ),
   _Case(
-    'profile, field errors',
-    signedIn: true,
-    script: (s) {
-      _home(s);
-      _languages(s);
-      s
-        ..once('GET', ApiPaths.profile, (_) => noProfile())
-        ..once(
-          'PUT',
-          ApiPaths.profile,
-          (_) => jsonResponse(422, {
-            'error': {
-              'code': 'validation_failed',
-              'fields': [
-                {'field': 'display_name', 'code': 'invalid'},
-                {'field': 'bio', 'code': 'too_long'},
-              ],
-            },
-          }),
-        );
-    },
-    drive: _saveProfile,
-    action: l10n.profileSaveButton,
-  ),
-  _Case(
-    'profile, save failed',
-    signedIn: true,
-    script: (s) {
-      _home(s);
-      _languages(s);
-      s
-        ..once('GET', ApiPaths.profile, (_) => noProfile())
-        ..once(
-          'PUT',
-          ApiPaths.profile,
-          (_) =>
-              errorResponse(429, 'rate_limited', headers: {'retry-after': '6'}),
-        );
-    },
-    drive: _saveProfile,
-    action: l10n.profileSaveButton,
-  ),
-  _Case(
-    'profile, languages',
+    'profile, a long name, a long text and languages',
     signedIn: true,
     script: (s) {
       _home(s);
@@ -364,11 +362,21 @@ final _cases = <_Case>[
       s.once(
         'GET',
         ApiPaths.profile,
-        (_) => jsonResponse(200, profileBody(displayName: 'Ana')),
+        (_) => jsonResponse(
+          200,
+          profileBody(displayName: _longName, bio: _longBio),
+        ),
       );
     },
     drive: _openProfile,
-    action: l10n.languagesLearningHeading,
+    action: l10n.profileEditButton,
+    also: [
+      _longName,
+      l10n.profileFriendsHeading,
+      l10n.profileFriendsComingLater,
+      l10n.languagesLearningHeading,
+      'Japanese',
+    ],
   ),
   _Case(
     'profile, languages failed',
@@ -376,7 +384,11 @@ final _cases = <_Case>[
     script: (s) {
       _home(s);
       s
-        ..once('GET', ApiPaths.profile, (_) => noProfile())
+        ..once(
+          'GET',
+          ApiPaths.profile,
+          (_) => jsonResponse(200, profileBody(displayName: 'Ana')),
+        )
         ..once(
           'GET',
           ApiPaths.languages,
@@ -386,6 +398,114 @@ final _cases = <_Case>[
     },
     drive: _openProfile,
     action: l10n.tryAgain,
+    also: [l10n.profileEditButton],
+  ),
+  _Case(
+    'profile edit, new',
+    signedIn: true,
+    script: _newProfile,
+    drive: _openForm,
+    action: l10n.profileSaveButton,
+    also: [l10n.profileEditLanguagesButton, l10n.profileCancelButton],
+    largeTextWithKeyboard: true,
+  ),
+  _Case(
+    'profile edit, load failed',
+    signedIn: true,
+    script: (s) {
+      _savedProfile(s);
+      s
+        ..once(
+          'GET',
+          ApiPaths.profile,
+          (_) => jsonResponse(200, profileBody(displayName: 'Ana')),
+        )
+        ..once('GET', ApiPaths.profile, networkFailure);
+    },
+    drive: _openForm,
+    action: l10n.tryAgain,
+    largeTextWithKeyboard: true,
+  ),
+  _Case(
+    'profile edit, a saved profile',
+    signedIn: true,
+    script: _savedProfile,
+    drive: _openForm,
+    action: l10n.profileSaveButton,
+    also: [l10n.profileEditLanguagesButton, l10n.profileCancelButton],
+    largeTextWithKeyboard: true,
+  ),
+  _Case(
+    'profile edit, typed',
+    signedIn: true,
+    script: _savedProfile,
+    drive: _typeProfile,
+    action: l10n.profileSaveButton,
+    also: [l10n.profileEditLanguagesButton, l10n.profileCancelButton],
+    largeTextWithKeyboard: true,
+  ),
+  _Case(
+    'profile edit, empty name',
+    signedIn: true,
+    script: _newProfile,
+    drive: (t) async {
+      await _openForm(t);
+      await tapAndSettle(
+        t,
+        find.widgetWithText(FilledButton, l10n.profileSaveButton),
+      );
+    },
+    action: l10n.profileSaveButton,
+    also: [l10n.profileEditLanguagesButton, l10n.profileCancelButton],
+    largeTextWithKeyboard: true,
+  ),
+  _Case(
+    'profile edit, field errors',
+    signedIn: true,
+    script: (s) => _newProfile(
+      s,
+      save: (_) => jsonResponse(422, {
+        'error': {
+          'code': 'validation_failed',
+          'fields': [
+            {'field': 'display_name', 'code': 'invalid'},
+            {'field': 'bio', 'code': 'too_long'},
+          ],
+        },
+      }),
+    ),
+    drive: _saveProfile,
+    action: l10n.profileSaveButton,
+    also: [l10n.profileEditLanguagesButton, l10n.profileCancelButton],
+    largeTextWithKeyboard: true,
+  ),
+  _Case(
+    'profile edit, save failed',
+    signedIn: true,
+    script: (s) => _newProfile(
+      s,
+      save: (_) =>
+          errorResponse(429, 'rate_limited', headers: {'retry-after': '6'}),
+    ),
+    drive: _saveProfile,
+    action: l10n.profileSaveButton,
+    also: [l10n.profileEditLanguagesButton, l10n.profileCancelButton],
+    largeTextWithKeyboard: true,
+  ),
+  _Case(
+    'profile edit, discard question',
+    signedIn: true,
+    script: _savedProfile,
+    drive: (t) async {
+      await _typeProfile(t);
+      await tapAndSettle(
+        t,
+        find.widgetWithText(OutlinedButton, l10n.profileCancelButton),
+      );
+    },
+    action: l10n.languagesDiscardConfirm,
+    also: [l10n.languagesDiscardKeep],
+    largeTextWithKeyboard: true,
   ),
   _Case(
     'languages editor, load failed',
@@ -560,73 +680,138 @@ void main() {
 
       testWidgets('large text on a small screen', (tester) async {
         await _reach(tester, c, size: const Size(320, 480), textScale: 2);
-        await _expectReachable(tester, c.action);
+        for (final label in [c.action, ...c.also]) {
+          await _expectReachable(tester, label);
+        }
       });
 
       testWidgets('with the keyboard open', (tester) async {
         await _reach(tester, c, size: const Size(360, 640), keyboard: 300);
-        await _expectReachable(tester, c.action);
+        for (final label in [c.action, ...c.also]) {
+          await _expectReachable(tester, label);
+        }
       });
+
+      if (c.largeTextWithKeyboard) {
+        testWidgets('large text on a small screen with the keyboard open', (
+          tester,
+        ) async {
+          await _reach(
+            tester,
+            c,
+            size: const Size(320, 480),
+            textScale: 2,
+            keyboard: 240,
+          );
+          for (final label in [c.action, ...c.also]) {
+            await _expectReachable(tester, label);
+          }
+        });
+      }
     });
   }
 
-  // A state that never settles, so it can't go through the cases above.
-  group('languages editor, loading', () {
-    Future<void> reach(
-      WidgetTester tester, {
-      Size? size,
-      double textScale = 1,
-      Brightness brightness = Brightness.light,
-    }) async {
-      final server = FakeServer();
-      _editor(server);
-      await pumpApp(
-        tester,
-        server: server,
-        signedIn: true,
-        size: size,
-        textScale: textScale,
-        brightness: brightness,
-      );
-      await _openProfile(tester);
-      server.once('GET', ApiPaths.myLanguages, neverAnswers);
-      final edit = find.widgetWithText(
-        OutlinedButton,
-        l10n.languagesEditButton,
-      );
-      await tester.ensureVisible(edit);
-      await tester.pumpAndSettle();
-      await tester.tap(edit);
-      await tester.pump();
-      await tester.pump(const Duration(seconds: 1));
-      expect(find.bySemanticsLabel(l10n.languagesLoading), findsOneWidget);
-      expect(tester.takeException(), isNull);
-    }
+  // States that never settle, so they can't go through the cases above:
+  // each is reached with its request left unanswered.
+  final loading = <String, (Future<void> Function(WidgetTester), String)>{
+    'profile, loading': (
+      (tester) async {
+        final server = FakeServer();
+        _home(server);
+        server.once('GET', ApiPaths.profile, neverAnswers);
+        await pumpApp(tester, server: server, signedIn: true);
+        await tester.tap(
+          find.widgetWithText(OutlinedButton, l10n.profileButton),
+        );
+      },
+      l10n.profileLoading,
+    ),
+    'profile edit, loading': (
+      (tester) async {
+        final server = FakeServer();
+        _savedProfile(server);
+        await pumpApp(tester, server: server, signedIn: true);
+        await _openProfile(tester);
+        server.once('GET', ApiPaths.profile, neverAnswers);
+        final edit = find.widgetWithText(
+          OutlinedButton,
+          l10n.profileEditButton,
+        );
+        await tester.ensureVisible(edit);
+        await tester.pumpAndSettle();
+        await tester.tap(edit);
+      },
+      l10n.profileLoading,
+    ),
+    'languages editor, loading': (
+      (tester) async {
+        final server = FakeServer();
+        _editor(server);
+        await pumpApp(tester, server: server, signedIn: true);
+        await _openForm(tester);
+        server.once('GET', ApiPaths.myLanguages, neverAnswers);
+        final row = find.widgetWithText(
+          ListTile,
+          l10n.profileEditLanguagesButton,
+        );
+        await tester.ensureVisible(row);
+        await tester.pumpAndSettle();
+        await tester.tap(row);
+      },
+      l10n.languagesLoading,
+    ),
+  };
+  loading.forEach((name, state) {
+    final (open, label) = state;
+    group(name, () {
+      Future<void> reach(
+        WidgetTester tester, {
+        Size? size,
+        double textScale = 1,
+        Brightness brightness = Brightness.light,
+      }) async {
+        if (size != null) {
+          tester.view
+            ..devicePixelRatio = 1
+            ..physicalSize = size;
+          addTearDown(tester.view.reset);
+        }
+        tester.platformDispatcher
+          ..textScaleFactorTestValue = textScale
+          ..platformBrightnessTestValue = brightness;
+        addTearDown(tester.platformDispatcher.clearAllTestValues);
+        await open(tester);
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+        expect(find.bySemanticsLabel(label), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      }
 
-    for (final brightness in Brightness.values) {
-      testWidgets('meets the tap-target, label and contrast guidelines '
-          '(${brightness.name})', (tester) async {
+      for (final brightness in Brightness.values) {
+        testWidgets('meets the tap-target, label and contrast guidelines '
+            '(${brightness.name})', (tester) async {
+          final handle = tester.ensureSemantics();
+          await reach(tester, brightness: brightness);
+          await expectLater(tester, meetsGuideline(androidTapTargetGuideline));
+          await expectLater(tester, meetsGuideline(labeledTapTargetGuideline));
+          await expectLater(tester, meetsGuideline(textContrastGuideline));
+          handle.dispose();
+          // Lets the request time out, so no timer outlives the test.
+          await tester.pump(const Duration(seconds: 16));
+          await tester.pumpAndSettle();
+        });
+      }
+
+      testWidgets('large text on a small screen', (tester) async {
         final handle = tester.ensureSemantics();
-        await reach(tester, brightness: brightness);
-        await expectLater(tester, meetsGuideline(androidTapTargetGuideline));
-        await expectLater(tester, meetsGuideline(labeledTapTargetGuideline));
-        await expectLater(tester, meetsGuideline(textContrastGuideline));
+        await reach(tester, size: const Size(320, 480), textScale: 2);
+        // The way back is there while it loads.
+        expect(find.byType(BackButton).hitTestable(), findsOneWidget);
         handle.dispose();
-        // Lets the request time out, so no timer outlives the test.
         await tester.pump(const Duration(seconds: 16));
         await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
       });
-    }
-
-    testWidgets('large text on a small screen', (tester) async {
-      final handle = tester.ensureSemantics();
-      await reach(tester, size: const Size(320, 480), textScale: 2);
-      // The way back is there while it loads.
-      expect(find.byType(BackButton).hitTestable(), findsOneWidget);
-      handle.dispose();
-      await tester.pump(const Duration(seconds: 16));
-      await tester.pumpAndSettle();
-      expect(tester.takeException(), isNull);
     });
   });
 
@@ -682,6 +867,24 @@ void main() {
         ),
       );
       await tapAndSettle(tester, find.text(l10n.resendVerificationButton));
+      expect(
+        tester.getSemantics(find.byType(FormErrorBanner)),
+        isSemantics(
+          isLiveRegion: true,
+          label: '${l10n.errorLabel}\n${l10n.errorNetwork}',
+        ),
+      );
+      handle.dispose();
+    });
+
+    testWidgets('a failed profile save is announced like the other banners', (
+      tester,
+    ) async {
+      final handle = tester.ensureSemantics();
+      final server = FakeServer();
+      _newProfile(server, save: networkFailure);
+      await pumpApp(tester, server: server, signedIn: true);
+      await _saveProfile(tester);
       expect(
         tester.getSemantics(find.byType(FormErrorBanner)),
         isSemantics(

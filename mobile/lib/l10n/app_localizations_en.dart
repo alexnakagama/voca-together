@@ -269,8 +269,28 @@ class AppLocalizationsEn extends AppLocalizations {
   String get profileEditHeading => 'Edit your profile';
 
   @override
+  String get profileEmptyMessage =>
+      'You haven’t created your profile yet. Add your name so other members can get to know you.';
+
+  @override
+  String get profileEmptyButton => 'Create your profile';
+
+  @override
+  String get profileEditButton => 'Edit Profile';
+
+  @override
+  String get profileAvatarPlaceholderLabel =>
+      'Your profile picture: no photo yet';
+
+  @override
+  String get profileFriendsHeading => 'Friends';
+
+  @override
+  String get profileFriendsComingLater => 'Coming later';
+
+  @override
   String get profileVisibilityNotice =>
-      'Other members will be able to see your name and what you write about yourself. Your email address stays private.';
+      'Other members will be able to see your name, your picture and what you write about yourself. Your email address stays private.';
 
   @override
   String get displayNameLabel => 'Name';
@@ -282,7 +302,14 @@ class AppLocalizationsEn extends AppLocalizations {
   String get profileSaveButton => 'Save';
 
   @override
-  String get profileSaved => 'Profile saved.';
+  String get profileCancelButton => 'Cancel';
+
+  @override
+  String get profileEditLanguagesButton => 'Languages';
+
+  @override
+  String get profileDiscardMessage =>
+      'Your changes to your profile haven’t been saved.';
 
   @override
   String get displayNameRequired => 'Enter your name';
@@ -373,9 +400,6 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get languageLevelNative => 'Native';
-
-  @override
-  String get languagesEditButton => 'Edit languages';
 
   @override
   String get languagesEditorTitle => 'Your languages';

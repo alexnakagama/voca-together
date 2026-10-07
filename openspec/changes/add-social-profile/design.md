@@ -313,6 +313,11 @@ placeholder with no message; failed languages show the section's own error and r
   `Routes.member(profile.id)`. No reload on return from it: nothing can have changed there.
 - The initial is the first grapheme cluster of the name (`characters`, which Flutter already exports), so an
   emoji or a combined character is not cut in half.
+- *As built (group 7):* "Edit Profile" sits directly under the header, above the Friends area. The languages
+  section is mounted only once the profile has loaded, so a member with no profile, or a failed load, causes
+  no languages request; the cost is that the languages wait for the profile, so a slow connection sees the
+  two spinners one after the other. While the page loads it has no control, so a newer load can never start while one is
+  pending: the request id only guards the answer that arrives after the page was left.
 
 ### 18. The edit screen: what changes around the moved form (amends 028)
 
@@ -326,6 +331,11 @@ placeholder with no message; failed languages show the section's own error and r
 - *"Languages"* is a row below the fields that pushes `Routes.languages` and awaits nothing: the edit screen
   holds no language data, so there is nothing to refresh on return.
 - *The visibility notice* gains the picture ("your name, your picture and this text").
+- *As built:* the "Languages" row does await the push, only to ignore a second tap until the editor is left
+  (the guard the summary's button had); nothing is loaded on return. The discard dialog puts its two answers
+  inside the scrolling content instead of `actions`: at twice the text size on 320 by 480 dp with the keyboard
+  open, `actions` overflowed. The languages editor's dialog is unchanged. Both screens keep the app bar title
+  "Your profile".
 
 ### 19. The picture control applies at once (approved)
 
