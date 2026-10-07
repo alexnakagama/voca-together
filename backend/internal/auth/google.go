@@ -1,10 +1,10 @@
+// Package auth provides authentication and session management
 package auth
 
 import (
 	"context"
 	"errors"
 	"fmt"
-
 	"vocatogether/backend/internal/googleid"
 )
 
