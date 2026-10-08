@@ -32,13 +32,13 @@ the file `docs/decisions/017-*.md`.
 | Email content, pages and delivery | `auth.md`, `config.md` | 019, 007, 006 |
 | Google sign-in, backend | `google-sign-in.md` | 026, then 020 (Stage 7 first) |
 | Google sign-in, client | `google-sign-in.md` | 025, 026 |
-| Profile | `profile.md` | 027 (backend), 028 (client), 031 (the public identifier) |
-| Reading another member's profile | `profile.md`, `backend.md` | 031, then 027 and 029 |
-| Profile pictures | `avatar.md` | 031 ("The profile picture"), 018 (limits and 503s) |
-| Languages | `languages.md` | 029 (backend), 030 (client, draft) |
+| Profile | `profile.md` | 027 (backend), 032 then 028 (client), 031 (the public identifier) |
+| Reading another member's profile | `profile.md`, `backend.md` | 031 (backend), 032 (the member screen), then 027 and 029 |
+| Profile pictures | `avatar.md`, `profile.md` | 031 ("The profile picture"), 032 (the picture control and the photo chooser), 018 (limits and 503s) |
+| Languages | `languages.md` | 029 (backend), 030 (client, draft), 032 (where the editor is opened from) |
 | A new member-owned resource | `backend.md` | 027 and 029 as the two worked examples |
-| Client structure and routing | `mobile.md` | 021, 028 |
-| Client networking, tokens, session | `mobile.md`, `auth.md` | 023, then 014 and 015 for the server side |
+| Client structure and routing | `mobile.md` | 021, 028, 032 (the member route) |
+| Client networking, tokens, session | `mobile.md`, `auth.md` | 023, 032 (bytes, images, DELETE), then 014 and 015 for the server side |
 | Client screens and failure messages | `mobile.md` | 024, 022 |
 | Client design system, widgets, strings | `mobile.md` | 022 |
 | Configuration and startup | `config.md` | 019 (email), 020 Stage 6 (Google), 018 (proxy hops) |
@@ -72,17 +72,18 @@ complete yet, and its row says which part exists).
 | [018](decisions/018-hardening-and-rate-limits.md) | Rate limits, deadlines, retries, cleanup, headers | backend | amended by 027, 029, 031 |
 | [019](decisions/019-resend-email-delivery.md) | Production email with Resend; the verify-email page | backend | in force |
 | [020](decisions/020-google-sign-in-backend.md) | Google sign-in and passwordless accounts | backend | partly superseded by 026 |
-| [021](decisions/021-client-shell-and-routing.md) | App shell: session state and routing | client | amended by 023, 028 |
+| [021](decisions/021-client-shell-and-routing.md) | App shell: session state and routing | client | amended by 023, 028, 032 |
 | [022](decisions/022-client-design-system.md) | Design system, auth widgets, localization | client | in force |
-| [023](decisions/023-client-networking-and-session.md) | Networking, token storage, session management | client | amended by 024, 025, 026, 028 |
+| [023](decisions/023-client-networking-and-session.md) | Networking, token storage, session management | client | amended by 024, 025, 026, 028, 030, 032 |
 | [024](decisions/024-client-auth-screens.md) | Authentication screens and the failure mapping | client | in force |
 | [025](decisions/025-client-google-sign-in.md) | Google sign-in in the client | client | in force |
 | [026](decisions/026-google-id-token-reuse.md) | Google ID tokens are accepted while valid, not once | both | in force; supersedes part of 020 |
 | [027](decisions/027-profile-backend.md) | User profile | backend | amended by 031 |
-| [028](decisions/028-client-profile-screen.md) | Profile screen | client | in force |
+| [028](decisions/028-client-profile-screen.md) | Profile screen | client | amended by 032 |
 | [029](decisions/029-languages-backend.md) | Languages: catalog and a member's own languages | backend | amended by 031 |
-| [030](decisions/030-client-languages.md) | Languages in the profile | client | draft: implemented, the editor included; the final pass over the documents and the emulator run pending |
+| [030](decisions/030-client-languages.md) | Languages in the profile | client | draft: implemented, the editor included; the final pass over the documents and the emulator run pending. Its entry point and summary were changed by 032 |
 | [031](decisions/031-public-profile-backend.md) | Public profiles: the public identifier, the member read and the profile picture | backend | in force |
+| [032](decisions/032-client-social-profile.md) | Social profile in the client: the profile page, the edit screen, the picture and the member profile | client | in force |
 
 ## What later records changed
 
@@ -96,12 +97,16 @@ Each of these is also noted in the header of the earlier file.
 | 023 | 030 | `SessionManager` gained `languageCatalog()`, `languages()` and `saveLanguages()`. |
 | 021 | 023 | `Session` and `markSignedIn`/`markSignedOut` were replaced by `SessionManager`. |
 | 021 | 028 | A signed-in user may be on any route of `Routes.signedInRoutes`, not only `/home`. |
+| 021 | 032 | A route may name a member: `/members/<id>`, by public identifier, the first route with a parameter. `authRedirect` accepts that pattern for a signed-in user and is still a function of the status and the path. |
+| 023 | 032 | `ApiClient` sends DELETE and a byte body and reads an image answer, not JSON only; `SessionManager` gained `avatar()`, `saveAvatar()`, `removeAvatar()`, `memberProfile()` and `memberAvatar()`. |
+| 028 | 032 | `/profile` is a read-only page and the form is at `/profile/edit`. A save returns to the page ("Profile saved." is gone), and leaving with unsaved changes asks first. |
+| 030 | 032 | The editor is opened from the edit screen, not from the summary, which lost its "Edit languages" button and its own reload: the page mounts a new summary on each load. |
 | 018 | 027, 029 | Protected writes have per-user limits; 018 had left protected routes unlimited. |
 | 018 | 031 | A protected read that names another member has a per-user limit (`user_member_read`), and setting or removing a picture a third per-user write limit (`user_avatar_write`). Eleven limiters. Decoding pictures is a second bounded queue that answers 503. |
 | 027 | 031 | A profile is readable by other signed-in members by its public identifier, `profiles.public_id`; the owner's responses gained `id`. `users.id` stays private. |
 | 029 | 031 | A member's languages are returned to other signed-in members with their profile; `language.Service.Get` takes the user to read, not necessarily the caller. |
 | 015 | 023 | The client clears its tokens first and calls the server afterwards. |
-| 008 | 018, 009, 021, 022, 023, 025, 031 | The library lists; `go.mod` and `pubspec.yaml` are current. |
+| 008 | 018, 009, 021, 022, 023, 025, 031, 032 | The library lists; `go.mod` and `pubspec.yaml` are current. |
 | 005 | 020 | Google sign-in's 409 `account_exists` is a deliberate exception to "no enumeration". |
 
 ## Deferred work, and where it is discussed
@@ -118,10 +123,12 @@ Pointers only; the records hold the conditions and the reasons. Check the code b
 | Unicode email domains | 010 |
 | Account linking, `azp` and a per-sign-in nonce, RISC, recovery for a lost Google account | 020, 026 |
 | Release signing, a published consent screen, a release-build smoke test | 025 |
-| Deep links; verify-email and reset-password inside the app | 021, 023, 024 |
+| Deep links; verify-email and reset-password inside the app; deep links to a profile | 021, 023, 024, 032 |
 | More locales, golden tests, a Google Sans subset | 022, 024 |
 | Profile: deletion and export, a handle, a profile gate | 027, 028, 031 |
 | Reporting, blocking and moderation: a hard gate before any feature that lists, suggests or searches members | 031 |
-| Profile pictures: a cache and a version, thumbnails, an object store, cropping, more formats, a take-down tool | 031 |
+| Profile pictures: a cache and a version, thumbnails, an object store, cropping, more formats, a take-down tool | 031, 032 |
+| The photo chooser: the system photo picker on Android 13 to 15, the camera, deleting the chooser's cached copy | 032 |
+| Opening a member's profile from anywhere but one's own page | 032, 031 |
 | Languages: regional variants, per-locale names, catalog administration, a catalog cache | 029 |
 | Limiting a member's own protected reads; optimistic locking for member-owned resources | 027, 029, 031 |

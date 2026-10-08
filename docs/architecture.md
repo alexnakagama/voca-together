@@ -63,18 +63,19 @@ so domain packages never read the request context.
 
 ### Composition
 
-`main.dart` is the composition root: config → `SessionManager` + `AccountApi` → `VocaTogetherApp` → `createRouter`,
-which hands each screen only what it uses.
+`main.dart` is the composition root: config → `SessionManager` + `AccountApi` + `PhotoSource` → `VocaTogetherApp`
+→ `createRouter`, which hands each screen only what it uses.
 
 | File or directory | Role |
 |---|---|
 | `lib/config.dart` | Validates build-time config from `--dart-define-from-file`. |
 | `lib/app.dart` | Owns and disposes the `GoRouter`. |
 | `lib/session.dart` | `SessionManager`, the `ChangeNotifier` session (`unknown`/`signedOut`/`signedIn`) that the router listens to. |
-| `lib/router.dart` | `Routes` and `authRedirect`, the only navigation policy. |
-| `lib/api/` | `ApiClient` over `http.Client`, the API classes (`AccountApi`, `AuthApi`), `ApiPaths`, and the models screens may see (`Me`, `Profile`, and in `languages.dart` `Language`, `LanguageLevel`, `UserLanguage`, `UserLanguages`). |
+| `lib/router.dart` | `Routes` and `authRedirect`, the only navigation policy: the exact signed-in routes (`/home`, `/profile`, `/profile/edit`, `/profile/languages`) and the one that names a member, `/members/<public id>` (decision 032). |
+| `lib/api/` | `ApiClient` over `http.Client`, the API classes (`AccountApi`, `AuthApi`), `ApiPaths`, and the models screens may see (`Me`, `Profile`, `MemberProfile`, and in `languages.dart` `Language`, `LanguageLevel`, `UserLanguage`, `UserLanguages`). `ApiClient` carries JSON, a byte body and an image answer. |
 | `lib/auth/` | `AuthTokens`, `TokenStore`/`SecureTokenStore`, `AuthClock`, `GoogleIdentity`/`PluginGoogleIdentity`. |
-| `lib/screens/` | The screens and `failure_presentation.dart` (`presentFailure`). |
+| `lib/media/` | `PhotoSource`, the device's photo chooser behind an interface, and `PluginPhotoSource`, the only file that imports `image_picker`. |
+| `lib/screens/` | The screens and `failure_presentation.dart` (`presentFailure`). The profile is four files: `profile_screen.dart` (the read-only page), `profile_edit_screen.dart` (the form), `profile_avatar_editor.dart` (the picture control) and `member_profile_screen.dart` (a member's public profile); `profile_languages_section.dart` and `profile_language_lists.dart` show languages on the page and on the member screen. |
 | `lib/ui/` | `theme.dart` (`AppTheme`, `Spacing`, `Radii`), `widgets/`, `previews/`. |
 | `lib/l10n/` | `app_en.arb` and the generated localizations. |
 
@@ -85,9 +86,22 @@ which hands each screen only what it uses.
 `SessionManager` holds the only in-memory tokens and owns refresh and logout. Tokens persist only in
 `SecureTokenStore` (one `flutter_secure_storage` key). Screens reach the backend through `SessionManager`'s
 token-free public API (`me()`, `profile()`, `saveProfile()`, `languageCatalog()`, `languages()`, `saveLanguages()`,
-sign-in, logout) and through `AccountApi` (register, resend, forgot). Of the three language methods, the Profile
-screen's languages section calls `languageCatalog()` and `languages()`, and the languages editor calls all three:
-it is the only caller of `saveLanguages()`.
+`avatar()`, `saveAvatar()`, `removeAvatar()`, `memberProfile()`, `memberAvatar()`, sign-in, logout) and through
+`AccountApi` (register, resend, forgot). Of the three language methods, the profile page's languages section calls
+`languageCatalog()` and `languages()`, and the languages editor calls all three: it is the only caller of
+`saveLanguages()`. Pictures cross this boundary as bytes; no widget fetches an image itself.
+
+### The profile screens (decision 032)
+
+| Route | Screen | Calls |
+|---|---|---|
+| `/profile` | `ProfileScreen`: the caller's read-only page (picture, name, text, a Friends placeholder, languages), "Edit Profile" and "See public profile" | `profile()`, then `avatar()` and, in its languages section, `languageCatalog()` and `languages()` |
+| `/profile/edit` | `ProfileEditScreen`: the name and text form, the picture control (`ProfileAvatarEditor`, applied at once through `PhotoSource`), the row that opens the languages editor | `profile()`, `saveProfile()`, `avatar()`, `saveAvatar()`, `removeAvatar()` |
+| `/profile/languages` | `LanguagesScreen`, the languages editor, opened from the edit screen | `languageCatalog()`, `languages()`, `saveLanguages()` |
+| `/members/<id>` | `MemberProfileScreen`: a member's public profile, read-only, reached for now only from "See public profile" with the caller's own id | `memberProfile()`, `languageCatalog()`, `memberAvatar()` |
+
+Every screen is pushed, so back returns to the opener. The page loads again each time the member comes back from
+the edit screen.
 
 ### Google sign-in
 
@@ -100,7 +114,8 @@ it is the only caller of `saveLanguages()`.
 The client is at roadmap stage 7: app shell, routing, design system, API client, secure token storage, session
 management, the email/password auth screens (log in, register, forgot password, inline resend verification), a home
 screen with `/v1/me` and logout, Google sign-in on log in and register, and the user's own profile (create and
-edit, from home).
+edit, from home). The social profile of decisions 031 and 032 is built on top of it: the read-only profile page,
+the edit screen, the profile picture and the member profile screen; its checks on the emulator are pending.
 
 Stage 8 (languages) is done on the backend: the three routes of decision 029 (`GET /v1/languages`, `GET` and
 `PUT /v1/me/languages`) are served and tested. On the client it is built:
@@ -108,10 +123,10 @@ Stage 8 (languages) is done on the backend: the three routes of decision 029 (`G
 | Part | State |
 |---|---|
 | Data, API and session layer: the models in `lib/api/languages.dart`, the two `ApiPaths`, the three `AuthApi` calls, `SessionManager.languageCatalog()`, `languages()` and `saveLanguages()`, the language cases of `presentFailure` and their strings | implemented and tested |
-| Widgets and previews (`LanguageChip`, `LanguageRow` in `lib/ui/widgets/`), the level labels and descriptions (`lib/screens/language_labels.dart`) and the Languages summary on Profile (`lib/screens/profile_languages_section.dart`) | implemented and tested |
-| The editor (`lib/screens/languages_screen.dart`) at `/profile/languages`, its picker and level choice (`lib/screens/language_picker_sheet.dart`), and the button on Profile that opens it | implemented and tested |
+| Widgets and previews (`LanguageChip`, `LanguageRow` in `lib/ui/widgets/`), the level labels and descriptions (`lib/screens/language_labels.dart`) and the Languages summary on the profile page (`lib/screens/profile_languages_section.dart`, `profile_language_lists.dart`) | implemented and tested |
+| The editor (`lib/screens/languages_screen.dart`) at `/profile/languages`, its picker and level choice (`lib/screens/language_picker_sheet.dart`), and the "Languages" row of the profile edit screen that opens it (032) | implemented and tested |
 | The final pass over these documents, decision 030 to *in force*, and verification on the emulator | pending |
 
-So a member sees their languages on Profile and edits them on their own screen: add from the catalog, choose a
-level, order, remove, save. Decision 030 (a draft until the last row is done) records the client-side decisions and
+So a member sees their languages on their profile page and edits them on their own screen, opened from the profile
+edit screen: add from the catalog, choose a level, order, remove, save. Decision 030 (a draft until the last row is done) records the client-side decisions and
 what is built; the rules are in `.claude/rules/languages.md`.

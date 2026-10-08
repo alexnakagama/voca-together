@@ -12,12 +12,14 @@ import 'language_labels.dart';
 ///
 /// It shows a selection that was already loaded and requests nothing. A
 /// list with no language gets no heading; with both empty, one text says
-/// that none is chosen.
+/// that none is chosen: [emptyText], which depends on whose languages
+/// these are.
 class ProfileLanguageLists extends StatelessWidget {
   const ProfileLanguageLists({
     super.key,
     required this.languages,
     required this.names,
+    required this.emptyText,
   });
 
   final UserLanguages languages;
@@ -25,12 +27,15 @@ class ProfileLanguageLists extends StatelessWidget {
   /// The catalog's English names by language code.
   final Map<String, String> names;
 
+  /// What is shown when neither list has a language, already localized.
+  final String emptyText;
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     if (languages.spoken.isEmpty && languages.learning.isEmpty) {
       return Text(
-        l10n.languagesEmpty,
+        emptyText,
         style: Theme.of(context).textTheme.bodyMedium,
       );
     }

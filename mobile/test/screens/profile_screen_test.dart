@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:vocatogether/api/api_paths.dart';
 import 'package:vocatogether/screens/home_screen.dart';
 import 'package:vocatogether/screens/login_screen.dart';
+import 'package:vocatogether/screens/member_profile_screen.dart';
 import 'package:vocatogether/screens/profile_edit_screen.dart';
 import 'package:vocatogether/screens/profile_languages_section.dart';
 import 'package:vocatogether/screens/profile_screen.dart';
@@ -31,6 +32,8 @@ Finder get _save => find.widgetWithText(FilledButton, l10n.profileSaveButton);
 Finder get _cancel =>
     find.widgetWithText(OutlinedButton, l10n.profileCancelButton);
 Finder get _section => find.byType(ProfileLanguagesSection);
+Finder get _seePublic => find.byTooltip(l10n.profileSeePublicButton);
+Finder get _member => find.byType(MemberProfileScreen);
 
 /// Anything that takes text, or that would change the profile from here.
 Finder get _textFields =>
@@ -968,6 +971,180 @@ void main() {
       expect(_page, findsNothing);
       expect(find.byType(FormErrorBanner), findsNothing);
       expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('"See public profile"', () {
+    final memberPath = ApiPaths.memberProfile(testMemberId);
+    final memberAvatarPath = ApiPaths.memberAvatar(testMemberId);
+    final stored = languagesBody(
+      spoken: [('es', 'native'), ('en', 'c1')],
+      learning: [('ja', 'a2')],
+    );
+
+    /// A member with a name, a text, a picture and languages, read through
+    /// their own routes by the page and through the member routes by the
+    /// public profile.
+    FakeServer complete() => _backend()
+      ..always('GET', ApiPaths.profile, _profile(name: 'Ana López', bio: 'Hi'))
+      ..always('GET', ApiPaths.myLanguages, (_) => jsonResponse(200, stored))
+      ..always('GET', ApiPaths.myAvatar, _picture)
+      ..always(
+        'GET',
+        memberPath,
+        (_) => jsonResponse(
+          200,
+          memberProfileBody(
+            displayName: 'Ana López',
+            bio: 'Hi',
+            hasAvatar: true,
+            languages: stored,
+          ),
+        ),
+      )
+      ..always('GET', memberAvatarPath, _picture);
+
+    testWidgets('is an action of the app bar, labelled for screen readers', (
+      tester,
+    ) async {
+      final server = _backend()..always('GET', ApiPaths.profile, _profile());
+      final handle = tester.ensureSemantics();
+      await _openProfile(tester, server);
+
+      expect(_seePublic, findsOneWidget);
+      expect(
+        find.descendant(of: find.byType(AppBar), matching: _seePublic),
+        findsOneWidget,
+      );
+      expect(
+        tester.getSemantics(find.byIcon(Icons.visibility_outlined)),
+        isSemantics(
+          isButton: true,
+          hasTapAction: true,
+          tooltip: l10n.profileSeePublicButton,
+        ),
+      );
+      // Showing the action asks nothing of the member routes.
+      expect(
+        server.requests.where((r) => r.url.path.startsWith('/v1/profiles')),
+        isEmpty,
+      );
+      handle.dispose();
+    });
+
+    testWidgets('is absent without a profile', (tester) async {
+      final server = _backend()
+        ..always('GET', ApiPaths.profile, (_) => noProfile());
+      await _openProfile(tester, server);
+
+      expect(find.text(l10n.profileEmptyMessage), findsOneWidget);
+      expect(_seePublic, findsNothing);
+    });
+
+    testWidgets('is absent while the profile loads, when the load failed and '
+        'while it is retried', (tester) async {
+      final first = Completer<http.Response>();
+      final second = Completer<http.Response>();
+      final server = _backend()
+        ..once('GET', ApiPaths.profile, (_) => first.future)
+        ..once('GET', ApiPaths.profile, (_) => second.future);
+      await _openProfile(tester, server, settle: false);
+      expect(_seePublic, findsNothing);
+
+      first.complete(errorResponse(500, 'internal_error'));
+      await tester.pumpAndSettle();
+      expect(_retry, findsOneWidget);
+      expect(_seePublic, findsNothing);
+
+      await tester.tap(_retry);
+      await tester.pump();
+      expect(_seePublic, findsNothing);
+
+      second.complete(jsonResponse(200, profileBody()));
+      await tester.pumpAndSettle();
+      expect(_seePublic, findsOneWidget);
+    });
+
+    testWidgets('opens /members/<own id>, with the same name, text, picture '
+        'and languages and no way to edit', (tester) async {
+      final server = complete();
+      final app = await _openProfile(tester, server);
+      final pageChips = _chips(tester);
+      expect(pageChips, hasLength(3));
+      expect(_shown(tester), testPicture);
+
+      await tester.tap(_seePublic);
+      await tester.pumpAndSettle();
+
+      expect(_member, findsOneWidget);
+      expect(app.location(tester), '/members/$testMemberId');
+      final header = tester.widget<ProfileHeader>(find.byType(ProfileHeader));
+      expect(header.name, 'Ana López');
+      expect(header.bio, 'Hi');
+      expect(header.image, testPicture);
+      expect(_chips(tester), pageChips);
+      expect(_edit, findsNothing);
+      expect(_seePublic, findsNothing);
+      expect(_textFields, findsNothing);
+      expect(find.text(l10n.profileFriendsHeading), findsNothing);
+      // The public view is read through the member routes, by the id the
+      // member's own profile carries.
+      expect(server.to(memberPath).single.method, 'GET');
+      expect(server.to(memberAvatarPath).single.method, 'GET');
+    });
+
+    testWidgets('going back shows the page as it was, without a reload', (
+      tester,
+    ) async {
+      final server = complete();
+      final app = await _openProfile(tester, server);
+      await tester.tap(_seePublic);
+      await tester.pumpAndSettle();
+      expect(_member, findsOneWidget);
+
+      // What is stored changes meanwhile: the page doesn't ask again.
+      server
+        ..always('GET', ApiPaths.profile, _profile(name: 'Changed'))
+        ..always('GET', ApiPaths.myAvatar, (_) => noAvatar());
+      await tester.pageBack();
+      await tester.pump();
+      // No spinner on the way back.
+      expect(find.bySemanticsLabel(l10n.profileLoading), findsNothing);
+      await tester.pumpAndSettle();
+
+      expect(_member, findsNothing);
+      expect(_page, findsOneWidget);
+      expect(app.location(tester), '/profile');
+      expect(find.text('Ana López'), findsOneWidget);
+      expect(_shown(tester), testPicture);
+      expect(_chips(tester), hasLength(3));
+      expect(_seePublic, findsOneWidget);
+      expect(server.count(ApiPaths.profile), 1);
+      expect(server.count(ApiPaths.myAvatar), 1);
+      expect(server.count(ApiPaths.myLanguages), 1);
+      expect(server.count(ApiPaths.languages), 2);
+    });
+
+    testWidgets('a rapid double tap opens the public profile once, and it '
+        'can be opened again after coming back', (tester) async {
+      final server = complete();
+      await _openProfile(tester, server);
+
+      await tester.tap(_seePublic);
+      await tester.tap(_seePublic, warnIfMissed: false);
+      await tester.pumpAndSettle();
+      expect(_member, findsOneWidget);
+      expect(server.count(memberPath), 1);
+
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(_page, findsOneWidget);
+      expect(_member, findsNothing);
+
+      await tester.tap(_seePublic);
+      await tester.pumpAndSettle();
+      expect(_member, findsOneWidget);
+      expect(server.count(memberPath), 2);
     });
   });
 

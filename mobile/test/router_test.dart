@@ -19,6 +19,10 @@ import 'support/fakes.dart';
 final _config = AppConfig(apiBaseUrl: Uri.parse('http://10.0.2.2:8080'));
 final _l10n = lookupAppLocalizations(const Locale('en'));
 
+const _memberId = testMemberId;
+final _upperCaseId = _memberId.toUpperCase();
+final _unhyphenatedId = _memberId.replaceAll('-', '');
+
 /// A backend that answers what the screens ask for on their own (home
 /// loads the account; logout).
 FakeServer _server() => FakeServer()
@@ -31,7 +35,7 @@ void main() {
     const l = Routes.login;
     const h = Routes.home;
     // path → expected result for unknown, signedOut, signedIn (null = stay).
-    const cases = <String, List<String?>>{
+    final cases = <String, List<String?>>{
       '/splash': [null, l, h],
       '/login': [s, null, h],
       '/register': [s, null, h],
@@ -53,6 +57,24 @@ void main() {
       '/profile/languages?x=1': [s, l, null],
       '/profile/languages/': [s, l, h],
       '/profile/languages/es': [s, l, h],
+      // A member's public profile: the path is the route and a canonical
+      // identifier, and nothing else (decision 032).
+      '/members/$_memberId': [s, l, null],
+      '/members/$_memberId?x=1': [s, l, null],
+      '/members': [s, l, h],
+      '/members/': [s, l, h],
+      '/members/abc': [s, l, h],
+      '/members/$_upperCaseId': [s, l, h],
+      '/members/$_memberId/': [s, l, h],
+      '/members/$_memberId/x': [s, l, h],
+      '/members/$_memberId/avatar': [s, l, h],
+      '/members/x$_memberId': [s, l, h],
+      '/members/${_memberId}0': [s, l, h],
+      '/members/$_memberId%0A': [s, l, h],
+      '/members/$_unhyphenatedId': [s, l, h],
+      '/members/{$_memberId}': [s, l, h],
+      '/member/$_memberId': [s, l, h],
+      '/profile/$_memberId': [s, l, h],
       '/login/': [s, l, h],
       '/home/': [s, l, h],
       '/nope': [s, l, h],

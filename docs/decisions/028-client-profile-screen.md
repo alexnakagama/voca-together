@@ -1,8 +1,13 @@
 # 028: Profile screen (client stage 7)
 
-> **Status:** in force.
+> **Status:** in force, amended by 032.
 >
 > **Backend side:** 027. Draft 030 will add a Languages summary to this screen and a second signed-in route.
+>
+> **Changed later:** 032 split the screen in two. `/profile` is a read-only page; the form described below is
+> `ProfileEditScreen` at `/profile/edit`, with the same fields, checks and save. A successful save returns to the
+> page instead of showing "Profile saved." and the stored text in the form; leaving with unsaved changes asks
+> first (deferred below); the notice names the picture too; and a route (`/members/<id>`) now names a member.
 >
 > **Current rules:** `.claude/rules/profile.md`, `.claude/rules/mobile.md`.
 

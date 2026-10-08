@@ -197,6 +197,44 @@ Future<void> _pictureAction(WidgetTester tester, String label) async {
   await tapAndSettle(tester, find.widgetWithText(OutlinedButton, label));
 }
 
+/// From home: the profile page, then the member's own public profile.
+Future<void> _openPublic(WidgetTester tester) async {
+  await _openProfile(tester);
+  await tapAndSettle(tester, find.byTooltip(l10n.profileSeePublicButton));
+}
+
+/// A member with a profile on their page, whose public profile answers
+/// [member] and, when it says there is a picture, [avatar]. [catalog] names
+/// the languages for both screens.
+void _publicProfile(
+  FakeServer s,
+  Responder member, {
+  Responder? avatar,
+  Map<String, Object?>? catalog,
+}) {
+  _home(s);
+  s
+    ..always(
+      'GET',
+      ApiPaths.profile,
+      (_) => jsonResponse(200, profileBody(displayName: 'Ana')),
+    )
+    ..always(
+      'GET',
+      ApiPaths.languages,
+      (_) => jsonResponse(200, catalog ?? catalogBody()),
+    )
+    ..always(
+      'GET',
+      ApiPaths.myLanguages,
+      (_) => jsonResponse(200, languagesBody()),
+    )
+    ..always('GET', ApiPaths.memberProfile(testMemberId), member);
+  if (avatar != null) {
+    s.always('GET', ApiPaths.memberAvatar(testMemberId), avatar);
+  }
+}
+
 /// Opens the picker of "I speak".
 Future<void> _openPicker(WidgetTester tester) async {
   await _openEditor(tester);
@@ -753,6 +791,96 @@ final _cases = <_Case>[
     },
     action: l10n.languagesDiscardConfirm,
   ),
+  _Case(
+    'member profile, name only',
+    signedIn: true,
+    script: (s) => _publicProfile(
+      s,
+      (_) => jsonResponse(200, memberProfileBody(displayName: 'Ana')),
+    ),
+    drive: _openPublic,
+    action: l10n.memberLanguagesEmpty,
+    also: ['Ana', l10n.languagesHeading],
+  ),
+  _Case(
+    'member profile, a long name, a long text, a picture and five languages '
+    'in each list',
+    signedIn: true,
+    script: (s) => _publicProfile(
+      s,
+      (_) => jsonResponse(
+        200,
+        memberProfileBody(
+          displayName: _longName,
+          bio: _longBio,
+          hasAvatar: true,
+          languages: languagesBody(
+            spoken: [
+              ('xaa', 'native'),
+              ('xab', 'c2'),
+              ('xac', 'c1'),
+              ('xad', 'b2'),
+              ('xae', 'b1'),
+            ],
+            learning: [
+              ('xaf', 'a1'),
+              ('xag', 'a2'),
+              ('xah', 'b1'),
+              ('xai', 'b2'),
+              // The catalog doesn't name this one: shown by its code.
+              ('zzz', 'c1'),
+            ],
+          ),
+        ),
+      ),
+      avatar: (_) => imageResponse(testPicture),
+      catalog: largeCatalogBody(),
+    ),
+    drive: _openPublic,
+    action: 'zzz',
+    also: [
+      _longName,
+      l10n.languagesHeading,
+      l10n.languagesSpokenHeading,
+      'Language 000',
+      l10n.languagesLearningHeading,
+      'Language 008',
+    ],
+  ),
+  _Case(
+    'member profile, picture failed',
+    signedIn: true,
+    script: (s) => _publicProfile(
+      s,
+      (_) => jsonResponse(
+        200,
+        memberProfileBody(
+          displayName: 'Ana',
+          bio: 'Evenings work best for me.',
+          hasAvatar: true,
+          languages: languagesBody(spoken: [('es', 'native')]),
+        ),
+      ),
+      avatar: networkFailure,
+    ),
+    drive: _openPublic,
+    action: 'Spanish',
+    also: ['Ana', 'Evenings work best for me.'],
+  ),
+  _Case(
+    'member profile, unavailable',
+    signedIn: true,
+    script: (s) => _publicProfile(s, (_) => noProfile()),
+    drive: _openPublic,
+    action: l10n.memberProfileUnavailable,
+  ),
+  _Case(
+    'member profile, load failed',
+    signedIn: true,
+    script: (s) => _publicProfile(s, networkFailure),
+    drive: _openPublic,
+    action: l10n.tryAgain,
+  ),
 ];
 
 Future<void> _reach(
@@ -930,6 +1058,16 @@ void main() {
       },
       l10n.profileAvatarRemoveButton,
     ),
+    'member profile, loading': (
+      (tester) async {
+        final server = FakeServer();
+        _publicProfile(server, neverAnswers);
+        await pumpApp(tester, server: server, signedIn: true);
+        await _openProfile(tester);
+        await tester.tap(find.byTooltip(l10n.profileSeePublicButton));
+      },
+      l10n.memberProfileLoading,
+    ),
     'languages editor, loading': (
       (tester) async {
         final server = FakeServer();
@@ -1003,6 +1141,73 @@ void main() {
   });
 
   group('semantics', () {
+    testWidgets('"See public profile" is a labelled control that stays '
+        'reachable with large text on a small screen', (tester) async {
+      final server = FakeServer();
+      _publicProfile(
+        server,
+        (_) => jsonResponse(200, memberProfileBody(displayName: _longName)),
+      );
+      server.always(
+        'GET',
+        ApiPaths.profile,
+        (_) => jsonResponse(
+          200,
+          profileBody(displayName: _longName, bio: _longBio),
+        ),
+      );
+      final handle = tester.ensureSemantics();
+      await pumpApp(
+        tester,
+        server: server,
+        signedIn: true,
+        size: const Size(320, 480),
+        textScale: 2,
+      );
+      await _openProfile(tester);
+      expect(tester.takeException(), isNull);
+
+      final action = find.byTooltip(l10n.profileSeePublicButton);
+      expect(action.hitTestable(), findsOneWidget);
+      expect(
+        tester.getSemantics(find.byIcon(Icons.visibility_outlined)),
+        isSemantics(
+          isButton: true,
+          hasTapAction: true,
+          tooltip: l10n.profileSeePublicButton,
+        ),
+      );
+      expect(
+        tester
+            .getSize(find.widgetWithIcon(IconButton, Icons.visibility_outlined))
+            .shortestSide,
+        greaterThanOrEqualTo(48),
+      );
+
+      await tester.tap(action);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      // The public profile reads its picture as the member's, by name, and
+      // its name and section as headings.
+      expect(
+        tester.getSemantics(find.byType(ProfileAvatar)),
+        isSemantics(
+          isImage: true,
+          label: l10n.memberAvatarPlaceholderLabel(_longName),
+        ),
+      );
+      expect(
+        tester.getSemantics(find.text(_longName)),
+        isSemantics(label: _longName, isHeader: true),
+      );
+      expect(
+        tester.getSemantics(find.text(l10n.languagesHeading)),
+        isSemantics(label: l10n.languagesHeading, isHeader: true),
+      );
+      expect(find.byType(BackButton).hitTestable(), findsOneWidget);
+      handle.dispose();
+    });
+
     testWidgets('screen titles are headers', (tester) async {
       final handle = tester.ensureSemantics();
       await pumpApp(tester);

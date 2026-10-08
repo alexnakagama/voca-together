@@ -278,6 +278,10 @@ function of the status and the path alone; a malformed member path goes home lik
 comment "no route names another member" is replaced. Routes stay flat `GoRoute`s; screens are pushed, so back
 returns to the opener.
 
+*As built:* the pattern is `Routes.isMember(path)`, beside the set of exact paths; `Routes.member(id)` only builds
+the path and checks nothing, since a malformed one is sent home by the redirect before any screen is built. The
+expression is written again in `router.dart` rather than imported from `ApiPaths`, which belongs to `AuthApi`.
+
 ### 16. Screens and files
 
 | File | Becomes |
@@ -322,6 +326,9 @@ placeholder with no message; failed languages show the section's own error and r
   member with no profile and a failed load cause no picture request. Its answer carries the load's request id:
   one that arrives after the reload started is dropped. The picture's screen-reader label says whether there
   is a photo.
+- *As built (group 9):* "See public profile" is an icon button with that tooltip, not a text button: at twice
+  the text size on 320 dp the title and a text action don't fit the app bar. A second tap before the member
+  screen covers it is ignored, as for "Edit Profile".
 
 ### 18. The edit screen: what changes around the moved form (amends 028)
 
@@ -369,6 +376,12 @@ editor reports "busy" to the screen, which disables everything and holds back le
 whole, as the languages editor's load does. `null` is the "isn't available" state, with no retry. When
 `hasAvatar`, `memberAvatar(id)` loads on its own and falls back to the placeholder. No Friends area, no edit
 control, also when the id is the member's own.
+
+*As built:* the screen has texts of its own where the page's speak to "you": the app bar title "Profile", the
+picture's labels with the member's name ("Ana's profile picture"), and "No languages added yet."
+`ProfileLanguageLists` therefore takes its "none chosen" text from its caller. The list headings stay "I speak"
+and "I'm learning", as the spec says. Because the two loads fail whole, an unavailable profile whose catalog
+request failed shows the failure first, and the retry then says it isn't available.
 
 ### 21. Strings
 

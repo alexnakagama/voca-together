@@ -317,6 +317,31 @@ class AppLocalizationsEn extends AppLocalizations {
   String get profileFriendsComingLater => 'Coming later';
 
   @override
+  String get profileSeePublicButton => 'See public profile';
+
+  @override
+  String get memberProfileTitle => 'Profile';
+
+  @override
+  String get memberProfileLoading => 'Loading the profile';
+
+  @override
+  String get memberProfileUnavailable => 'This profile isn’t available.';
+
+  @override
+  String memberAvatarLabel(String name) {
+    return '$name’s profile picture';
+  }
+
+  @override
+  String memberAvatarPlaceholderLabel(String name) {
+    return '$name’s profile picture: no photo';
+  }
+
+  @override
+  String get memberLanguagesEmpty => 'No languages added yet.';
+
+  @override
   String get profileVisibilityNotice =>
       'Other members will be able to see your name, your picture and what you write about yourself. Your email address stays private.';
 

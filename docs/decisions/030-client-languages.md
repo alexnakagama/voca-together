@@ -7,6 +7,11 @@
 > **Backend side:** 029. **Changes** 023: `SessionManager` gained `languageCatalog()`, `languages()` and
 > `saveLanguages()`.
 >
+> **Changed later:** 032 moved the way in to the editor. The summary is on the read-only profile page, has no
+> "Edit languages" button and no longer reloads by itself: the page mounts a new one each time it loads. The
+> editor is opened from the "Languages" row of the edit screen (`/profile/edit`) and returns there. The two chip
+> lists are `ProfileLanguageLists`, shared with the member profile screen. The editor itself is unchanged.
+>
 > **Current rules:** `.claude/rules/languages.md`.
 
 - **Status: draft, built in three parts.** The decisions below were approved before any client code was written. The

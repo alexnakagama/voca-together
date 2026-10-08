@@ -116,7 +116,13 @@ class _ProfileLanguagesSectionState extends State<ProfileLanguagesSection> {
         SecondaryButton(label: l10n.tryAgain, onPressed: _retry),
       ];
     } else {
-      content = [ProfileLanguageLists(languages: languages, names: _names)];
+      content = [
+        ProfileLanguageLists(
+          languages: languages,
+          names: _names,
+          emptyText: l10n.languagesEmpty,
+        ),
+      ];
     }
 
     return Column(

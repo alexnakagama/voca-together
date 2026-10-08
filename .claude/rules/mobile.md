@@ -35,10 +35,14 @@ load with that feature's files: `auth.md` (session internals), `google-sign-in.m
 - Screens (`lib/screens/`) never read or change session state or decide access: they call
   `SessionManager`/`AccountApi` and the redirect reacts. `SessionStatus`, `.status` and `authRedirect` are forbidden
   in `lib/screens/`.
-- Signed-in routes are `Routes.signedInRoutes` (`/home`, `/profile`, `/profile/languages`); `authRedirect` stays a
-  function of the session status and the path only. `/profile` and `/profile/languages` are always the caller's own
-  (decisions 028, 030).
-- Never put a token or email in a route.
+- Signed-in routes are the exact paths of `Routes.signedInRoutes` (`/home`, `/profile`, `/profile/edit`,
+  `/profile/languages`) and the one pattern `Routes.isMember` accepts (`/members/<public id>`, decision 032);
+  `authRedirect` stays a function of the session status and the path only. The three `/profile` routes are always
+  the caller's own and name nobody (decisions 028, 030, 032).
+- A route carries no token, email, name or language. The only thing a route may say about anyone is a profile's
+  public identifier, in `/members/<id>` (`profile.md`).
+- `main.dart` also builds the `PhotoSource` (`lib/media/`); only the profile edit screen receives it
+  (`profile.md`).
 
 ## Networking and the token boundary (decision 023)
 
@@ -51,7 +55,8 @@ load with that feature's files: `auth.md` (session internals), `google-sign-in.m
   public API, which takes and returns no token (`signIn`/`signInWithGoogle()`/`logout` → `void`, `me()` → `Me`,
   `profile()` → `Profile?`, `saveProfile()` → `Profile`, `languageCatalog()` → `List<Language>`, `languages()` and
   `saveLanguages()` → `UserLanguages`, `avatar()` → `Uint8List?`, `saveAvatar()` → `Uint8List`, `removeAvatar()` →
-  `void`). Only the languages editor calls `saveLanguages()` (`languages.md`).
+  `void`, `memberProfile(id)` → `MemberProfile?`, `memberAvatar(id)` → `Uint8List?`). Only the languages editor
+  calls `saveLanguages()` (`languages.md`); only the member profile screen calls the two member reads.
 - Adding a protected route: a path in `ApiPaths`, a call in `AuthApi` (which takes the raw access token and is held
   only by `SessionManager`), and a typed, token-free `SessionManager` method that makes one `_authorized` call.
   `_authorized` stays private. A model screens may import is added to the allowlist in `test/architecture_test.dart`.

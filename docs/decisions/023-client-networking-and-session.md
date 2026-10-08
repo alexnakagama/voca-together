@@ -1,12 +1,14 @@
 # 023: Networking, token storage and session management (client stage 4)
 
-> **Status:** in force, amended in four places.
+> **Status:** in force, amended in six places.
 >
 > **Changed later:** 024: `main` also builds `AccountApi` and passes it down. 025: `signInWithGoogle()`
 > takes no argument and the Google ID token never leaves the session layer (the text below notes it). 026:
 > after a failed Google sign-in no new ID token is needed. 028: `ApiClient` also sends PUT, and
 > `SessionManager` gained `profile()` and `saveProfile()`. 030: `SessionManager` gained `languageCatalog()`,
-> `languages()` and `saveLanguages()`.
+> `languages()` and `saveLanguages()`. 032: `ApiClient` also sends DELETE and a byte body and reads an image
+> answer (`getImage`, `putForImage`), no longer JSON only; `SessionManager` gained `avatar()`, `saveAvatar()`,
+> `removeAvatar()`, `memberProfile()` and `memberAvatar()`.
 >
 > **Current rules:** `.claude/rules/mobile.md` (token boundary), `.claude/rules/auth.md` (session internals).
 

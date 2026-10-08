@@ -204,6 +204,26 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
         ),
       ),
     )
+    // The member's own public profile: an echoing load failure, then the
+    // profile, whose picture fails with an echoing body.
+    ..once('GET', ApiPaths.memberProfile(testMemberId), (_) => _echo(500))
+    ..once(
+      'GET',
+      ApiPaths.memberProfile(testMemberId),
+      (_) => jsonResponse(
+        200,
+        memberProfileBody(
+          displayName: _name,
+          bio: _bio,
+          hasAvatar: true,
+          languages: languagesBody(
+            spoken: [('es', 'native')],
+            learning: [('xx', 'a2')],
+          ),
+        ),
+      ),
+    )
+    ..once('GET', ApiPaths.memberAvatar(testMemberId), (_) => _echo(500))
     // Google: an echoing 409, an echoing 500, then a session.
     ..once(
       'POST',
@@ -484,6 +504,50 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
     expect(r.url.hasQuery, isFalse);
     expect(r.body, isNot(contains('weekends')));
   }
+
+  // The public profile: its route holds the profile's public identifier
+  // and nothing else, and what it shows is the profile's own fields.
+  void onMember() {
+    record();
+    expect(app.location(tester), '/members/$testMemberId');
+    _checkScreen(tester);
+  }
+
+  await tapAndSettle(tester, find.byTooltip(l10n.profileSeePublicButton));
+  onMember();
+  expect(find.byType(FormErrorBanner), findsOneWidget);
+  expect(find.text(_name), findsNothing);
+  await tapAndSettle(tester, find.widgetWithText(FilledButton, l10n.tryAgain));
+  onMember();
+  expect(find.byType(FormErrorBanner), findsNothing);
+  expect(find.text(_name), findsOneWidget);
+  expect(find.text(_bio), findsOneWidget);
+  expect(find.text('Spanish'), findsOneWidget);
+  expect(find.text('xx'), findsOneWidget);
+  // The identifier travels only in the path of the two member reads.
+  final named = [
+    for (final r in server.requests)
+      if (r.url.toString().contains(testMemberId) ||
+          r.body.contains(testMemberId) ||
+          r.headers.values.any((v) => v.contains(testMemberId)))
+        r,
+  ];
+  expect(named.map((r) => r.url.path), [
+    ApiPaths.memberProfile(testMemberId),
+    ApiPaths.memberProfile(testMemberId),
+    ApiPaths.memberAvatar(testMemberId),
+  ]);
+  for (final r in named) {
+    expect(r.method, 'GET');
+    expect(r.url.hasQuery, isFalse);
+    expect(r.bodyBytes, isEmpty);
+    expect(r.headers.values.any((v) => v.contains(testMemberId)), isFalse);
+  }
+  // Back on the page, as it was.
+  await tester.pageBack();
+  await tester.pumpAndSettle();
+  onPage();
+  expect(find.text(_name), findsOneWidget);
 
   await tester.pageBack();
   await tester.pumpAndSettle();

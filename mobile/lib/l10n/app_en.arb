@@ -391,6 +391,46 @@
   "@profileFriendsComingLater": {
     "description": "Text under the Friends heading of the profile page saying the feature isn’t available yet. Must not state a number or a date."
   },
+  "profileSeePublicButton": "See public profile",
+  "@profileSeePublicButton": {
+    "description": "Tooltip and accessibility label of the button on the user’s own profile page that opens their profile as other members see it."
+  },
+  "memberProfileTitle": "Profile",
+  "@memberProfileTitle": {
+    "description": "Title of the screen that shows a member’s public profile, read-only."
+  },
+  "memberProfileLoading": "Loading the profile",
+  "@memberProfileLoading": {
+    "description": "Accessibility label of the progress indicator while a member’s public profile loads."
+  },
+  "memberProfileUnavailable": "This profile isn’t available.",
+  "@memberProfileUnavailable": {
+    "description": "Text of the member profile screen when the profile doesn’t exist or can no longer be seen. Must not say why."
+  },
+  "memberAvatarLabel": "{name}’s profile picture",
+  "@memberAvatarLabel": {
+    "description": "Accessibility label of a member’s profile picture on their public profile.",
+    "placeholders": {
+      "name": {
+        "type": "String",
+        "example": "Ana"
+      }
+    }
+  },
+  "memberAvatarPlaceholderLabel": "{name}’s profile picture: no photo",
+  "@memberAvatarPlaceholderLabel": {
+    "description": "Accessibility label of the placeholder shown on a member’s public profile in place of a profile picture.",
+    "placeholders": {
+      "name": {
+        "type": "String",
+        "example": "Ana"
+      }
+    }
+  },
+  "memberLanguagesEmpty": "No languages added yet.",
+  "@memberLanguagesEmpty": {
+    "description": "Text of the languages section of a member’s public profile when that member has chosen no language, spoken or learning."
+  },
   "profileVisibilityNotice": "Other members will be able to see your name, your picture and what you write about yourself. Your email address stays private.",
   "@profileVisibilityNotice": {
     "description": "Notice on the profile form saying which information other members will see."

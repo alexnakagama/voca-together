@@ -9,14 +9,23 @@ paths:
   - "backend/internal/db/migrations/00007_profile_public_id.sql"
   - "mobile/lib/api/profile.dart"
   - "mobile/lib/session.dart"
+  - "mobile/lib/api/member_profile.dart"
   - "mobile/lib/screens/profile_screen.dart"
+  - "mobile/lib/screens/profile_edit_screen.dart"
+  - "mobile/lib/screens/profile_avatar_editor.dart"
+  - "mobile/lib/screens/member_profile_screen.dart"
+  - "mobile/lib/ui/widgets/profile_*.dart"
+  - "mobile/lib/media/**"
+  - "mobile/test/**/*member*"
+  - "mobile/test/media/**"
   - "mobile/test/**/*profile*"
 ---
 
 # Profile rules (`GET`/`PUT /v1/me/profile`, `GET /v1/profiles/{id}`, both sides)
 
-Records: 027 (backend), 028 (client), 031 (the public side, backend). The general rules for a member's own
-resource and for reading another member are in `backend.md`; the profile picture's are in `avatar.md`.
+Records: 027 (backend), 028 (client, the form), 031 (the public side, backend), 032 (client: the page, the edit
+screen, the picture, the member screen). The general rules for a member's own resource and for reading another
+member are in `backend.md`; the backend rules of the profile picture are in `avatar.md`.
 
 ## Backend
 
@@ -46,11 +55,59 @@ resource and for reading another member are in `backend.md`; the profile picture
 - Never log a public id, for the owner's requests or a reader's. A member read logs nothing.
 - **Gate:** no feature that lists, suggests or searches members ships before reporting and blocking exist.
 
-## Client
+## Client: the page and the edit screen (032, 028)
 
-- `/profile` is always the caller's own: the route names nobody.
+- `/profile` (`ProfileScreen`) is the caller's own, read-only page: no text field and nothing that changes the
+  profile, the picture or the languages. Everything is edited at `/profile/edit` (`ProfileEditScreen`). Neither
+  route names anybody.
 - `SessionManager.profile()` returns null only for a 404 whose code is `profile_not_found`; any other 404 stays an
-  error, so a broken deployment never shows an empty form.
-- The only client check is the empty name. No length, character or normalization rule is duplicated, the text is
-  sent as typed, and after a save the form shows the text the server stored.
-- The form tells the member, before anything is typed, that other members will be able to see the name and the text.
+  error, so a broken deployment never shows the empty state or an empty form.
+- The page shows only what the server returned. The picture and the languages are asked for once the profile has
+  loaded and each loads by itself: a failed picture is the placeholder with no message, failed languages show the
+  section's own error. A member with no profile, or a failed load, causes neither request.
+- Each time the member comes back from the edit screen, saved or not, the page drops what it showed and loads
+  everything again (a save whose answer was lost may be stored). A failed reload shows the failure, never the
+  earlier profile.
+- Friends is a heading and one line: no number, no control, no request.
+- "See public profile" is shown only with a loaded profile and pushes `Routes.member(profile.id)`. Coming back
+  from it reloads nothing.
+- The form: the only client check is the empty name. No length, character or normalization rule is duplicated
+  and the text is sent as typed. It tells the member, before anything is typed, that other members will see the
+  name, the picture and the text. A successful save leaves with `context.pop()`; there is no "saved" state.
+- Cancel, the app bar's back and the system's back all go through `_requestLeave`: at once when nothing changed,
+  after the discard question otherwise, not at all while the screen is busy. "Changed" is the two fields
+  differing from the loaded text, never a flag.
+- The edit screen holds no language data: its "Languages" row only pushes `Routes.languages`.
+
+## Client: the picture (032)
+
+- The picture is its own resource: `ProfileAvatarEditor` applies a chosen photo at once (`saveAvatar`) and never
+  through the form's Save, and no picture action sends a profile PUT. It shows the bytes the server returned.
+- The control is busy from the moment the chooser opens until the answer, and reports it to the screen, which
+  disables everything and holds back leaving. While the picture loads it offers no button.
+- Every failure goes through `presentFailure` (`avatarError`, `FailureKind.photoUnusable`) and leaves the earlier
+  picture. A picture that fails to load is the placeholder, with no message.
+- A photo comes only from `PhotoSource` (`lib/media/`), built in `main` and passed to the edit screen only.
+  `photo_source_plugin.dart` is the only file that imports `image_picker` (the architecture test enforces it):
+  gallery only, never the camera, and no Android permission. Its downscale is a transfer optimisation; no rule
+  of the server about a picture is repeated in the client.
+- Pictures cross the token boundary as `Uint8List` from `SessionManager`. Never `Image.network`: it would need
+  the token in a widget and bypasses `ApiClient`. Nothing caches a picture.
+- Never print or show as text anything of a photo, and send its bytes only in the body of the upload.
+
+## Client: a member's profile (032)
+
+- `/members/<id>` (`MemberProfileScreen`) is the only route that names a member, and the public identifier is
+  the only thing it carries: never `users.id`, a name, a language, an email or a token. `Routes.isMember` accepts
+  only the canonical lowercase UUID; anything else goes home through `authRedirect`, with no request.
+- The screen is read-only for everyone, the member looking at their own profile included: no edit control, no
+  Friends area, no app bar action. It reads only the member routes (`memberProfile`, `memberAvatar`) and the
+  catalog, never the caller's own profile, languages or picture.
+- `memberProfile()` returns null only for a 404 `profile_not_found`, shown as "isn't available" with **no
+  retry**. Every other failure is the mapped message with "Try again".
+- The profile and the catalog load together and fail whole. The picture is asked for only when `hasAvatar`, by
+  itself, and a failure is the placeholder with no message.
+- `MemberProfile` is everything one member may read about another; `toString` is redacted. Don't add a field
+  the backend's `memberProfileResponse` doesn't have.
+- `ProfileHeader` and `ProfileLanguageLists` are shared with the page. Texts that speak to "you" are not: the
+  member screen has its own picture labels (with the name) and its own "no languages" text.

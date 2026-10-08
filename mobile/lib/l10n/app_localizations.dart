@@ -586,6 +586,48 @@ abstract class AppLocalizations {
   /// **'Coming later'**
   String get profileFriendsComingLater;
 
+  /// Tooltip and accessibility label of the button on the user’s own profile page that opens their profile as other members see it.
+  ///
+  /// In en, this message translates to:
+  /// **'See public profile'**
+  String get profileSeePublicButton;
+
+  /// Title of the screen that shows a member’s public profile, read-only.
+  ///
+  /// In en, this message translates to:
+  /// **'Profile'**
+  String get memberProfileTitle;
+
+  /// Accessibility label of the progress indicator while a member’s public profile loads.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading the profile'**
+  String get memberProfileLoading;
+
+  /// Text of the member profile screen when the profile doesn’t exist or can no longer be seen. Must not say why.
+  ///
+  /// In en, this message translates to:
+  /// **'This profile isn’t available.'**
+  String get memberProfileUnavailable;
+
+  /// Accessibility label of a member’s profile picture on their public profile.
+  ///
+  /// In en, this message translates to:
+  /// **'{name}’s profile picture'**
+  String memberAvatarLabel(String name);
+
+  /// Accessibility label of the placeholder shown on a member’s public profile in place of a profile picture.
+  ///
+  /// In en, this message translates to:
+  /// **'{name}’s profile picture: no photo'**
+  String memberAvatarPlaceholderLabel(String name);
+
+  /// Text of the languages section of a member’s public profile when that member has chosen no language, spoken or learning.
+  ///
+  /// In en, this message translates to:
+  /// **'No languages added yet.'**
+  String get memberLanguagesEmpty;
+
   /// Notice on the profile form saying which information other members will see.
   ///
   /// In en, this message translates to:

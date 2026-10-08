@@ -24,9 +24,11 @@ import 'profile_languages_section.dart';
 ///
 /// Nothing is changed from here: "Edit Profile" opens the edit screen, and
 /// each time the member comes back, saved or not, the page drops what it
-/// showed and loads again. A user without a profile is invited to create
-/// one. It never decides access; when the session ends the router leaves
-/// this screen on its own.
+/// showed and loads again. "See public profile", in the app bar, opens the
+/// member's own profile as others see it; nothing can change there, so
+/// coming back loads nothing. A user without a profile is invited to create
+/// one, and has no public profile to see. It never decides access; when the
+/// session ends the router leaves this screen on its own.
 ///
 /// The picture is asked for once the profile has loaded, and
 /// [ProfileLanguagesSection] is mounted then. Each loads by itself: the
@@ -60,6 +62,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   /// The edit screen was opened from here and hasn't been left yet.
   bool _editOpen = false;
+
+  /// The public profile was opened from here and hasn't been left yet.
+  bool _publicOpen = false;
 
   @override
   void initState() {
@@ -126,6 +131,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _editOpen = false;
     if (!mounted) return;
     _reload();
+  }
+
+  /// Opens the member's own profile as other members see it. Read-only, so
+  /// the page is shown as it was on coming back.
+  Future<void> _openPublic(Profile profile) async {
+    // A second tap before the screen covers the button would push it twice.
+    if (_publicOpen) return;
+    _publicOpen = true;
+    await context.push<void>(Routes.member(profile.id));
+    _publicOpen = false;
   }
 
   @override
@@ -202,7 +217,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
 
     return Scaffold(
-      appBar: AppBar(title: Text(l10n.profileTitle)),
+      appBar: AppBar(
+        title: Text(l10n.profileTitle),
+        actions: [
+          // Only a saved profile has a public side.
+          if (profile != null)
+            IconButton(
+              icon: const Icon(Icons.visibility_outlined),
+              tooltip: l10n.profileSeePublicButton,
+              onPressed: () => unawaited(_openPublic(profile)),
+            ),
+        ],
+      ),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(Spacing.lg),

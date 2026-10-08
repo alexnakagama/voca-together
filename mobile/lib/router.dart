@@ -6,6 +6,7 @@ import 'screens/forgot_password_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/languages_screen.dart';
 import 'screens/login_screen.dart';
+import 'screens/member_profile_screen.dart';
 import 'screens/profile_edit_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/register_screen.dart';
@@ -30,12 +31,26 @@ abstract final class Routes {
   /// nobody, and it carries no language (decision 030).
   static const languages = '/profile/languages';
 
+  /// The read-only public profile of the member whose public identifier is
+  /// [id] (decision 032). The identifier is the only thing a route says
+  /// about anyone: never a name, a language or an account id.
+  static String member(String id) => '/members/$id';
+
   /// The routes a signed-out user may visit.
   static const authRoutes = {login, register, forgotPassword};
 
-  /// The routes a signed-in user may visit. The profile, its edit screen and
-  /// the languages are the user's own: no route names another member.
+  /// The exact routes a signed-in user may visit. The profile, its edit
+  /// screen and the languages are the user's own and name nobody; the one
+  /// route that names a member is [member], matched by [isMember].
   static const signedInRoutes = {home, profile, profileEdit, languages};
+
+  /// Whether [path] is [member] for a well-formed public identifier: the
+  /// canonical lowercase UUID, with nothing before or after it.
+  static bool isMember(String path) => _memberPath.hasMatch(path);
+
+  static final _memberPath = RegExp(
+    r'^/members/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
+  );
 }
 
 /// Where a user with [status] may be when navigating to [location]: `null` to
@@ -43,7 +58,8 @@ abstract final class Routes {
 ///
 /// This is the app's only navigation policy; screens never decide access.
 /// Paths are matched exactly (the query is ignored), so anything unexpected,
-/// including unmatched paths, goes to the status's default route.
+/// including unmatched paths and a member path whose identifier is
+/// malformed, goes to the status's default route.
 String? authRedirect(SessionStatus status, Uri location) {
   final path = location.path;
   switch (status) {
@@ -52,7 +68,9 @@ String? authRedirect(SessionStatus status, Uri location) {
     case SessionStatus.signedOut:
       return Routes.authRoutes.contains(path) ? null : Routes.login;
     case SessionStatus.signedIn:
-      return Routes.signedInRoutes.contains(path) ? null : Routes.home;
+      return Routes.signedInRoutes.contains(path) || Routes.isMember(path)
+          ? null
+          : Routes.home;
   }
 }
 
@@ -106,6 +124,13 @@ GoRouter createRouter(
       GoRoute(
         path: Routes.languages,
         builder: (context, state) => LanguagesScreen(session: session),
+      ),
+      GoRoute(
+        path: '/members/:id',
+        builder: (context, state) => MemberProfileScreen(
+          session: session,
+          id: state.pathParameters['id']!,
+        ),
       ),
     ],
   );

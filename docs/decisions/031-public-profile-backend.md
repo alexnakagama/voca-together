@@ -9,7 +9,7 @@
 > members; the public identifier 027 deferred is decided), 029 (a member's languages are read by other members,
 > through `language`) and 008 (the backend adds `golang.org/x/image`).
 >
-> **Client side:** 032 (not written yet).
+> **Client side:** 032.
 >
 > **Current rules:** `.claude/rules/profile.md`, `.claude/rules/avatar.md`, `.claude/rules/backend.md` ("Reading
 > another member").

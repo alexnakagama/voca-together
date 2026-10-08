@@ -19,8 +19,8 @@ paths:
 # Languages rules (`GET /v1/languages`, `GET`/`PUT /v1/me/languages`, both sides)
 
 Records: 029 (backend, in force), 030 (client, **draft**: everything in it is implemented, the editor included; the
-final pass over the documents and the emulator run are pending). The general rules for a member's own resource are
-in `backend.md`.
+final pass over the documents and the emulator run are pending), 032 (where the summary sits and what opens the
+editor). The general rules for a member's own resource are in `backend.md`.
 
 ## Backend (implemented)
 
@@ -71,22 +71,25 @@ language cases of `presentFailure` (in `lib/screens/failure_presentation.dart`).
 ## Client: widgets and the Profile summary (implemented)
 
 `lib/ui/widgets/language_chip.dart` and `language_row.dart`, `lib/screens/language_labels.dart`
-(`languageLevelLabel`, `languageLevelDescription`) and `lib/screens/profile_languages_section.dart`
-(`ProfileLanguagesSection`, mounted by `ProfileScreen` below its form).
+(`languageLevelLabel`, `languageLevelDescription`), `lib/screens/profile_languages_section.dart`
+(`ProfileLanguagesSection`, mounted by the read-only profile page once the profile has loaded) and
+`lib/screens/profile_language_lists.dart` (`ProfileLanguageLists`, the two chip lists, which the member profile
+screen shows too).
 
 - The two widgets are pure UI and take every text as a string: they import neither the models nor the
   localizations. A level becomes text only through `languageLevelLabel` and `languageLevelDescription`, in
   `lib/screens/`.
 - `LanguageRow` is the editor's row. Its buttons wrap under the name, and among themselves, when they don't fit:
   keep both `Wrap`s, and every button a 48 dp target.
-- The summary is read-only and calls only `languageCatalog()` and `languages()`, together: when Profile opens, and
-  again each time the member comes back from the editor, saved or not. It never saves and holds no selection for
-  a save.
-- Its "Edit languages" button is shown only with a loaded selection (none chosen included). It pushes
-  `Routes.languages` and passes nothing; before the reload on return the old selection is dropped, so a failed
-  reload shows the error, never languages that may no longer be stored.
-- Its state is its own: a failed load shows an error and a retry inside the section, and the profile form, its
-  save and its banners don't depend on it. Don't merge the two loads or their errors.
+- The summary is read-only and calls only `languageCatalog()` and `languages()`, together, once. It never saves,
+  holds no selection for a save, and has no control that opens the editor (032).
+- It doesn't reload by itself: the profile page mounts a new summary (a key per load) each time it loads, which
+  is on opening and on every return from the edit screen, saved or not. So a failed reload shows the error, never
+  languages that may no longer be stored.
+- Its state is its own: a failed load shows an error and a retry inside the section, and the rest of the page
+  doesn't depend on it. Don't merge the two loads or their errors.
+- `ProfileLanguageLists` shows a selection that was already loaded and requests nothing. Its "none chosen" text
+  is passed in, because it differs between one's own page and another member's profile.
 - The load fails whole: if either request fails, no language is shown (never a partial list, never "none yet").
 - A code the catalog doesn't name is shown as the code, so every language the member has stays visible.
 - A list with no language gets no heading; with both empty, one "none yet" text.
@@ -103,6 +106,8 @@ language cases of `presentFailure` (in `lib/screens/failure_presentation.dart`).
   removed; a code the catalog doesn't name is shown as the code and kept.
 - The route names nobody and carries no language code. A picked language or level travels as the sheet's result,
   never through the router.
+- The editor is opened only from the "Languages" row of the profile edit screen (032), and leaves to whatever
+  opened it with `context.pop()`: the edit screen is still there under it, with what was typed.
 - Languages are public by intent: the notice is on the editor, above the lists, where the save is. The summary
   carries no notice.
 - The pickers offer less, they check nothing: a language already in either list is not offered, and "Native" is
