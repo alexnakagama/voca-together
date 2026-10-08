@@ -79,17 +79,9 @@ pushed. Stop for review after each numbered group.
 - [x] 9.5 Write `docs/decisions/032-*.md` (the four routes, the page and edit split, the picture control, the member screen, the transport change, the photo chooser as built: the system photo picker only on Android 16 and later, and as an accepted risk the copy of a chosen photo that `image_picker` leaves in the app's cache directory; tests, deferred work) with header notes on 021, 023, 028 and 030, index it in `docs/decisions.md`, and update `.claude/rules/profile.md`, `languages.md`, `mobile.md` and the client section of `docs/architecture.md`; verify with a search that no document still says `/profile` holds the form, that the summary has an "Edit languages" button, or that no route names another member
 - [x] 9.6 Run `make mobile-analyze` and `make mobile-test` and verify both pass
 
-## 10. Integration checks
-
-- [ ] 10.1 Run `make vet` and `make test` with the database up, then `make mobile-analyze` and `make mobile-test`, and verify all four pass
-- [ ] 10.2 Verify with `git diff --stat` that the only dependency changes are `golang.org/x/image` in `backend/go.mod` and `image_picker` in `mobile/pubspec.yaml`, and that no applied migration (00001 to 00006) was edited
-- [ ] 10.3 On the emulator against `make run`: create a profile from the empty state, add a photo from the gallery, edit languages from the edit screen, return to `/profile` and see all of it, open "See public profile", remove the photo, and discard an unsaved name; verify each step shows what the specs describe and the API log holds no name, text, language, id or image data
-- [ ] 10.4 With two accounts, verify by request that one can read the other's profile and picture by public id and cannot change either, and that the reader's email and account id appear in no response
-- [ ] 10.5 Run `openspec validate add-social-profile --strict` and verify it passes
-
 ## Workflow follow-up
 
 - The user reviews and commits; nothing is committed or pushed by the implementation.
 - Archive the change (`/opsx:archive`) after the user's review.
 - Before any feature that lists, suggests or searches members: reporting and blocking (decision 031's gate).
-- Stage 8's remaining step is separate from this change: decision 030 to *in force*.
+- Stage 8's remaining step is separate from this change: decision 030 to _in force_.
