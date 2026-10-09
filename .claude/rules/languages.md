@@ -18,8 +18,8 @@ paths:
 
 # Languages rules (`GET /v1/languages`, `GET`/`PUT /v1/me/languages`, both sides)
 
-Records: 029 (backend, in force), 030 (client, **draft**: everything in it is implemented, the editor included; the
-final pass over the documents and the emulator run are pending), 032 (where the summary sits and what opens the
+Records: 029 (backend, in force), 030 (client, **draft**: everything in it is implemented, the editor included, and the
+author confirmed it by hand on the emulator; the final pass over the documents is pending), 032 (where the summary sits and what opens the
 editor). The general rules for a member's own resource are in `backend.md`.
 
 ## Backend (implemented)

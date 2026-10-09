@@ -81,7 +81,7 @@ complete yet, and its row says which part exists).
 | [027](decisions/027-profile-backend.md) | User profile | backend | amended by 031 |
 | [028](decisions/028-client-profile-screen.md) | Profile screen | client | amended by 032 |
 | [029](decisions/029-languages-backend.md) | Languages: catalog and a member's own languages | backend | amended by 031 |
-| [030](decisions/030-client-languages.md) | Languages in the profile | client | draft: implemented, the editor included; the final pass over the documents and the emulator run pending. Its entry point and summary were changed by 032 |
+| [030](decisions/030-client-languages.md) | Languages in the profile | client | draft: implemented, the editor included, and confirmed by hand on the emulator; the final pass over the documents pending. Its entry point and summary were changed by 032 |
 | [031](decisions/031-public-profile-backend.md) | Public profiles: the public identifier, the member read and the profile picture | backend | in force |
 | [032](decisions/032-client-social-profile.md) | Social profile in the client: the profile page, the edit screen, the picture and the member profile | client | in force |
 

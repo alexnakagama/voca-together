@@ -125,7 +125,8 @@ Stage 8 (languages) is done on the backend: the three routes of decision 029 (`G
 | Data, API and session layer: the models in `lib/api/languages.dart`, the two `ApiPaths`, the three `AuthApi` calls, `SessionManager.languageCatalog()`, `languages()` and `saveLanguages()`, the language cases of `presentFailure` and their strings | implemented and tested |
 | Widgets and previews (`LanguageChip`, `LanguageRow` in `lib/ui/widgets/`), the level labels and descriptions (`lib/screens/language_labels.dart`) and the Languages summary on the profile page (`lib/screens/profile_languages_section.dart`, `profile_language_lists.dart`) | implemented and tested |
 | The editor (`lib/screens/languages_screen.dart`) at `/profile/languages`, its picker and level choice (`lib/screens/language_picker_sheet.dart`), and the "Languages" row of the profile edit screen that opens it (032) | implemented and tested |
-| The final pass over these documents, decision 030 to *in force*, and verification on the emulator | pending |
+| Verification on the emulator, run by hand by the author | done |
+| The final pass over these documents, and decision 030 to *in force* | pending |
 
 So a member sees their languages on their profile page and edits them on their own screen, opened from the profile
 edit screen: add from the catalog, choose a level, order, remove, save. Decision 030 (a draft until the last row is done) records the client-side decisions and

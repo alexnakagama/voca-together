@@ -1,8 +1,10 @@
 # 030: Languages in the profile (client stage 8, draft)
 
 > **Status:** draft, implemented. The data, API and session layer, the language widgets, the summary on Profile and
-> the editor exist and are tested. Still pending before it is in force: the final pass over the documents and
-> verification on the emulator (see the first bullet).
+> the editor exist and are tested, and the author ran the app in the Android emulator by hand and confirmed that it
+> works. Still pending before it is in force: the final pass over the documents (see the first bullet). No
+> two-account check is pending for this record: it concerns a member's own languages, and the connection flows
+> such a test needs do not exist yet.
 >
 > **Backend side:** 029. **Changes** 023: `SessionManager` gained `languageCatalog()`, `languages()` and
 > `saveLanguages()`.
@@ -29,8 +31,9 @@
     (`lib/screens/language_picker_sheet.dart`), the "Edit languages" button of the summary, value equality on
     `UserLanguage` and `UserLanguages`, and the move buttons of `LanguageRow`. A member can change their
     languages in the app; described under "What the editor does" below.
-  - **Pending:** the final pass over the architecture map and the rule files, and verification on the emulator.
-    The word "draft" is removed then.
+  - **Verified:** the author ran the app in the Android emulator by hand and confirmed that it works. This was a
+    manual run; no automated emulator test exists.
+  - **Pending:** the final pass over the architecture map and the rule files. The word "draft" is removed then.
 - **Scope:** the signed-in user reads the catalog and reads and replaces their own languages, over the contract of
   029. Nothing about other members.
 - **No minimum in the client.** `spoken` may be empty, `learning` may be empty, and both may be empty. The app

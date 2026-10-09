@@ -1,7 +1,9 @@
 # 032: Social profile in the client (profile page, edit screen, picture, member profile)
 
-> **Status:** in force. Implemented and tested on the host. Still to do before the OpenSpec change
-> `add-social-profile` is archived: its integration checks (the run on the emulator and the two-account check).
+> **Status:** in force. Implemented and tested on the host. The OpenSpec change `add-social-profile` was archived
+> on 2026-10-08 (its specs are synchronized into `openspec/specs/`). Its integration checks (the run on the
+> emulator and the two-account check) were removed from the task list and are left for manual execution; no
+> result of them is recorded here.
 >
 > **Backend side:** 031.
 >

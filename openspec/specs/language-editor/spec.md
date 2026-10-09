@@ -7,26 +7,31 @@ with a level for each and in the order they choose, and see the result on their 
 
 ## Requirements
 
-### Requirement: Reaching the editor from Profile
-The Languages section of the Profile screen SHALL offer an "Edit languages" control whenever it shows the
-member's selection, including when no language is chosen. The control SHALL open the language editor on top of
-Profile, so that going back returns to Profile with the profile form as the member left it.
+### Requirement: Reaching the editor from the profile edit screen
+The profile edit screen at `/profile/edit` SHALL offer a "Languages" control whenever it shows its form,
+including for a member who has chosen no language or saved no profile. The control SHALL open the language
+editor on top of the edit screen, so that going back returns to it with the profile form as the member left
+it. The profile page at `/profile` SHALL offer no control that opens the editor.
 
 #### Scenario: Opening the editor with languages chosen
-- **WHEN** the Languages section shows the member's languages and the member activates "Edit languages"
-- **THEN** the language editor opens at `/profile/languages`
+- **WHEN** the edit screen shows its form, the member has languages, and the member activates "Languages"
+- **THEN** the language editor opens at `/profile/languages` with the member's languages
 
 #### Scenario: Opening the editor with no language chosen
-- **WHEN** the Languages section shows that no language is chosen and the member activates "Edit languages"
+- **WHEN** the member has chosen no language and activates "Languages" on the edit screen
 - **THEN** the language editor opens with both lists empty
 
-#### Scenario: No way in while the summary is loading or failed
-- **WHEN** the Languages section is loading, or shows a load error with its retry
-- **THEN** no "Edit languages" control is shown
+#### Scenario: No way in while the edit screen is loading or failed
+- **WHEN** the edit screen is loading, or shows a load error with its retry
+- **THEN** no "Languages" control is shown
 
 #### Scenario: Unsaved profile text survives the visit
 - **WHEN** the member types in the profile form without saving, opens the editor and comes back
 - **THEN** the profile form still holds the typed text and no profile save was sent
+
+#### Scenario: No way in from the profile page
+- **WHEN** the profile page shows the member's languages, or that none is chosen
+- **THEN** it shows no control that opens the editor
 
 ### Requirement: The editor route is the caller's own
 The editor SHALL live at the signed-in route `/profile/languages`. The route SHALL name no member and carry no
@@ -170,7 +175,7 @@ language SHALL be offered by the picker again.
 Save SHALL send one request holding the member's complete selection: both lists, each as an array in the order
 shown, an empty list as an empty array. The app SHALL apply no rule of its own before sending: no minimum, no
 maximum, no duplicate check, no check of codes or levels. On success the editor SHALL close and return to
-Profile.
+the profile edit screen that opened it.
 
 #### Scenario: Saving after editing one list
 - **WHEN** the member changes only "I'm learning" and saves
@@ -190,7 +195,7 @@ Profile.
 
 #### Scenario: Success
 - **WHEN** the server answers the save with 200
-- **THEN** the editor closes without asking about unsaved changes and Profile is shown
+- **THEN** the editor closes without asking about unsaved changes and the profile edit screen is shown
 
 ### Requirement: Save availability and a save in flight
 Save SHALL be available only when the selection differs from the one last loaded. While a save is in flight
@@ -269,7 +274,8 @@ no save.
 
 #### Scenario: Discard
 - **WHEN** the member chooses "Discard"
-- **THEN** the editor closes, no save request is sent, and Profile shows the selection as stored
+- **THEN** the editor closes, no save request is sent, and the profile edit screen is shown as the member left
+  it
 
 #### Scenario: Leaving before the load finished
 - **WHEN** the editor is loading or shows a load error and the member goes back
@@ -280,24 +286,26 @@ no save.
 - **THEN** the app goes to the log in screen without asking, and nothing of the editor stays on screen
 
 ### Requirement: Profile shows the result
-When the member returns from the editor to Profile, by saving, cancelling or going back, the Languages section
+When the member returns to the profile page at `/profile` after visiting the editor, whether they saved,
+cancelled or went back, and however they left the profile edit screen in between, the page's languages area
 SHALL load the catalog and the selection again and show what the server has stored.
 
 #### Scenario: After a save
-- **WHEN** the member saves a changed selection and the editor closes
-- **THEN** the Languages section shows the new selection, in the new order, without reopening Profile
+- **WHEN** the member saves a changed selection, the editor closes, and the member goes back from the edit
+  screen to the profile page
+- **THEN** the languages area shows the new selection, in the new order
 
 #### Scenario: After cancelling
-- **WHEN** the member leaves the editor without saving
-- **THEN** the Languages section reloads and shows the stored selection
+- **WHEN** the member leaves the editor without saving and returns to the profile page
+- **THEN** the languages area reloads and shows the stored selection
 
 #### Scenario: The reload fails
-- **WHEN** the reload after returning fails
-- **THEN** the Languages section shows its error and retry, and the profile form is unaffected
+- **WHEN** the languages reload after returning fails
+- **THEN** the languages area shows its error and retry, and the rest of the profile page is unaffected
 
 ### Requirement: Telling the member their languages are public
 The editor SHALL show, above the lists and whenever the lists are shown, a notice that other members will be
-able to see the member's languages and levels. The Profile Languages section SHALL carry no such notice.
+able to see the member's languages and levels. The languages area of the profile page SHALL carry no such notice.
 
 #### Scenario: The notice precedes the save
 - **WHEN** the editor has loaded
