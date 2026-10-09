@@ -1010,3 +1010,224 @@ func TestMigration00008AvatarsWithExistingRows(t *testing.T) {
 		t.Errorf("setting a picture after re-applying: %v", err)
 	}
 }
+
+func insertBlock(pool *pgxpool.Pool, blockerID, blockedID string) error {
+	_, err := pool.Exec(context.Background(),
+		`INSERT INTO blocks (blocker_id, blocked_id) VALUES ($1, $2)`, blockerID, blockedID)
+	return err
+}
+
+func TestBlocksDefaultsAndNotNull(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := mustInsertUser(t, pool, "ben@example.com")
+	if err := insertBlock(pool, ana, ben); err != nil {
+		t.Fatal(err)
+	}
+
+	var createdAt time.Time
+	if err := pool.QueryRow(ctx, `SELECT created_at FROM blocks WHERE blocker_id = $1`, ana).Scan(&createdAt); err != nil {
+		t.Fatal(err)
+	}
+	if createdAt.IsZero() {
+		t.Error("created_at must default to now()")
+	}
+	for _, column := range []string{"blocker_id", "blocked_id", "created_at"} {
+		_, err := pool.Exec(ctx, `UPDATE blocks SET `+column+` = NULL WHERE blocker_id = $1`, ana)
+		requirePgError(t, err, notNullViolation, "")
+	}
+}
+
+// The primary key is the pair in its direction: a member blocks another at
+// most once, and the reverse row is the other member's own block.
+func TestBlocksOneRowPerDirection(t *testing.T) {
+	pool := testutil.DB(t)
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := mustInsertUser(t, pool, "ben@example.com")
+	cho := mustInsertUser(t, pool, "cho@example.com")
+	if err := insertBlock(pool, ana, ben); err != nil {
+		t.Fatal(err)
+	}
+	requirePgError(t, insertBlock(pool, ana, ben), uniqueViolation, "blocks_pkey")
+
+	if err := insertBlock(pool, ben, ana); err != nil {
+		t.Errorf("the reverse block: %v", err)
+	}
+	// A member blocks several, and several block one member.
+	if err := insertBlock(pool, ana, cho); err != nil {
+		t.Errorf("a second block by the same member: %v", err)
+	}
+	if err := insertBlock(pool, cho, ben); err != nil {
+		t.Errorf("a second block of the same member: %v", err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM blocks`); n != 4 {
+		t.Errorf("blocks = %d, want 4", n)
+	}
+}
+
+func TestBlocksNotSelf(t *testing.T) {
+	pool := testutil.DB(t)
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := mustInsertUser(t, pool, "ben@example.com")
+	requirePgError(t, insertBlock(pool, ana, ana), checkViolation, "blocks_not_self")
+
+	// Nor by changing a stored block.
+	if err := insertBlock(pool, ana, ben); err != nil {
+		t.Fatal(err)
+	}
+	_, err := pool.Exec(context.Background(), `UPDATE blocks SET blocked_id = blocker_id WHERE blocker_id = $1`, ana)
+	requirePgError(t, err, checkViolation, "blocks_not_self")
+	if n := countRows(t, pool, `SELECT count(*) FROM blocks WHERE blocker_id = blocked_id`); n != 0 {
+		t.Errorf("blocks of oneself = %d, want 0", n)
+	}
+}
+
+// Both members must exist, and a block goes with either account: with the
+// blocker's and with the blocked member's.
+func TestBlocksBelongToExistingUsers(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	const nobody = "00000000-0000-0000-0000-000000000000"
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := mustInsertUser(t, pool, "ben@example.com")
+	cho := mustInsertUser(t, pool, "cho@example.com")
+	dan := mustInsertUser(t, pool, "dan@example.com")
+	requirePgError(t, insertBlock(pool, nobody, ana), foreignKeyViolation, "blocks_blocker_id_fkey")
+	requirePgError(t, insertBlock(pool, ana, nobody), foreignKeyViolation, "blocks_blocked_id_fkey")
+
+	for _, pair := range [][2]string{{ana, ben}, {ana, cho}, {ben, ana}, {cho, ben}, {cho, dan}} {
+		if err := insertBlock(pool, pair[0], pair[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The blocker is deleted: their blocks go, and so does the block of them.
+	if _, err := pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, ana); err != nil {
+		t.Fatal(err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM blocks WHERE $1 IN (blocker_id, blocked_id)`, ana); n != 0 {
+		t.Errorf("blocks involving a deleted blocker = %d, want 0", n)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM blocks`); n != 2 {
+		t.Errorf("blocks left = %d, want cho's 2", n)
+	}
+
+	// The blocked user is deleted: the block of them goes, the blocker's
+	// other block stays.
+	if _, err := pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, ben); err != nil {
+		t.Fatal(err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM blocks WHERE blocked_id = $1`, ben); n != 0 {
+		t.Errorf("blocks of a deleted user = %d, want 0", n)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM blocks WHERE blocker_id = $1 AND blocked_id = $2`, cho, dan); n != 1 {
+		t.Errorf("the blocker's other block = %d rows, want 1", n)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM users`); n != 2 {
+		t.Errorf("users = %d, want 2: deleting a block's member deletes nobody else", n)
+	}
+}
+
+// Finding who blocked a member (the cascade when that member is deleted) has
+// its index; the primary key starts with the blocker.
+func TestBlocksByBlockedIndex(t *testing.T) {
+	pool := testutil.DB(t)
+	var def string
+	err := pool.QueryRow(context.Background(),
+		`SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'blocks_blocked_id_idx'`).Scan(&def)
+	if err != nil {
+		t.Fatalf("index blocks_blocked_id_idx: %v", err)
+	}
+	if !strings.Contains(def, "(blocked_id)") {
+		t.Errorf("index definition = %q, want (blocked_id)", def)
+	}
+}
+
+// testutil.DB empties the table like every table of user data.
+func TestBlocksAreTruncatedBetweenTests(t *testing.T) {
+	pool := testutil.DB(t)
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := mustInsertUser(t, pool, "ben@example.com")
+	if err := insertBlock(pool, ana, ben); err != nil {
+		t.Fatal(err)
+	}
+	pool = testutil.DB(t)
+	if n := countRows(t, pool, `SELECT count(*) FROM blocks`); n != 0 {
+		t.Errorf("blocks after testutil.DB = %d, want 0", n)
+	}
+}
+
+// 00009 adds blocks. Up leaves every other table as it was and blocks
+// nobody; down removes the table with whatever blocks it holds and touches
+// nothing else.
+func TestMigration00009BlocksWithExistingRows(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	// Leave the schema migrated whatever happens here.
+	t.Cleanup(func() {
+		if err := db.Migrate(ctx, pool); err != nil {
+			t.Errorf("restoring the schema: %v", err)
+		}
+	})
+
+	// Before 00009: users, a profile and a picture exist, the table does not.
+	if err := db.MigrateDownTo(ctx, pool, 8); err != nil {
+		t.Fatalf("down to 00008: %v", err)
+	}
+	if columnExists(t, pool, "blocks", "blocker_id") {
+		t.Fatal("blocks exists before 00009")
+	}
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := insertGoogleUser(t, pool, "ben@example.com", "1001")
+	if err := insertProfile(pool, ana, "Ana", "Hi"); err != nil {
+		t.Fatal(err)
+	}
+	if err := insertAvatar(pool, ana, []byte("ana"), hash(1)); err != nil {
+		t.Fatal(err)
+	}
+	anaID := publicID(t, pool, ana)
+
+	// Up with users present: nobody is blocked.
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("up with users present: %v", err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM blocks`); n != 0 {
+		t.Errorf("blocks after migrating = %d, want 0", n)
+	}
+	if err := insertBlock(pool, ana, ben); err != nil {
+		t.Fatal(err)
+	}
+	if err := insertBlock(pool, ben, ana); err != nil {
+		t.Fatal(err)
+	}
+
+	// Down with blocks present: they go; users, identities, the profile with
+	// its public id and the picture stay.
+	if err := db.MigrateDownTo(ctx, pool, 8); err != nil {
+		t.Fatalf("down with blocks present: %v", err)
+	}
+	if columnExists(t, pool, "blocks", "blocker_id") {
+		t.Error("blocks still exists after rolling 00009 back")
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM users u LEFT JOIN user_identities i ON i.user_id = u.id`); n != 2 {
+		t.Errorf("users after rolling back = %d, want 2", n)
+	}
+	if got := publicID(t, pool, ana); got != anaID {
+		t.Errorf("ana's public id after rolling back: %s, want %s", got, anaID)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM avatars WHERE user_id = $1`, ana); n != 1 {
+		t.Errorf("ana's pictures after rolling back = %d, want 1", n)
+	}
+
+	// Up again: an empty table, and the same users can block.
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM blocks`); n != 0 {
+		t.Errorf("blocks after re-applying = %d, want 0", n)
+	}
+	if err := insertBlock(pool, ana, ben); err != nil {
+		t.Errorf("blocking after re-applying: %v", err)
+	}
+}

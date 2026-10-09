@@ -83,12 +83,19 @@ func findSelection(ctx context.Context, q querier, userID string) (Selection, er
 // hold their languages FOR KEY SHARE, so none can leave the catalog between
 // the check and the commit.
 //
-// Locks: the users row comes first, which is the order of every auth
-// transaction (they take it FOR UPDATE), so this waits for them and they for
-// it, without a deadlock. FOR NO KEY UPDATE doesn't block the FOR KEY SHARE
-// that inserting a row referencing the user takes (a session, a profile).
-// After it come only this user's own user_languages rows and key-share locks
-// on the catalog, which nothing updates.
+// Locks: the users row comes first, which is the lock order of auth (see
+// Lock order in auth/store.go). Two kinds of auth transaction hold that row,
+// and FOR NO KEY UPDATE conflicts with both, so this waits for them and they
+// for it: the token flows (verification, resend, forgot and reset password)
+// hold it FOR UPDATE, and login and Google sign-in hold it FOR SHARE. Neither
+// is a cycle: each of them takes the users row before any other lock on an
+// existing user and after it touches only that user's token and session
+// rows, which this transaction never locks, so whichever gets the row first
+// finishes without waiting for the other. FOR NO KEY UPDATE doesn't block
+// the FOR KEY SHARE that inserting a row referencing the user takes (a
+// session, a profile). After the users row come only this user's own
+// user_languages rows and key-share locks on the catalog, which nothing
+// updates.
 func replaceSelection(ctx context.Context, pool *pgxpool.Pool, userID string, want Selection) (changed bool, err error) {
 	err = pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
 		var one int

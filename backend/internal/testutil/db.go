@@ -35,7 +35,7 @@ func DB(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("migrate test db: %v", err)
 	}
 	// Not languages: the catalog is seeded by its migration and tests need it.
-	if _, err := pool.Exec(ctx, `TRUNCATE users, user_tokens, sessions, user_identities, profiles, user_languages, avatars CASCADE`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE users, user_tokens, sessions, user_identities, profiles, user_languages, avatars, blocks CASCADE`); err != nil {
 		t.Fatalf("truncate test db: %v", err)
 	}
 	return pool

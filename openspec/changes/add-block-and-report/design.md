@@ -87,8 +87,12 @@ CREATE INDEX blocks_blocked_id_idx ON blocks (blocked_id);
 - *Keyed by `users.id`, not `public_id`:* a block must survive the blocked member's profile being taken down
   and saved again (a new public id), and it gives the cascade and the dead-credential 401 for free.
 - *One row per direction,* so "A unblocks B" can never remove B's block of A, and the list is one index scan.
-- *The second index* serves the reverse half of `Blocked` and the cascade when the blocked user is deleted.
-- `Blocked(a, b)` is one statement: `SELECT EXISTS (… (blocker_id, blocked_id) IN ((a, b), (b, a)))`.
+- `Blocked(a, b)` is one statement: `SELECT EXISTS (… (blocker_id, blocked_id) IN ((a, b), (b, a)))`. Both
+  directions are covered by the primary key: each is an equality on both of its columns, `(a, b)` and `(b, a)`.
+- *The second index* is not for the reverse half of that lookup. It is for what the primary key cannot serve,
+  access by `blocked_id` alone: the cascade when the blocked user is deleted, and later queries that start from
+  the blocked member. (Amended at the review of task group 1; which index the planner picks for a given
+  statement was not measured and is not claimed here.)
 
 ### 3. Block and unblock: routes, idempotence, the cap and concurrency
 
