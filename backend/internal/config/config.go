@@ -63,7 +63,7 @@ func (s Secret) Reveal() string {
 	return *s.v
 }
 
-// Format, String, GoString, LogValue, MarshalJSON and MarshalText never show
+// Format ..., String, GoString, LogValue, MarshalJSON and MarshalText never show
 // the value. Format handles every fmt verb (String alone wouldn't cover %d or
 // %x on a struct field), including inside a printed Config; the one verb fmt
 // never passes to Format, %p on a value, finds only a pointer (see v).
