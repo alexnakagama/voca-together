@@ -67,6 +67,11 @@ on. It is necessary for lifting the gate and not sufficient: the gate stays unti
 **Decisions approved** (1 to 4 before the proposal was written, 5 to 10 at its review)
 
 1. A block hides both ways, and unblocking is done from a list.
+   *Note, 2026-10-10 (clarified before task group 6; the decision above is kept as approved):* an unblock is
+   by identifier and never depends on the list. The member screen also offers "Unblock" as an immediate undo
+   of a block just made. A blocked member who is absent from the list (they blocked the caller too, or have no
+   profile) cannot be unblocked from the app once that screen is left, and one with no profile cannot be
+   unblocked by identifier until they have a profile again. Accepted for this change; see design decision 12.
 2. One report per pair, replaced by a later one.
 3. On deletion: reports follow the reported member; a deleted reporter leaves the report without a reporter.
 4. The five reasons above; details are optional free text.

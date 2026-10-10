@@ -275,6 +275,23 @@ the owner). The three loads fail whole, with "Try again".
 - **Block:** a confirmation (the scrolling layout of the discard dialog), then `blockMember`. On success the
   screen drops the profile it held and shows the blocked text; back leaves. On failure the profile stays, with
   the message under the header. Busy disables the menu and holds back leaving, like a picture action.
+- **Unblock by id, an immediate undo (added before task group 6):** the blocked state has an "Unblock"
+  control: a confirmation
+  that names nobody (the profile was dropped), then `unblockMember(id)` with the route's id. It never reads
+  `blockedMembers()`. On success the screen runs its load again, so it shows the profile, or "unavailable" when
+  the other member's block remains, which is the answer for any id and says nothing new. On failure the blocked
+  state stays, with the message. Busy as for the block.
+  - *Why:* an unblock must need the id and nothing else, and this is the one place the app holds the id of
+    a member it just blocked. The backend is unchanged: the blocker is the session's member, so only the
+    caller's own block is ever removed (decision 3).
+  - *What it is not (approved 2026-10-10):* a lasting way to unblock a member who is absent from the list.
+    The blocked state is reached only by blocking a profile that could be read, so that member is in the list
+    then; a member who blocks back later is hidden when the screen has been left, and the app then has no id
+    for them. That gap is accepted for this change (Risks); the backend and decision 033 are not reopened.
+    The blocked text therefore no longer says the member can be unblocked from "Blocked members".
+  - *Turned down:* putting such members back in the list (it would name, and confirm a block by, a member
+    hidden from the caller: the amendment of decision 6); "Unblock" on every "unavailable" profile (a control
+    that mostly does nothing, on a state that must look the same for every id).
 - **Report:** pushes `Routes.memberReport(id)`. Nothing is reloaded on return.
 
 ### 13. Client: the report screen and the blocked list
@@ -293,7 +310,8 @@ the owner). The three loads fail whole, with "Try again".
 - Strings, each with an `@` description: the menu and its two items; the block confirmation, its two answers,
   the blocked text and the limit message; the report title, the five reasons, the details label, the notice,
   "Send report", "choose a reason", the two details errors and the confirmation; "Blocked members", its empty
-  text, "Unblock", its confirmation and the label that names whom a control unblocks.
+  text, "Unblock", its confirmation and the label that names whom a control unblocks; the member screen's own
+  unblock confirmation, which names nobody (decision 12), and the reworded blocked text.
 
 ### 14. Documents
 
@@ -347,6 +365,12 @@ members ships, and the app is not released to the public, until **all three** ho
 - [Block and Report cannot be reached on a device: the app opens only one's own profile] → Accepted (P1). They
   are built on the screen where they belong and verified by widget tests and, over HTTP, with two accounts.
   The gate requires the next social feature to expose them before its release (decisions 7 and 15).
+- [Once the member screen is left, the app holds no id for a blocked member who is absent from the list (they
+  blocked the caller too, or have no profile): the block stays, counts toward the 200, and the app offers no
+  way to remove it] → Accepted for this change (approved 2026-10-10). The API removes it by id while the
+  profile exists; a member with no profile has no id, so that block stays until they have a profile again. The
+  member screen's "Unblock" is only an immediate undo (decision 12). A lasting surface is owed with the next
+  social feature, as for P1.
 - [Reports are stored and nobody reads them] → The gate stays until `docs/moderation.md` names a reviewer and an
   interval (decision 15). Review is manual, by SQL; that is accepted for the MVP.
 - [A blocked member can still infer the block: a profile that answered 200 now answers 404, and a second

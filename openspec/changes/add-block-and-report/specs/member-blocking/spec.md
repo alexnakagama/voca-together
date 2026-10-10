@@ -28,7 +28,10 @@ ignored.
 
 ### Requirement: Unblocking a member
 `DELETE /v1/me/blocks/{id}` SHALL remove the signed-in member's block of the member `id` names and answer 204
-with no body, whether or not there was one. It SHALL NOT remove a block that the other member made.
+with no body, whether or not there was one. It SHALL NOT remove a block that the other member made. The
+identifier alone SHALL name the block to remove: the unblock SHALL NOT depend on that member being in the
+caller's list of blocked members. A blocked member who has no profile has no identifier, so their block cannot
+be removed until they have a profile again.
 
 #### Scenario: Unblocking
 - **WHEN** member A, who blocked B, sends the unblock for B's identifier
@@ -41,6 +44,11 @@ with no body, whether or not there was one. It SHALL NOT remove a block that the
 #### Scenario: Only one's own block is removed
 - **WHEN** A and B have each blocked the other, and A unblocks B
 - **THEN** B's block of A still exists, and neither can read the other's profile
+
+#### Scenario: Unblocking a member who is not in the list
+- **WHEN** A has blocked B, B is absent from A's list of blocked members because B has also blocked A, and A
+  sends the unblock for B's identifier
+- **THEN** the response is 204, A's block of B no longer exists, and B's block of A still does
 
 ### Requirement: Blocking is idempotent
 Repeating a block or an unblock SHALL change nothing and SHALL answer exactly as the first request did, so a
@@ -274,14 +282,16 @@ that the other member is not told; nothing SHALL be sent before the member confi
 
 ### Requirement: After a block in the app
 After a successful block the screen SHALL stop showing the member's profile and SHALL say that the member is
-blocked and where they can be unblocked. A failed block SHALL leave the profile shown with the app's own
-localized message. While the request is in flight the screen SHALL accept no other action and SHALL ignore a
-second activation.
+blocked and SHALL show an "Unblock" control that undoes the block; the text SHALL NOT promise that the member
+can be unblocked later from the list. A failed block SHALL leave the profile shown with the app's own
+localized message. While the request is in flight the screen SHALL accept no
+other action and SHALL ignore a second activation.
 
 #### Scenario: Blocked
 - **WHEN** the block request answers 204
-- **THEN** the name, text, picture and languages are no longer shown, and a text says the member is blocked and
-  can be unblocked from "Blocked members"
+- **THEN** the name, text, picture and languages are no longer shown, a text says the member is blocked and
+  that "Unblock" undoes it, without saying they can be unblocked from "Blocked members", and an "Unblock"
+  control is shown
 
 #### Scenario: A failure that can be retried
 - **WHEN** the block fails with a network failure, a timeout, 429, 503 or an unexpected response
@@ -345,6 +355,38 @@ message. While an unblock is in flight no other "Unblock" SHALL be accepted.
 #### Scenario: A failed unblock
 - **WHEN** the unblock fails with a network failure, a timeout, 429, 503 or an unexpected response
 - **THEN** the member is still listed and the matching localized message is shown
+
+### Requirement: Unblocking by identifier from the member screen
+The "Unblock" control of the member screen's blocked state SHALL ask for confirmation and then send one unblock
+for the route's identifier, without reading the list of blocked members. It is an immediate undo of the block
+just made, not a way to unblock, later, a member who is absent from the list. On success the screen SHALL load
+the profile again; on failure the blocked state SHALL stay. In flight, other actions SHALL be ignored.
+
+#### Scenario: Unblocking the member just blocked
+- **WHEN** the member confirms "Unblock" in the blocked state and the request answers 204
+- **THEN** one unblock was sent for the route's identifier, no request for the list was sent, and the profile
+  is loaded and shown again
+
+#### Scenario: The profile cannot be read after the unblock
+- **WHEN** the unblock answers 204 and the reload answers 404, as when the other member blocked the caller
+  while the blocked state was shown
+- **THEN** the screen shows the "unavailable" state of any identifier that cannot be read, with no "Unblock"
+
+#### Scenario: Backing out
+- **WHEN** the member dismisses the confirmation
+- **THEN** no request is sent and the blocked state is unchanged
+
+#### Scenario: A failed unblock
+- **WHEN** the unblock fails with a network failure, a timeout, 429, 503 or an unexpected response
+- **THEN** the blocked state and its "Unblock" are still shown with the matching localized message
+
+#### Scenario: A double activation
+- **WHEN** the member confirms twice before the first answer
+- **THEN** one request is sent
+
+#### Scenario: The session ended
+- **WHEN** the unblock fails because the session ended, with the confirmation open or closed
+- **THEN** no error is shown and the app goes to the log in screen
 
 ### Requirement: Privacy and accessibility of the blocking screens
 The app SHALL print nothing about a block or a blocked member, SHALL put nothing but a profile's public
