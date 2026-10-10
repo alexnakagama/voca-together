@@ -57,6 +57,12 @@ void main() {
       '/profile/languages?x=1': [s, l, null],
       '/profile/languages/': [s, l, h],
       '/profile/languages/es': [s, l, h],
+      // The blocked members are the caller's own too, and the route names
+      // none of them.
+      '/blocked': [s, l, null],
+      '/blocked?x=1': [s, l, null],
+      '/blocked/': [s, l, h],
+      '/blocked/x': [s, l, h],
       // A member's public profile: the path is the route and a canonical
       // identifier, and nothing else (decision 032).
       '/members/$_memberId': [s, l, null],

@@ -676,11 +676,77 @@ abstract class AppLocalizations {
   /// **'Blocking the member'**
   String get memberBlockProgress;
 
-  /// Text shown in place of a member’s public profile once the user has blocked them. Says the member is blocked and names the “Blocked members” screen as the place to unblock them. Must not show the member’s name.
+  /// Text shown in place of a member’s public profile once the user has blocked them, above the “Unblock” button. Says the member is blocked and that “Unblock” undoes it. Must not show the member’s name, and must not say the member can be unblocked from the “Blocked members” screen.
   ///
   /// In en, this message translates to:
-  /// **'You’ve blocked this member. You can unblock them from “Blocked members”.'**
+  /// **'You’ve blocked this member. “Unblock” undoes it.'**
   String get memberBlocked;
+
+  /// Title of the dialog that asks the user to confirm unblocking a member, on the “Blocked members” screen and on the public profile of a member they have just blocked. Must not show the member’s name: the text under it says whom, where the app knows it.
+  ///
+  /// In en, this message translates to:
+  /// **'Unblock this member?'**
+  String get unblockTitle;
+
+  /// Text of the dialog that asks the user to confirm unblocking the member they have just blocked. Must not promise that the member’s profile will be shown again.
+  ///
+  /// In en, this message translates to:
+  /// **'Your block will be removed. They won’t be told.'**
+  String get memberUnblockMessage;
+
+  /// Button that removes the user’s block of a member, after a confirmation: beside each name on the “Blocked members” screen, under the text shown once a member is blocked, and as the confirming answer of the dialog.
+  ///
+  /// In en, this message translates to:
+  /// **'Unblock'**
+  String get unblockButton;
+
+  /// Dialog button that closes the dialog without unblocking the member.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel'**
+  String get unblockCancel;
+
+  /// Accessibility label of the progress indicator shown while an unblock is being sent.
+  ///
+  /// In en, this message translates to:
+  /// **'Unblocking the member'**
+  String get unblockProgress;
+
+  /// Button on the home screen that opens the list of the members the user has blocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Blocked members'**
+  String get blockedMembersButton;
+
+  /// Text of the dialog that asks the user to confirm unblocking a member chosen on the “Blocked members” screen. Names the member.
+  ///
+  /// In en, this message translates to:
+  /// **'You and {name} will be able to see each other’s profiles again. They won’t be told.'**
+  String blockedMembersUnblockMessage(String name);
+
+  /// Title of the screen that lists the members the user has blocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Blocked members'**
+  String get blockedMembersTitle;
+
+  /// Accessibility label of the progress indicator while the list of blocked members loads.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading blocked members'**
+  String get blockedMembersLoading;
+
+  /// Text shown on the “Blocked members” screen when the user has blocked nobody.
+  ///
+  /// In en, this message translates to:
+  /// **'You haven’t blocked anyone.'**
+  String get blockedMembersEmpty;
+
+  /// Accessibility label of the “Unblock” button beside a member’s name on the “Blocked members” screen: says whom the button unblocks.
+  ///
+  /// In en, this message translates to:
+  /// **'Unblock {name}'**
+  String blockedMembersUnblockLabel(String name);
 
   /// Notice on the profile form saying which information other members will see.
   ///

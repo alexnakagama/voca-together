@@ -2,6 +2,7 @@ import 'package:go_router/go_router.dart';
 
 import 'api/account_api.dart';
 import 'media/photo_source.dart';
+import 'screens/blocked_members_screen.dart';
 import 'screens/forgot_password_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/languages_screen.dart';
@@ -31,6 +32,9 @@ abstract final class Routes {
   /// nobody, and it carries no language (decision 030).
   static const languages = '/profile/languages';
 
+  /// The members the user has blocked. Like the profile it names nobody.
+  static const blocked = '/blocked';
+
   /// The read-only public profile of the member whose public identifier is
   /// [id] (decision 032). The identifier is the only thing a route says
   /// about anyone: never a name, a language or an account id.
@@ -40,9 +44,16 @@ abstract final class Routes {
   static const authRoutes = {login, register, forgotPassword};
 
   /// The exact routes a signed-in user may visit. The profile, its edit
-  /// screen and the languages are the user's own and name nobody; the one
-  /// route that names a member is [member], matched by [isMember].
-  static const signedInRoutes = {home, profile, profileEdit, languages};
+  /// screen, the languages and the blocked members are the user's own and
+  /// name nobody; the one route that names a member is [member], matched by
+  /// [isMember].
+  static const signedInRoutes = {
+    home,
+    profile,
+    profileEdit,
+    languages,
+    blocked,
+  };
 
   /// Whether [path] is [member] for a well-formed public identifier: the
   /// canonical lowercase UUID, with nothing before or after it.
@@ -124,6 +135,10 @@ GoRouter createRouter(
       GoRoute(
         path: Routes.languages,
         builder: (context, state) => LanguagesScreen(session: session),
+      ),
+      GoRoute(
+        path: Routes.blocked,
+        builder: (context, state) => BlockedMembersScreen(session: session),
       ),
       GoRoute(
         path: '/members/:id',

@@ -15,8 +15,8 @@ import '../ui/widgets/secondary_button.dart';
 import 'failure_presentation.dart';
 
 /// The signed-in home screen: the account (`GET /v1/me` through
-/// [SessionManager.me]), the way to the user's profile, and logging out
-/// (decisions 024 and 028).
+/// [SessionManager.me]), the way to the user's profile and to the members
+/// they blocked, and logging out (decisions 024 and 028).
 ///
 /// It never decides access. When the session ends, during a request or by
 /// logging out, the router leaves this screen on its own.
@@ -66,6 +66,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // Pushed, so Android back returns here.
   void _openProfile() => unawaited(context.push(Routes.profile));
+
+  void _openBlocked() => unawaited(context.push(Routes.blocked));
 
   Future<void> _logOut() async {
     if (_loggingOut) return;
@@ -144,6 +146,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   SecondaryButton(
                     label: l10n.profileButton,
                     onPressed: _loggingOut ? null : _openProfile,
+                  ),
+                  const SizedBox(height: Spacing.md),
+                  SecondaryButton(
+                    label: l10n.blockedMembersButton,
+                    onPressed: _loggingOut ? null : _openBlocked,
                   ),
                   const SizedBox(height: Spacing.md),
                   SecondaryButton(

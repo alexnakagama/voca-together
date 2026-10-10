@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:vocatogether/api/api_paths.dart';
+import 'package:vocatogether/screens/blocked_members_screen.dart';
 import 'package:vocatogether/screens/home_screen.dart';
 import 'package:vocatogether/screens/login_screen.dart';
 import 'package:vocatogether/session.dart';
@@ -49,6 +50,54 @@ void main() {
       expect(text, isNot(contains('vt_')));
     }
     handle.dispose();
+  });
+
+  testWidgets('"Blocked members" opens the list at a route that names '
+      'nobody, with a request on each entry', (tester) async {
+    final server = FakeServer()
+      ..once('GET', ApiPaths.me, _me)
+      ..always(
+        'GET',
+        ApiPaths.myBlocks,
+        (_) => jsonResponse(200, blocksBody([(otherMemberId, 'Bea')])),
+      );
+    final app = await pumpApp(tester, server: server, signedIn: true);
+    final open = find.widgetWithText(OutlinedButton, l10n.blockedMembersButton);
+    // Nothing about blocks is asked for until the member opens the list.
+    expect(server.count(ApiPaths.myBlocks), 0);
+
+    await tapAndSettle(tester, open);
+    expect(find.byType(BlockedMembersScreen), findsOneWidget);
+    expect(app.location(tester), '/blocked');
+    expect(find.text('Bea'), findsOneWidget);
+    expect(server.count(ApiPaths.myBlocks), 1);
+
+    // Pushed: back returns home, which loads nothing again.
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.byType(HomeScreen), findsOneWidget);
+    expect(find.byType(BlockedMembersScreen), findsNothing);
+    expect(app.location(tester), '/home');
+    expect(server.count(ApiPaths.me), 1);
+
+    await tapAndSettle(tester, open);
+    expect(server.count(ApiPaths.myBlocks), 2);
+  });
+
+  testWidgets('"Blocked members" is there when the account failed to load', (
+    tester,
+  ) async {
+    final server = FakeServer()..once('GET', ApiPaths.me, networkFailure);
+    await pumpApp(tester, server: server, signedIn: true);
+    expect(find.text(l10n.errorNetwork), findsOneWidget);
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.widgetWithText(OutlinedButton, l10n.blockedMembersButton),
+          )
+          .enabled,
+      isTrue,
+    );
   });
 
   group('failures keep the session and offer a retry', () {

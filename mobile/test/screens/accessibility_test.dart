@@ -238,8 +238,9 @@ void _publicProfile(
 }
 
 /// A member with a profile, and another member's profile with a long name,
-/// a long text and languages. [block] answers the block of that member.
-void _otherMember(FakeServer s, {Responder? block}) {
+/// a long text and languages. [block] answers the block of that member,
+/// and [unblock] its removal.
+void _otherMember(FakeServer s, {Responder? block, Responder? unblock}) {
   _home(s);
   s
     ..always(
@@ -266,6 +267,9 @@ void _otherMember(FakeServer s, {Responder? block}) {
     );
   if (block != null) {
     s.once('PUT', ApiPaths.myBlock(otherMemberId), block);
+  }
+  if (unblock != null) {
+    s.once('DELETE', ApiPaths.myBlock(otherMemberId), unblock);
   }
 }
 
@@ -297,6 +301,78 @@ Future<void> _block(WidgetTester tester) async {
   await tapAndSettle(
     tester,
     find.widgetWithText(TextButton, l10n.memberBlockConfirm),
+  );
+}
+
+/// From home: another member's profile, blocked, with the confirmation of
+/// the unblock open.
+Future<void> _askUnblock(WidgetTester tester) async {
+  await _block(tester);
+  await tapAndSettle(
+    tester,
+    find.widgetWithText(OutlinedButton, l10n.unblockButton),
+  );
+}
+
+/// From home: another member's profile, blocked, after confirming the
+/// unblock.
+Future<void> _unblock(WidgetTester tester) async {
+  await _askUnblock(tester);
+  await tapAndSettle(
+    tester,
+    find.widgetWithText(TextButton, l10n.unblockButton),
+  );
+}
+
+/// A second blocked member, with a name as long as the first's.
+const _secondLongName = 'Maximiliana Hohenzollern-Sigmaringen von Brandenburg';
+const _secondMemberId = '3e4f5a6b-7c8d-4e9f-8a0b-1c2d3e4f5a6b';
+
+/// A member on home whose list of blocked members answers [list]: two
+/// members with long names by default. [unblock] answers the unblock of the
+/// first.
+void _blockedList(FakeServer s, {Responder? list, Responder? unblock}) {
+  _home(s);
+  s.always(
+    'GET',
+    ApiPaths.myBlocks,
+    list ??
+        (_) => jsonResponse(
+          200,
+          blocksBody([
+            (otherMemberId, _longName),
+            (_secondMemberId, _secondLongName),
+          ]),
+        ),
+  );
+  if (unblock != null) {
+    s.once('DELETE', ApiPaths.myBlock(otherMemberId), unblock);
+  }
+}
+
+/// From home: the blocked members.
+Future<void> _openBlocked(WidgetTester tester) => tapAndSettle(
+  tester,
+  find.widgetWithText(OutlinedButton, l10n.blockedMembersButton),
+);
+
+/// From home: the blocked members, with the confirmation of the first
+/// member's unblock open.
+Future<void> _askListUnblock(WidgetTester tester) async {
+  await _openBlocked(tester);
+  await tapAndSettle(
+    tester,
+    find.widgetWithText(OutlinedButton, l10n.unblockButton).first,
+  );
+}
+
+/// From home: the blocked members, after confirming the first member's
+/// unblock.
+Future<void> _listUnblock(WidgetTester tester) async {
+  await _askListUnblock(tester);
+  await tapAndSettle(
+    tester,
+    find.widgetWithText(TextButton, l10n.unblockButton),
   );
 }
 
@@ -438,6 +514,7 @@ final _cases = <_Case>[
     signedIn: true,
     script: _home,
     action: l10n.profileButton,
+    also: [l10n.blockedMembersButton],
   ),
   _Case(
     'profile, none saved',
@@ -996,7 +1073,79 @@ final _cases = <_Case>[
     signedIn: true,
     script: (s) => _otherMember(s, block: (_) => noContent()),
     drive: _block,
-    action: l10n.memberBlocked,
+    action: l10n.unblockButton,
+    also: [l10n.memberBlocked],
+  ),
+  _Case(
+    'member profile, unblock confirmation',
+    signedIn: true,
+    script: (s) => _otherMember(s, block: (_) => noContent()),
+    drive: _askUnblock,
+    action: l10n.unblockButton,
+    also: [l10n.unblockTitle, l10n.memberUnblockMessage, l10n.unblockCancel],
+  ),
+  _Case(
+    'member profile, unblock failed',
+    signedIn: true,
+    script: (s) =>
+        _otherMember(s, block: (_) => noContent(), unblock: networkFailure),
+    drive: _unblock,
+    action: l10n.unblockButton,
+    also: [l10n.memberBlocked, l10n.errorNetwork],
+  ),
+  _Case(
+    'blocked members, nobody',
+    signedIn: true,
+    script: (s) =>
+        _blockedList(s, list: (_) => jsonResponse(200, blocksBody())),
+    drive: _openBlocked,
+    action: l10n.blockedMembersEmpty,
+  ),
+  _Case(
+    'blocked members, load failed',
+    signedIn: true,
+    script: (s) => _blockedList(s, list: networkFailure),
+    drive: _openBlocked,
+    action: l10n.tryAgain,
+  ),
+  _Case(
+    'blocked members, two long names',
+    signedIn: true,
+    script: _blockedList,
+    drive: _openBlocked,
+    action: l10n.unblockButton,
+    also: [_longName, _secondLongName],
+  ),
+  _Case(
+    'blocked members, unblock confirmation',
+    signedIn: true,
+    script: _blockedList,
+    drive: _askListUnblock,
+    action: l10n.unblockButton,
+    also: [
+      l10n.unblockTitle,
+      l10n.blockedMembersUnblockMessage(_longName),
+      l10n.unblockCancel,
+    ],
+  ),
+  _Case(
+    'blocked members, unblock failed',
+    signedIn: true,
+    script: (s) => _blockedList(s, unblock: networkFailure),
+    drive: _listUnblock,
+    action: l10n.unblockButton,
+    also: [l10n.errorNetwork, _longName, _secondLongName],
+  ),
+  _Case(
+    'blocked members, the last one unblocked',
+    signedIn: true,
+    script: (s) => _blockedList(
+      s,
+      list: (_) => jsonResponse(200, blocksBody([(otherMemberId, _longName)])),
+      unblock: (_) => noContent(),
+    ),
+    drive: _listUnblock,
+    action: l10n.blockedMembersEmpty,
   ),
 ];
 
@@ -1201,6 +1350,43 @@ void main() {
       },
       l10n.memberBlockProgress,
     ),
+    'member profile, unblocking': (
+      (tester) async {
+        final server = FakeServer();
+        _otherMember(server, block: (_) => noContent(), unblock: neverAnswers);
+        await pumpApp(tester, server: server, signedIn: true);
+        await _askUnblock(tester);
+        final confirm = find.widgetWithText(TextButton, l10n.unblockButton);
+        await tester.ensureVisible(confirm);
+        await tester.pumpAndSettle();
+        await tester.tap(confirm);
+      },
+      l10n.unblockProgress,
+    ),
+    'blocked members, loading': (
+      (tester) async {
+        final server = FakeServer();
+        _blockedList(server, list: neverAnswers);
+        await pumpApp(tester, server: server, signedIn: true);
+        await tester.tap(
+          find.widgetWithText(OutlinedButton, l10n.blockedMembersButton),
+        );
+      },
+      l10n.blockedMembersLoading,
+    ),
+    'blocked members, unblocking': (
+      (tester) async {
+        final server = FakeServer();
+        _blockedList(server, unblock: neverAnswers);
+        await pumpApp(tester, server: server, signedIn: true);
+        await _askListUnblock(tester);
+        final confirm = find.widgetWithText(TextButton, l10n.unblockButton);
+        await tester.ensureVisible(confirm);
+        await tester.pumpAndSettle();
+        await tester.tap(confirm);
+      },
+      l10n.unblockProgress,
+    ),
     'languages editor, loading': (
       (tester) async {
         final server = FakeServer();
@@ -1400,6 +1586,73 @@ void main() {
       );
       expect(find.byTooltip(l10n.memberMenuTooltip), findsNothing);
       expect(find.byType(BackButton).hitTestable(), findsOneWidget);
+      // The way to undo it is a labelled 48 dp button.
+      final unblock = find.widgetWithText(OutlinedButton, l10n.unblockButton);
+      expect(
+        tester.getSemantics(unblock),
+        isSemantics(
+          label: l10n.unblockButton,
+          isButton: true,
+          hasTapAction: true,
+        ),
+      );
+      expect(tester.getSize(unblock).shortestSide, greaterThanOrEqualTo(48));
+      handle.dispose();
+    });
+
+    testWidgets('each "Unblock" in the list is a 48 dp button announced with '
+        'the name of the member it unblocks, with large text on a small '
+        'screen', (tester) async {
+      final server = FakeServer();
+      _blockedList(server);
+      final handle = tester.ensureSemantics();
+      await pumpApp(
+        tester,
+        server: server,
+        signedIn: true,
+        size: const Size(320, 480),
+        textScale: 2,
+      );
+      await _openBlocked(tester);
+      expect(tester.takeException(), isNull);
+
+      final buttons = find.widgetWithText(OutlinedButton, l10n.unblockButton);
+      expect(buttons, findsNWidgets(2));
+      final names = [_longName, _secondLongName];
+      for (var i = 0; i < names.length; i++) {
+        final button = buttons.at(i);
+        await tester.ensureVisible(button);
+        await tester.pumpAndSettle();
+        expect(button.hitTestable(), findsOneWidget, reason: names[i]);
+        expect(
+          tester.getSemantics(button),
+          isSemantics(
+            label: l10n.blockedMembersUnblockLabel(names[i]),
+            isButton: true,
+            hasTapAction: true,
+          ),
+        );
+        expect(tester.getSize(button).shortestSide, greaterThanOrEqualTo(48));
+        // The name is read whole, and nothing is cut off beside it.
+        expect(
+          tester.getSize(find.text(names[i])).width,
+          lessThanOrEqualTo(320),
+        );
+      }
+      // The confirmation names the member too.
+      await tapAndSettle(tester, buttons.first);
+      expect(
+        find.text(l10n.blockedMembersUnblockMessage(_longName)),
+        findsOneWidget,
+      );
+      for (final label in [l10n.unblockCancel, l10n.unblockButton]) {
+        expect(
+          tester.getSize(find.widgetWithText(TextButton, label)).shortestSide,
+          greaterThanOrEqualTo(48),
+          reason: label,
+        );
+      }
+      expect(tester.takeException(), isNull);
       handle.dispose();
     });
 

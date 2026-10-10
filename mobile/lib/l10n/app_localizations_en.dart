@@ -368,7 +368,45 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get memberBlocked =>
-      'You’ve blocked this member. You can unblock them from “Blocked members”.';
+      'You’ve blocked this member. “Unblock” undoes it.';
+
+  @override
+  String get unblockTitle => 'Unblock this member?';
+
+  @override
+  String get memberUnblockMessage =>
+      'Your block will be removed. They won’t be told.';
+
+  @override
+  String get unblockButton => 'Unblock';
+
+  @override
+  String get unblockCancel => 'Cancel';
+
+  @override
+  String get unblockProgress => 'Unblocking the member';
+
+  @override
+  String get blockedMembersButton => 'Blocked members';
+
+  @override
+  String blockedMembersUnblockMessage(String name) {
+    return 'You and $name will be able to see each other’s profiles again. They won’t be told.';
+  }
+
+  @override
+  String get blockedMembersTitle => 'Blocked members';
+
+  @override
+  String get blockedMembersLoading => 'Loading blocked members';
+
+  @override
+  String get blockedMembersEmpty => 'You haven’t blocked anyone.';
+
+  @override
+  String blockedMembersUnblockLabel(String name) {
+    return 'Unblock $name';
+  }
 
   @override
   String get profileVisibilityNotice =>

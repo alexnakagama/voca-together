@@ -62,6 +62,17 @@ Finder get _confirmBlock =>
 Finder get _cancelBlock =>
     find.widgetWithText(TextButton, l10n.memberBlockCancel);
 
+/// The blocked state's "Unblock", and the answers of its confirmation.
+Finder get _unblock => find.widgetWithText(OutlinedButton, l10n.unblockButton);
+Finder get _confirmUnblock =>
+    find.widgetWithText(TextButton, l10n.unblockButton);
+Finder get _cancelUnblock =>
+    find.widgetWithText(TextButton, l10n.unblockCancel);
+
+/// Whether the blocked state's "Unblock" takes a tap.
+bool _unblockEnabled(WidgetTester tester) =>
+    tester.widget<OutlinedButton>(_unblock).enabled;
+
 /// Whether the menu button takes a tap.
 bool _menuEnabled(WidgetTester tester) => tester
     .widget<PopupMenuButton<Object?>>(
@@ -917,8 +928,14 @@ void main() {
       expect(request.url.hasQuery, isFalse);
       expect(request.bodyBytes, isEmpty);
 
+      // Blocked, with "Unblock" as the way to undo it: the text promises
+      // nothing about the list.
       expect(find.text(l10n.memberBlocked), findsOneWidget);
-      expect(l10n.memberBlocked, contains('Blocked members'));
+      expect(l10n.memberBlocked, contains('blocked this member'));
+      expect(l10n.memberBlocked, contains('“Unblock” undoes it'));
+      expect(l10n.memberBlocked, isNot(contains('Blocked members')));
+      expect(_unblock, findsOneWidget);
+      expect(_unblockEnabled(tester), isTrue);
       expect(find.text('Bea Ito'), findsNothing);
       expect(find.text('Evenings, mostly.'), findsNothing);
       expect(find.byType(ProfileHeader), findsNothing);
@@ -927,9 +944,9 @@ void main() {
       expect(find.text(l10n.languagesHeading), findsNothing);
       expect(find.byType(FormErrorBanner), findsNothing);
       expect(find.byType(LinearProgressIndicator), findsNothing);
-      // Nothing left to do here but leave.
+      // Nothing left to do here but undo it or leave.
       expect(_actions(tester), isEmpty);
-      expect(_controls, findsNothing);
+      expect(_controls, findsOneWidget);
       expect(app.location(tester), '/members/$_id');
       // Nothing was read again, and nothing else written.
       expect(server.count(_profilePath), 1);
@@ -1187,6 +1204,399 @@ void main() {
       expect(find.byType(FormErrorBanner), findsNothing);
       expect(app.location(tester), '/login');
       expect(server.count(_blockPath), 1);
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('unblocking from the blocked state', () {
+    final unblockPath = _blockPath;
+
+    /// Another member's full profile, with a picture, and their block
+    /// stored.
+    FakeServer blockable() => _backend()
+      ..always(
+        'GET',
+        _profilePath,
+        _member(
+          name: 'Bea Ito',
+          bio: 'Evenings, mostly.',
+          hasAvatar: true,
+          languages: languagesBody(spoken: [('ja', 'native')]),
+        ),
+      )
+      ..always('GET', _avatarPath, (_) => imageResponse(testPicture))
+      ..once('PUT', _blockPath, (_) => noContent());
+
+    /// Opens the member's profile and blocks them: the blocked state.
+    Future<TestApp> block(WidgetTester tester, FakeServer server) async {
+      final app = await _openMember(tester, server);
+      await _chooseBlock(tester);
+      await tester.tap(_confirmBlock);
+      await tester.pumpAndSettle();
+      expect(find.text(l10n.memberBlocked), findsOneWidget);
+      return app;
+    }
+
+    /// Opens the confirmation of the unblock.
+    Future<void> chooseUnblock(WidgetTester tester) async {
+      await tester.tap(_unblock);
+      await tester.pumpAndSettle();
+      expect(find.text(l10n.unblockTitle), findsOneWidget);
+    }
+
+    void expectBlocked(WidgetTester tester) {
+      expect(find.text(l10n.memberBlocked), findsOneWidget);
+      expect(_unblock, findsOneWidget);
+      expect(find.byType(ProfileHeader), findsNothing);
+      expect(find.text('Bea Ito'), findsNothing);
+    }
+
+    testWidgets('"Unblock" asks first, naming nobody; dismissing it sends '
+        'nothing', (tester) async {
+      final server = blockable();
+      await block(tester, server);
+
+      await chooseUnblock(tester);
+      expect(find.text(l10n.memberUnblockMessage), findsOneWidget);
+      expect(find.textContaining('Bea'), findsNothing);
+      // Nothing is sent before the answer.
+      expect(server.requests.where((r) => r.method == 'DELETE'), isEmpty);
+
+      await tester.tap(_cancelUnblock);
+      await tester.pumpAndSettle();
+      expect(find.text(l10n.unblockTitle), findsNothing);
+
+      // Dismissed by a tap outside it, and by back.
+      await chooseUnblock(tester);
+      await tester.tapAt(const Offset(5, 5));
+      await tester.pumpAndSettle();
+      expect(find.text(l10n.unblockTitle), findsNothing);
+      await chooseUnblock(tester);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text(l10n.unblockTitle), findsNothing);
+
+      expect(_screen, findsOneWidget);
+      expectBlocked(tester);
+      expect(_unblockEnabled(tester), isTrue);
+      expect(server.requests.where((r) => r.method == 'DELETE'), isEmpty);
+      expect(server.count(_profilePath), 1);
+    });
+
+    testWidgets('confirming sends one unblock for the route\'s identifier, '
+        'never reads the list, and shows the profile again', (tester) async {
+      final server = blockable()
+        ..once('DELETE', unblockPath, (_) => noContent());
+      final app = await block(tester, server);
+
+      await chooseUnblock(tester);
+      await tester.tap(_confirmUnblock);
+      await tester.pumpAndSettle();
+
+      final request = server.requests.singleWhere((r) => r.method == 'DELETE');
+      expect(request.url.path, '/v1/me/blocks/$_id');
+      expect(request.url.hasQuery, isFalse);
+      expect(request.bodyBytes, isEmpty);
+      // By the id alone: the list of blocked members is never asked for.
+      expect(server.count(ApiPaths.myBlocks), 0);
+
+      // Loaded again, and shown as before the block.
+      expect(server.count(_profilePath), 2);
+      expect(find.text(l10n.memberBlocked), findsNothing);
+      expect(_unblock, findsNothing);
+      expect(find.text('Bea Ito'), findsOneWidget);
+      expect(find.text('Evenings, mostly.'), findsOneWidget);
+      expect(_shown(tester), testPicture);
+      expect(_chips(tester), [('Japanese', 'Native')]);
+      expect(find.byType(FormErrorBanner), findsNothing);
+      expect(find.byType(LinearProgressIndicator), findsNothing);
+      expect(_menuEnabled(tester), isTrue);
+      expect(app.location(tester), '/members/$_id');
+      expect(
+        server.requests.where((r) => r.method != 'GET').map((r) => r.method),
+        ['PUT', 'DELETE'],
+      );
+
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.byType(HomeScreen), findsOneWidget);
+    });
+
+    testWidgets('a profile that cannot be read after the unblock is '
+        'unavailable, with no "Unblock"', (tester) async {
+      // As when the other member blocked the caller meanwhile: the answer
+      // of any id that names no profile.
+      final server = _backend()
+        ..once('GET', _profilePath, _member(name: 'Bea Ito'))
+        ..once('PUT', _blockPath, (_) => noContent())
+        ..once('DELETE', unblockPath, (_) => noContent())
+        ..once('GET', _profilePath, (_) => noProfile());
+      await block(tester, server);
+
+      await chooseUnblock(tester);
+      await tester.tap(_confirmUnblock);
+      await tester.pumpAndSettle();
+
+      expect(find.text(l10n.memberProfileUnavailable), findsOneWidget);
+      expect(find.text(l10n.memberBlocked), findsNothing);
+      expect(_unblock, findsNothing);
+      expect(_retry, findsNothing);
+      expect(_controls, findsNothing);
+      expect(_actions(tester), isEmpty);
+      expect(find.byType(FormErrorBanner), findsNothing);
+      expect(server.count(ApiPaths.myBlocks), 0);
+    });
+
+    testWidgets('a reload that fails after the unblock shows its message and '
+        'a retry, not the blocked state', (tester) async {
+      final server = _backend()
+        ..once('GET', _profilePath, _member(name: 'Bea Ito'))
+        ..once('PUT', _blockPath, (_) => noContent())
+        ..once('DELETE', unblockPath, (_) => noContent())
+        ..once('GET', _profilePath, networkFailure)
+        ..once('GET', _profilePath, _member(name: 'Bea Ito'));
+      await block(tester, server);
+
+      await chooseUnblock(tester);
+      await tester.tap(_confirmUnblock);
+      await tester.pumpAndSettle();
+
+      expect(find.text(l10n.errorNetwork), findsOneWidget);
+      expect(find.text(l10n.memberBlocked), findsNothing);
+      expect(_unblock, findsNothing);
+
+      await tapAndSettle(tester, _retry);
+      expect(find.text('Bea Ito'), findsOneWidget);
+      // The unblock was sent once: the retry only reads.
+      expect(server.requests.where((r) => r.method == 'DELETE'), hasLength(1));
+    });
+
+    group('a failed unblock keeps the blocked state, with its message, and '
+        'can be tried again', () {
+      final cases = <String, (Responder, String)>{
+        'network': (networkFailure, l10n.errorNetwork),
+        '429': (
+          (_) => errorResponse(
+            429,
+            'rate_limited',
+            headers: {'retry-after': '10'},
+          ),
+          'Too many attempts. Try again in 10 seconds.',
+        ),
+        '503': (
+          (_) => errorResponse(
+            503,
+            'service_unavailable',
+            headers: {'retry-after': '5'},
+          ),
+          'VocaTogether is busy right now. Try again in 5 seconds.',
+        ),
+        '500': (
+          (_) => errorResponse(500, 'internal_error'),
+          l10n.errorUnexpected,
+        ),
+        'a 200 where a 204 is due': (
+          (_) => jsonResponse(200, {'unblocked': true}),
+          l10n.errorUnexpected,
+        ),
+        // Whatever a body says, the text shown is the app's own.
+        'a body with text of its own': (
+          (_) => http.Response(
+            '{"error":{"code":"internal_error","message":"SERVERTEXT"}}',
+            500,
+            headers: {'content-type': 'application/json'},
+          ),
+          l10n.errorUnexpected,
+        ),
+      };
+      cases.forEach((name, c) {
+        final (responder, message) = c;
+        testWidgets(name, (tester) async {
+          final server = blockable()
+            ..once('DELETE', unblockPath, responder)
+            ..once('DELETE', unblockPath, (_) => noContent());
+          final handle = tester.ensureSemantics();
+          final app = await block(tester, server);
+
+          await chooseUnblock(tester);
+          await tester.tap(_confirmUnblock);
+          await tester.pumpAndSettle();
+
+          expect(find.text(message), findsOneWidget);
+          expect(find.textContaining('SERVERTEXT'), findsNothing);
+          expect(
+            tester.getSemantics(find.byType(FormErrorBanner)),
+            isSemantics(
+              isLiveRegion: true,
+              label: '${l10n.errorLabel}\n$message',
+            ),
+          );
+          expectBlocked(tester);
+          expect(_unblockEnabled(tester), isTrue);
+          expect(find.byType(LinearProgressIndicator), findsNothing);
+          expect(
+            server.requests.where((r) => r.method == 'DELETE'),
+            hasLength(1),
+          );
+          // Nothing was read again.
+          expect(server.count(_profilePath), 1);
+          expect(app.session.status, SessionStatus.signedIn);
+          expect(app.location(tester), '/members/$_id');
+
+          // Again: the message goes with the new attempt.
+          await chooseUnblock(tester);
+          await tester.tap(_confirmUnblock);
+          await tester.pumpAndSettle();
+          expect(find.byType(FormErrorBanner), findsNothing);
+          expect(find.text('Bea Ito'), findsOneWidget);
+          expect(
+            server.requests.where((r) => r.method == 'DELETE'),
+            hasLength(2),
+          );
+          expect(server.count(ApiPaths.myBlocks), 0);
+          handle.dispose();
+        });
+      });
+    });
+
+    testWidgets('an unblock that hasn\'t answered: the control is disabled, '
+        'back does nothing, and it ends as a timeout', (tester) async {
+      final server = blockable()..once('DELETE', unblockPath, neverAnswers);
+      final handle = tester.ensureSemantics();
+      final app = await block(tester, server);
+
+      await chooseUnblock(tester);
+      await tester.tap(_confirmUnblock);
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(find.text(l10n.unblockTitle), findsNothing);
+      expect(find.bySemanticsLabel(l10n.unblockProgress), findsOneWidget);
+      expectBlocked(tester);
+      expect(_unblockEnabled(tester), isFalse);
+
+      // The control doesn't open the question, and neither back leaves.
+      await tester.tap(_unblock, warnIfMissed: false);
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.byType(AlertDialog), findsNothing);
+      await tester.pageBack();
+      await tester.pump(const Duration(seconds: 1));
+      expect(_screen, findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pump(const Duration(seconds: 1));
+      expect(_screen, findsOneWidget);
+      expect(app.location(tester), '/members/$_id');
+      expect(server.requests.where((r) => r.method == 'DELETE'), hasLength(1));
+
+      await tester.pump(const Duration(seconds: 16));
+      await tester.pumpAndSettle();
+      expect(find.text(l10n.errorTimeout), findsOneWidget);
+      expect(find.bySemanticsLabel(l10n.unblockProgress), findsNothing);
+      expectBlocked(tester);
+      expect(_unblockEnabled(tester), isTrue);
+      expect(server.requests.where((r) => r.method == 'DELETE'), hasLength(1));
+
+      // And leaving works again.
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.byType(HomeScreen), findsOneWidget);
+      handle.dispose();
+    });
+
+    testWidgets('confirming twice sends one unblock', (tester) async {
+      final reply = Completer<http.Response>();
+      final server = blockable()
+        ..once('DELETE', unblockPath, (_) => reply.future);
+      await block(tester, server);
+
+      await chooseUnblock(tester);
+      await tester.tap(_confirmUnblock);
+      await tester.pump();
+      // The dialog is on its way out and the control is disabled.
+      await tester.tap(_confirmUnblock, warnIfMissed: false);
+      await tester.tap(_unblock, warnIfMissed: false);
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.tap(_unblock, warnIfMissed: false);
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(_screen, findsOneWidget);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(server.requests.where((r) => r.method == 'DELETE'), hasLength(1));
+
+      reply.complete(noContent());
+      await tester.pumpAndSettle();
+      expect(find.text('Bea Ito'), findsOneWidget);
+      expect(server.requests.where((r) => r.method == 'DELETE'), hasLength(1));
+    });
+
+    testWidgets('an unblock answered after leaving for log in is dropped', (
+      tester,
+    ) async {
+      final reply = Completer<http.Response>();
+      final server = blockable()
+        ..once('DELETE', unblockPath, (_) => reply.future);
+      final app = await block(tester, server);
+
+      await chooseUnblock(tester);
+      await tester.tap(_confirmUnblock);
+      await tester.pump();
+      await app.session.logout();
+      await tester.pumpAndSettle();
+      expect(find.byType(LoginScreen), findsOneWidget);
+
+      reply.complete(noContent());
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.byType(FormErrorBanner), findsNothing);
+      expect(app.location(tester), '/login');
+      // No reload for a screen that is gone.
+      expect(server.count(_profilePath), 1);
+    });
+
+    testWidgets('the session ending with the confirmation open shows no '
+        'error, and nothing is sent', (tester) async {
+      final server = blockable();
+      final app = await block(tester, server);
+
+      await chooseUnblock(tester);
+      await app.session.logout();
+      await tester.pumpAndSettle();
+
+      expect(find.byType(LoginScreen), findsOneWidget);
+      expect(_screen, findsNothing);
+      expect(find.text(l10n.unblockTitle), findsNothing);
+      expect(find.byType(FormErrorBanner), findsNothing);
+      expect(app.location(tester), '/login');
+      expect(server.requests.where((r) => r.method == 'DELETE'), isEmpty);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('an unblock refused because the session ended shows no '
+        'error', (tester) async {
+      final server = blockable()
+        ..once(
+          'DELETE',
+          unblockPath,
+          (_) => errorResponse(401, 'invalid_access_token'),
+        )
+        ..once(
+          'POST',
+          ApiPaths.refresh,
+          (_) => errorResponse(401, 'invalid_refresh_token'),
+        );
+      final app = await block(tester, server);
+
+      await chooseUnblock(tester);
+      await tester.tap(_confirmUnblock);
+      await tester.pumpAndSettle();
+
+      expect(app.session.status, SessionStatus.signedOut);
+      expect(find.byType(LoginScreen), findsOneWidget);
+      expect(_screen, findsNothing);
+      expect(find.byType(FormErrorBanner), findsNothing);
+      expect(app.location(tester), '/login');
+      expect(server.requests.where((r) => r.method == 'DELETE'), hasLength(1));
       expect(tester.takeException(), isNull);
     });
   });

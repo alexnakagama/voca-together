@@ -232,8 +232,9 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
     )
     ..once('GET', ApiPaths.memberAvatar(testMemberId), (_) => _echo(500))
     // Another member's profile, and their block: an echoing failure, then
-    // stored.
-    ..once(
+    // stored. Its undo from the blocked state: an echoing failure, then
+    // removed, the profile read again, and the block stored once more.
+    ..always(
       'GET',
       ApiPaths.memberProfile(otherMemberId),
       (_) => jsonResponse(
@@ -247,7 +248,19 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
       ),
     )
     ..once('PUT', ApiPaths.myBlock(otherMemberId), (_) => _echo(500))
-    ..once('PUT', ApiPaths.myBlock(otherMemberId), (_) => noContent())
+    ..always('PUT', ApiPaths.myBlock(otherMemberId), (_) => noContent())
+    ..once('DELETE', ApiPaths.myBlock(otherMemberId), (_) => _echo(500))
+    ..once('DELETE', ApiPaths.myBlock(otherMemberId), (_) => noContent())
+    // The blocked members: an echoing load failure, then that member, whose
+    // unblock fails with an echoing body and is then removed.
+    ..once('GET', ApiPaths.myBlocks, (_) => _echo(500))
+    ..once(
+      'GET',
+      ApiPaths.myBlocks,
+      (_) => jsonResponse(200, blocksBody([(otherMemberId, _otherName)])),
+    )
+    ..once('DELETE', ApiPaths.myBlock(otherMemberId), (_) => _echo(503))
+    ..once('DELETE', ApiPaths.myBlock(otherMemberId), (_) => noContent())
     // Google: an echoing 409, an echoing 500, then a session.
     ..once(
       'POST',
@@ -627,8 +640,93 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
   for (final text in _texts(tester)) {
     expect(text, isNot(contains('PRIV')), reason: text);
   }
+  // The undo, by the route's identifier: backing out sends nothing, a
+  // refusal with an echoing body keeps the blocked state, and once removed
+  // the profile is read and shown again.
+  final unblock = find.widgetWithText(OutlinedButton, l10n.unblockButton);
+  final confirmUnblock = find.widgetWithText(TextButton, l10n.unblockButton);
+  final cancelUnblock = find.widgetWithText(TextButton, l10n.unblockCancel);
+  await tapAndSettle(tester, unblock);
+  onOther();
+  expect(find.text(l10n.memberUnblockMessage), findsOneWidget);
+  await tapAndSettle(tester, cancelUnblock);
+  onOther();
+  await tapAndSettle(tester, unblock);
+  await tapAndSettle(tester, confirmUnblock);
+  onOther();
+  expect(find.byType(FormErrorBanner), findsOneWidget);
+  expect(find.text(l10n.memberBlocked), findsOneWidget);
+  for (final text in _texts(tester)) {
+    expect(text, isNot(contains('PRIV')), reason: text);
+  }
+  await tapAndSettle(tester, unblock);
+  await tapAndSettle(tester, confirmUnblock);
+  onOther();
+  expect(find.byType(FormErrorBanner), findsNothing);
+  expect(find.text(_otherName), findsOneWidget);
+  // Blocked again, for the list.
+  await chooseBlock();
+  await tapAndSettle(tester, confirmBlock);
+  onOther();
+  expect(find.text(l10n.memberBlocked), findsOneWidget);
+  await tester.pageBack();
+  await tester.pumpAndSettle();
+  record();
+  expect(app.location(tester), '/home');
+
+  // The blocked members: the route names nobody, in every state, and the
+  // only text of a response on screen is the member's name.
+  void onBlocked() {
+    record();
+    expect(app.location(tester), '/blocked');
+    _checkScreen(tester);
+  }
+
+  await tapAndSettle(
+    tester,
+    find.widgetWithText(OutlinedButton, l10n.blockedMembersButton),
+  );
+  onBlocked();
+  expect(find.byType(FormErrorBanner), findsOneWidget);
+  expect(find.text(_otherName), findsNothing);
+  await tapAndSettle(tester, find.widgetWithText(FilledButton, l10n.tryAgain));
+  onBlocked();
+  expect(find.byType(FormErrorBanner), findsNothing);
+  expect(find.text(_otherName), findsOneWidget);
+  expect(find.text(_otherBio), findsNothing);
+  // Backing out sends nothing.
+  await tapAndSettle(tester, unblock);
+  onBlocked();
+  expect(
+    find.text(l10n.blockedMembersUnblockMessage(_otherName)),
+    findsOneWidget,
+  );
+  await tapAndSettle(tester, cancelUnblock);
+  onBlocked();
+  // Refused with an echoing body: the app's own message, and the member.
+  await tapAndSettle(tester, unblock);
+  await tapAndSettle(tester, confirmUnblock);
+  onBlocked();
+  expect(find.byType(FormErrorBanner), findsOneWidget);
+  expect(find.text(_otherName), findsOneWidget);
+  // Unblocked: nobody is listed any more.
+  await tapAndSettle(tester, unblock);
+  await tapAndSettle(tester, confirmUnblock);
+  onBlocked();
+  expect(find.byType(FormErrorBanner), findsNothing);
+  expect(find.text(l10n.blockedMembersEmpty), findsOneWidget);
+  for (final text in _texts(tester)) {
+    expect(text, isNot(contains('PRIV')), reason: text);
+  }
+  // The list is asked for with nothing but the token.
+  for (final r in server.to(ApiPaths.myBlocks)) {
+    expect(r.method, 'GET');
+    expect(r.url.hasQuery, isFalse);
+    expect(r.bodyBytes, isEmpty);
+  }
   // That member's identifier travels only in the path of their profile's
-  // read and of the two blocks, and their name and text travel nowhere.
+  // reads, of the blocks and of the unblocks, and their name and text
+  // travel nowhere.
   final aboutOther = [
     for (final r in server.requests)
       if (r.url.toString().contains(otherMemberId) ||
@@ -640,6 +738,12 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
     'GET ${ApiPaths.memberProfile(otherMemberId)}',
     'PUT ${ApiPaths.myBlock(otherMemberId)}',
     'PUT ${ApiPaths.myBlock(otherMemberId)}',
+    'DELETE ${ApiPaths.myBlock(otherMemberId)}',
+    'DELETE ${ApiPaths.myBlock(otherMemberId)}',
+    'GET ${ApiPaths.memberProfile(otherMemberId)}',
+    'PUT ${ApiPaths.myBlock(otherMemberId)}',
+    'DELETE ${ApiPaths.myBlock(otherMemberId)}',
+    'DELETE ${ApiPaths.myBlock(otherMemberId)}',
   ]);
   for (final r in aboutOther) {
     expect(r.url.hasQuery, isFalse);
