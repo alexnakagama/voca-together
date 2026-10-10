@@ -6,7 +6,8 @@ paths:
 # Mobile rules (Flutter, Android only)
 
 The layer map is in `docs/architecture.md`. Test fakes and harnesses are in `testing.md`. Rules for one feature
-load with that feature's files: `auth.md` (session internals), `google-sign-in.md`, `profile.md`, `languages.md`.
+load with that feature's files: `auth.md` (session internals), `google-sign-in.md`, `profile.md`, `languages.md`,
+`safety.md` (blocking and reporting).
 
 ## Build config
 
@@ -36,11 +37,15 @@ load with that feature's files: `auth.md` (session internals), `google-sign-in.m
   `SessionManager`/`AccountApi` and the redirect reacts. `SessionStatus`, `.status` and `authRedirect` are forbidden
   in `lib/screens/`.
 - Signed-in routes are the exact paths of `Routes.signedInRoutes` (`/home`, `/profile`, `/profile/edit`,
-  `/profile/languages`) and the one pattern `Routes.isMember` accepts (`/members/<public id>`, decision 032);
-  `authRedirect` stays a function of the session status and the path only. The three `/profile` routes are always
-  the caller's own and name nobody (decisions 028, 030, 032).
-- A route carries no token, email, name or language. The only thing a route may say about anyone is a profile's
-  public identifier, in `/members/<id>` (`profile.md`).
+  `/profile/languages`, `/blocked`) and the two patterns `Routes.isMember` and `Routes.isMemberReport` accept
+  (`/members/<public id>`, decision 032, and `/members/<public id>/report`, decision 034); `authRedirect` stays a
+  function of the session status and the path only. The three `/profile` routes and `/blocked` are always the
+  caller's own and name nobody (decisions 028, 030, 032, 034).
+- A route carries no token, email, name or language, and nothing a member typed or chose. The only thing a
+  route may say about anyone is a profile's public identifier, in `/members/<id>` and `/members/<id>/report`
+  (`profile.md`, `safety.md`).
+- Routes are flat `GoRoute`s and screens are pushed. `go_router` removes a trailing slash before the redirect
+  runs, so only `authRedirect`'s own table can show that it refuses one.
 - `main.dart` also builds the `PhotoSource` (`lib/media/`); only the profile edit screen receives it
   (`profile.md`).
 
@@ -50,13 +55,16 @@ load with that feature's files: `auth.md` (session internals), `google-sign-in.m
   and DELETE, with a JSON body or a byte body (`application/octet-stream`), never both. `getImage` and
   `putForImage` return an image answer as bytes: it must be a 200 `image/jpeg` and has its own size cap; error
   answers are still parsed as JSON. Use PUT and DELETE only for writes the backend makes idempotent, because
-  `_authorized` resends once after a 401 (028): the profile, the member's languages and the profile picture.
+  `_authorized` resends once after a 401 (028): the profile, the member's languages, the profile picture, a
+  block, an unblock and a report.
 - **Token boundary:** screens may use only `AccountApi` (register/resend/forgot, token-free) and `SessionManager`'s
   public API, which takes and returns no token (`signIn`/`signInWithGoogle()`/`logout` → `void`, `me()` → `Me`,
   `profile()` → `Profile?`, `saveProfile()` → `Profile`, `languageCatalog()` → `List<Language>`, `languages()` and
   `saveLanguages()` → `UserLanguages`, `avatar()` → `Uint8List?`, `saveAvatar()` → `Uint8List`, `removeAvatar()` →
-  `void`, `memberProfile(id)` → `MemberProfile?`, `memberAvatar(id)` → `Uint8List?`). Only the languages editor
-  calls `saveLanguages()` (`languages.md`); only the member profile screen calls the two member reads.
+  `void`, `memberProfile(id)` → `MemberProfile?`, `memberAvatar(id)` → `Uint8List?`, `blockMember(id)` and
+  `unblockMember(id)` → `void`, `blockedMembers()` → `List<BlockedMember>`, `reportMember(id, reason, details)` →
+  `void`). Only the languages editor calls `saveLanguages()` (`languages.md`); only the member profile screen
+  calls the two member reads and `blockMember`; only the report screen calls `reportMember` (`safety.md`).
 - Adding a protected route: a path in `ApiPaths`, a call in `AuthApi` (which takes the raw access token and is held
   only by `SessionManager`), and a typed, token-free `SessionManager` method that makes one `_authorized` call.
   `_authorized` stays private. A model screens may import is added to the allowlist in `test/architecture_test.dart`.

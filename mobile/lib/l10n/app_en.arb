@@ -443,6 +443,54 @@
   "@memberMenuBlock": {
     "description": "Menu item on another member’s public profile that blocks that member, after a confirmation. Separate from “Report”."
   },
+  "reportTitle": "Report member",
+  "@reportTitle": {
+    "description": "Title of the screen where the user reports another member. Must not show the member’s name."
+  },
+  "reportReasonHeading": "Why are you reporting this member?",
+  "@reportReasonHeading": {
+    "description": "Heading above the five reasons of the report form, of which the user chooses one."
+  },
+  "reportReasonHarassment": "Harassment or bullying",
+  "@reportReasonHarassment": {
+    "description": "One of the five reasons of the report form: the member harasses or bullies others."
+  },
+  "reportReasonInappropriateContent": "Inappropriate content",
+  "@reportReasonInappropriateContent": {
+    "description": "One of the five reasons of the report form: the member’s name, text or picture is inappropriate."
+  },
+  "reportReasonSpam": "Spam",
+  "@reportReasonSpam": {
+    "description": "One of the five reasons of the report form: the member’s profile is spam or advertising."
+  },
+  "reportReasonImpersonation": "Pretending to be someone else",
+  "@reportReasonImpersonation": {
+    "description": "One of the five reasons of the report form: the member pretends to be another person."
+  },
+  "reportReasonOther": "Something else",
+  "@reportReasonOther": {
+    "description": "One of the five reasons of the report form: none of the other four."
+  },
+  "reportDetailsLabel": "Details (optional)",
+  "@reportDetailsLabel": {
+    "description": "Label of the free-text field of the report form, where the user may describe what happened. Says the field is optional. Must not state a length."
+  },
+  "reportPrivacyNotice": "Your report is private. This member won’t be told who reported them.",
+  "@reportPrivacyNotice": {
+    "description": "Notice on the report form: the report is private and the reported member is not told who reported them. Must not promise an answer or an outcome."
+  },
+  "reportSendButton": "Send report",
+  "@reportSendButton": {
+    "description": "Button that sends the report."
+  },
+  "reportSent": "Your report was sent. You can also block this member from their profile.",
+  "@reportSent": {
+    "description": "Confirmation shown in place of the report form once the report was sent. Says the member can also be blocked from their profile: reporting does not block. Must not promise an answer or an outcome, and must not show the member’s name."
+  },
+  "reportBackToProfile": "Back to profile",
+  "@reportBackToProfile": {
+    "description": "Button under the confirmation of a sent report that returns to the reported member’s profile."
+  },
   "memberBlockTitle": "Block this member?",
   "@memberBlockTitle": {
     "description": "Title of the dialog that asks the user to confirm blocking the member whose profile they are looking at."
@@ -613,7 +661,7 @@
   },
   "errorReportReasonRequired": "Choose a reason for the report.",
   "@errorReportReasonRequired": {
-    "description": "Error by the reasons of the report form when the server received a report with no reason."
+    "description": "Error by the reasons of the report form when the user sends it with no reason chosen, or the server received a report with no reason."
   },
   "errorReportReasonInvalid": "That reason can’t be used. Choose a different one.",
   "@errorReportReasonInvalid": {

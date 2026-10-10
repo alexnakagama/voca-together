@@ -33,6 +33,10 @@ const _bio = 'PRIVbio evenings';
 const _otherName = 'PRIVother Bea';
 const _otherBio = 'PRIVotherbio mornings';
 
+/// What the member types about another in a report, marked too: sent only
+/// in the body of the report, and shown nowhere once it is sent.
+const _reportDetails = 'PRIVdetails what happened';
+
 /// A photo from the member's device, with a marker of its own: sent only in
 /// the body of their own upload, and never shown as text.
 final _photo = utf8.encode('PHOTOmark-bytes-of-a-photo');
@@ -247,6 +251,21 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
         ),
       ),
     )
+    // Their report: an echoing failure, a refusal of the details that
+    // echoes them, then stored.
+    ..once('PUT', ApiPaths.myReport(otherMemberId), (_) => _echo(500))
+    ..once(
+      'PUT',
+      ApiPaths.myReport(otherMemberId),
+      (_) => http.Response(
+        '{"error":{"code":"validation_failed","detail":"$_reportDetails '
+        '$_email spam","fields":[{"field":"details","code":"too_long",'
+        '"detail":"$_reportDetails"}]}}',
+        422,
+        headers: {'content-type': 'application/json'},
+      ),
+    )
+    ..once('PUT', ApiPaths.myReport(otherMemberId), (_) => noContent())
     ..once('PUT', ApiPaths.myBlock(otherMemberId), (_) => _echo(500))
     ..always('PUT', ApiPaths.myBlock(otherMemberId), (_) => noContent())
     ..once('DELETE', ApiPaths.myBlock(otherMemberId), (_) => _echo(500))
@@ -617,6 +636,74 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
   onOther();
   expect(find.text(_otherName), findsOneWidget);
   expect(find.text(_otherBio), findsOneWidget);
+
+  // The report of that member: the route holds their public identifier and
+  // nothing else, in every state, and nothing of them is on the screen.
+  final reportPath = ApiPaths.myReport(otherMemberId);
+  void onReport() {
+    record();
+    expect(app.location(tester), '/members/$otherMemberId/report');
+    _checkScreen(tester);
+    for (final text in _texts(tester)) {
+      expect(text, isNot(contains('PRIV')), reason: text);
+    }
+  }
+
+  final sendReport = find.widgetWithText(FilledButton, l10n.reportSendButton);
+  await tapAndSettle(tester, find.byTooltip(l10n.memberMenuTooltip));
+  await tapAndSettle(tester, find.text(l10n.memberMenuReport));
+  onReport();
+  expect(find.text(l10n.reportPrivacyNotice), findsOneWidget);
+  // With no reason chosen, nothing is sent.
+  await tester.enterText(field(l10n.reportDetailsLabel), _reportDetails);
+  await tapAndSettle(tester, sendReport);
+  onReport();
+  expect(find.text(l10n.errorReportReasonRequired), findsOneWidget);
+  expect(server.count(reportPath), 0);
+  // Refused with an echoing body: the app's own message, and the text kept.
+  await tapAndSettle(tester, find.text(l10n.reportReasonSpam));
+  await tapAndSettle(tester, sendReport);
+  onReport();
+  expect(find.byType(FormErrorBanner), findsOneWidget);
+  expect(find.text(_reportDetails), findsOneWidget);
+  // The details refused, with a body that echoes them: the app's own text
+  // under the field.
+  await tapAndSettle(tester, sendReport);
+  onReport();
+  expect(find.byType(FormErrorBanner), findsNothing);
+  expect(
+    errorOf(tester, l10n.reportDetailsLabel),
+    l10n.errorReportDetailsTooLong,
+  );
+  // Sent: what was typed is on the screen no more.
+  await tapAndSettle(tester, sendReport);
+  onReport();
+  expect(find.text(l10n.reportSent), findsOneWidget);
+  expect(find.textContaining('PRIVdetails'), findsNothing);
+  // The reason and the details travel only in the body of the report.
+  final reports = server.to(reportPath);
+  expect(reports, hasLength(3));
+  for (final r in reports) {
+    expect(r.method, 'PUT');
+    expect(r.url.hasQuery, isFalse);
+    expect(jsonDecode(r.body), {'reason': 'spam', 'details': _reportDetails});
+    expect(r.headers.values.any((v) => v.contains('PRIVdetails')), isFalse);
+  }
+  for (final r in server.requests) {
+    expect(r.url.toString(), isNot(contains('PRIVdetails')));
+    if (r.url.path != reportPath) {
+      expect(r.body, isNot(contains('PRIVdetails')), reason: r.url.path);
+    }
+  }
+  // Back on the profile, as it was: reporting blocked nobody.
+  await tapAndSettle(
+    tester,
+    find.widgetWithText(FilledButton, l10n.reportBackToProfile),
+  );
+  onOther();
+  expect(find.text(_otherName), findsOneWidget);
+  expect(server.count(ApiPaths.myBlock(otherMemberId)), 0);
+
   // Backing out sends nothing.
   await chooseBlock();
   await tapAndSettle(
@@ -725,8 +812,8 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
     expect(r.bodyBytes, isEmpty);
   }
   // That member's identifier travels only in the path of their profile's
-  // reads, of the blocks and of the unblocks, and their name and text
-  // travel nowhere.
+  // reads, of the reports, of the blocks and of the unblocks, and their name
+  // and text travel nowhere.
   final aboutOther = [
     for (final r in server.requests)
       if (r.url.toString().contains(otherMemberId) ||
@@ -736,6 +823,9 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
   ];
   expect(aboutOther.map((r) => '${r.method} ${r.url.path}'), [
     'GET ${ApiPaths.memberProfile(otherMemberId)}',
+    'PUT $reportPath',
+    'PUT $reportPath',
+    'PUT $reportPath',
     'PUT ${ApiPaths.myBlock(otherMemberId)}',
     'PUT ${ApiPaths.myBlock(otherMemberId)}',
     'DELETE ${ApiPaths.myBlock(otherMemberId)}',
@@ -747,7 +837,9 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
   ]);
   for (final r in aboutOther) {
     expect(r.url.hasQuery, isFalse);
-    expect(r.bodyBytes, isEmpty);
+    // Only a report has a body, and it doesn't name the member.
+    if (r.url.path != reportPath) expect(r.bodyBytes, isEmpty);
+    expect(r.body, isNot(contains(otherMemberId)));
     expect(r.headers.values.any((v) => v.contains(otherMemberId)), isFalse);
   }
   for (final r in server.requests) {

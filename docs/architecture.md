@@ -80,11 +80,11 @@ so domain packages never read the request context.
 | `lib/config.dart` | Validates build-time config from `--dart-define-from-file`. |
 | `lib/app.dart` | Owns and disposes the `GoRouter`. |
 | `lib/session.dart` | `SessionManager`, the `ChangeNotifier` session (`unknown`/`signedOut`/`signedIn`) that the router listens to. |
-| `lib/router.dart` | `Routes` and `authRedirect`, the only navigation policy: the exact signed-in routes (`/home`, `/profile`, `/profile/edit`, `/profile/languages`) and the one that names a member, `/members/<public id>` (decision 032). |
-| `lib/api/` | `ApiClient` over `http.Client`, the API classes (`AccountApi`, `AuthApi`), `ApiPaths`, and the models screens may see (`Me`, `Profile`, `MemberProfile`, and in `languages.dart` `Language`, `LanguageLevel`, `UserLanguage`, `UserLanguages`). `ApiClient` carries JSON, a byte body and an image answer. |
+| `lib/router.dart` | `Routes` and `authRedirect`, the only navigation policy: the exact signed-in routes (`/home`, `/profile`, `/profile/edit`, `/profile/languages`, `/blocked`) and the two that name a member, `/members/<public id>` (decision 032) and `/members/<public id>/report` (decision 034). |
+| `lib/api/` | `ApiClient` over `http.Client`, the API classes (`AccountApi`, `AuthApi`), `ApiPaths`, and the models screens may see (`Me`, `Profile`, `MemberProfile`, `BlockedMember`, `ReportReason`, and in `languages.dart` `Language`, `LanguageLevel`, `UserLanguage`, `UserLanguages`). `ApiClient` carries JSON, a byte body and an image answer. |
 | `lib/auth/` | `AuthTokens`, `TokenStore`/`SecureTokenStore`, `AuthClock`, `GoogleIdentity`/`PluginGoogleIdentity`. |
 | `lib/media/` | `PhotoSource`, the device's photo chooser behind an interface, and `PluginPhotoSource`, the only file that imports `image_picker`. |
-| `lib/screens/` | The screens and `failure_presentation.dart` (`presentFailure`). The profile is four files: `profile_screen.dart` (the read-only page), `profile_edit_screen.dart` (the form), `profile_avatar_editor.dart` (the picture control) and `member_profile_screen.dart` (a member's public profile); `profile_languages_section.dart` and `profile_language_lists.dart` show languages on the page and on the member screen. |
+| `lib/screens/` | The screens and `failure_presentation.dart` (`presentFailure`). The profile is four files: `profile_screen.dart` (the read-only page), `profile_edit_screen.dart` (the form), `profile_avatar_editor.dart` (the picture control) and `member_profile_screen.dart` (a member's public profile); `profile_languages_section.dart` and `profile_language_lists.dart` show languages on the page and on the member screen. Blocking and reporting are `blocked_members_screen.dart`, `report_member_screen.dart` and `confirm_dialog.dart` (the question before a block or an unblock), besides the member screen's menu. |
 | `lib/ui/` | `theme.dart` (`AppTheme`, `Spacing`, `Radii`), `widgets/`, `previews/`. |
 | `lib/l10n/` | `app_en.arb` and the generated localizations. |
 
@@ -95,7 +95,8 @@ so domain packages never read the request context.
 `SessionManager` holds the only in-memory tokens and owns refresh and logout. Tokens persist only in
 `SecureTokenStore` (one `flutter_secure_storage` key). Screens reach the backend through `SessionManager`'s
 token-free public API (`me()`, `profile()`, `saveProfile()`, `languageCatalog()`, `languages()`, `saveLanguages()`,
-`avatar()`, `saveAvatar()`, `removeAvatar()`, `memberProfile()`, `memberAvatar()`, sign-in, logout) and through
+`avatar()`, `saveAvatar()`, `removeAvatar()`, `memberProfile()`, `memberAvatar()`, `blockMember()`,
+`unblockMember()`, `blockedMembers()`, `reportMember()`, sign-in, logout) and through
 `AccountApi` (register, resend, forgot). Of the three language methods, the profile page's languages section calls
 `languageCatalog()` and `languages()`, and the languages editor calls all three: it is the only caller of
 `saveLanguages()`. Pictures cross this boundary as bytes; no widget fetches an image itself.
@@ -107,10 +108,23 @@ token-free public API (`me()`, `profile()`, `saveProfile()`, `languageCatalog()`
 | `/profile` | `ProfileScreen`: the caller's read-only page (picture, name, text, a Friends placeholder, languages), "Edit Profile" and "See public profile" | `profile()`, then `avatar()` and, in its languages section, `languageCatalog()` and `languages()` |
 | `/profile/edit` | `ProfileEditScreen`: the name and text form, the picture control (`ProfileAvatarEditor`, applied at once through `PhotoSource`), the row that opens the languages editor | `profile()`, `saveProfile()`, `avatar()`, `saveAvatar()`, `removeAvatar()` |
 | `/profile/languages` | `LanguagesScreen`, the languages editor, opened from the edit screen | `languageCatalog()`, `languages()`, `saveLanguages()` |
-| `/members/<id>` | `MemberProfileScreen`: a member's public profile, read-only, reached for now only from "See public profile" with the caller's own id | `memberProfile()`, `languageCatalog()`, `memberAvatar()` |
+| `/members/<id>` | `MemberProfileScreen`: a member's public profile, reached for now only from "See public profile" with the caller's own id. On another member's profile, a menu with "Report" and "Block" (decision 034) | `memberProfile()`, `languageCatalog()`, `profile()` (only to know whether the profile is the caller's own), `memberAvatar()`; `blockMember()`, `unblockMember()` |
 
 Every screen is pushed, so back returns to the opener. The page loads again each time the member comes back from
 the edit screen.
+
+### Blocking and reporting (decision 034)
+
+| Route | Screen | Calls |
+|---|---|---|
+| `/members/<id>` | The member screen's menu: "Block" (confirmed; the screen then shows only that the member is blocked, with "Unblock" as an immediate undo by the route's id) and "Report", which opens the form | `blockMember()`, `unblockMember()` |
+| `/blocked` | `BlockedMembersScreen`: the names of the members the caller blocked, each with "Unblock"; opened from home | `blockedMembers()`, `unblockMember()` |
+| `/members/<id>/report` | `ReportMemberScreen`: five reasons, optional details, a privacy notice; a confirmation once sent. It loads nothing | `reportMember()` |
+
+**Not reachable through navigation yet:** the app opens no profile but the caller's own, where the menu is absent,
+so "Block" and "Report" can be reached only in tests. The first feature through which a member meets another
+must expose them on other members' profiles before its release (decisions 033 and 034); `/blocked` is reachable
+and, until then, always empty for a member who uses only the app.
 
 ### Google sign-in
 
@@ -125,6 +139,8 @@ management, the email/password auth screens (log in, register, forgot password, 
 screen with `/v1/me` and logout, Google sign-in on log in and register, and the user's own profile (create and
 edit, from home). The social profile of decisions 031 and 032 is built on top of it: the read-only profile page,
 the edit screen, the profile picture and the member profile screen; its checks on the emulator are pending.
+Blocking and reporting (decisions 033 and 034) are built on both sides and tested on the host; in the app they
+are not reachable through navigation, and 033's gate is not lifted.
 
 Stage 8 (languages) is done on the backend: the three routes of decision 029 (`GET /v1/languages`, `GET` and
 `PUT /v1/me/languages`) are served and tested. On the client it is built:

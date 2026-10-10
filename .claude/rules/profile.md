@@ -24,8 +24,9 @@ paths:
 # Profile rules (`GET`/`PUT /v1/me/profile`, `GET /v1/profiles/{id}`, both sides)
 
 Records: 027 (backend), 028 (client, the form), 031 (the public side, backend), 032 (client: the page, the edit
-screen, the picture, the member screen). The general rules for a member's own resource and for reading another
-member are in `backend.md`; the backend rules of the profile picture are in `avatar.md`.
+screen, the picture, the member screen), 034 (the member screen's menu and its own-profile read). The general
+rules for a member's own resource and for reading another member are in `backend.md`; the backend rules of the
+profile picture are in `avatar.md`.
 
 ## Backend
 
@@ -101,18 +102,26 @@ member are in `backend.md`; the backend rules of the profile picture are in `ava
   the token in a widget and bypasses `ApiClient`. Nothing caches a picture.
 - Never print or show as text anything of a photo, and send its bytes only in the body of the upload.
 
-## Client: a member's profile (032)
+## Client: a member's profile (032, 034)
 
-- `/members/<id>` (`MemberProfileScreen`) is the only route that names a member, and the public identifier is
-  the only thing it carries: never `users.id`, a name, a language, an email or a token. `Routes.isMember` accepts
-  only the canonical lowercase UUID; anything else goes home through `authRedirect`, with no request.
-- The screen is read-only for everyone, the member looking at their own profile included: no edit control, no
-  Friends area, no app bar action. It reads only the member routes (`memberProfile`, `memberAvatar`) and the
-  catalog, never the caller's own profile, languages or picture.
+- `/members/<id>` (`MemberProfileScreen`) and `/members/<id>/report` (`safety.md`) are the only routes that
+  name a member, and the public identifier is the only thing they carry: never `users.id`, a name, a language,
+  an email or a token. `Routes.isMember` and `Routes.isMemberReport` accept only the canonical lowercase UUID;
+  anything else goes home through `authRedirect`, with no request.
+- Nothing of the profile can be changed from the screen, the member looking at their own included: no edit
+  control and no Friends area. What is shown comes only from the member routes (`memberProfile`,
+  `memberAvatar`) and the catalog, also for one's own id.
+- It also reads the caller's own `profile()`, **only to compare ids**: the profile shown is the caller's own
+  when the two `id`s are equal, and a caller with no profile is never the owner. Never show anything from that
+  read, and never tell "own" from a route `extra` or a field of the member response.
+- The app bar has a menu ("Report", "Block") only with another member's profile loaded: not on one's own, while
+  loading, on a failure, for an unavailable profile or once blocked. What the two items and the blocked state
+  do is in `safety.md` ("Client").
 - `memberProfile()` returns null only for a 404 `profile_not_found`, shown as "isn't available" with **no
   retry**. Every other failure is the mapped message with "Try again".
-- The profile and the catalog load together and fail whole. The picture is asked for only when `hasAvatar`, by
-  itself, and a failure is the placeholder with no message.
+- The profile, the catalog and the caller's own profile load together and fail whole: a failed own-profile read
+  is a failure with "Try again", never a profile with the menu missing. The picture is asked for only when
+  `hasAvatar`, by itself, and a failure is the placeholder with no message.
 - `MemberProfile` is everything one member may read about another; `toString` is redacted. Don't add a field
   the backend's `memberProfileResponse` doesn't have.
 - `ProfileHeader` and `ProfileLanguageLists` are shared with the page. Texts that speak to "you" are not: the

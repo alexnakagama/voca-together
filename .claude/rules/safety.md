@@ -7,13 +7,23 @@ paths:
   - "backend/internal/db/migrations/00009_blocks.sql"
   - "backend/internal/db/migrations/00010_reports.sql"
   - "docs/moderation.md"
+  - "mobile/lib/api/blocked_member.dart"
+  - "mobile/lib/api/report_reason.dart"
+  - "mobile/lib/screens/member_profile_screen.dart"
+  - "mobile/lib/screens/blocked_members_screen.dart"
+  - "mobile/lib/screens/report_member_screen.dart"
+  - "mobile/lib/screens/confirm_dialog.dart"
+  - "mobile/test/session_safety_test.dart"
+  - "mobile/test/**/*blocked_members*"
+  - "mobile/test/**/*report_member*"
+  - "mobile/test/**/*member_profile*"
 ---
 
-# Safety rules: blocking and reporting (`/v1/me/blocks`, `/v1/me/reports/{id}`, backend)
+# Safety rules: blocking and reporting (`/v1/me/blocks`, `/v1/me/reports/{id}`, both sides)
 
-Record: 033. The general rules for a member's own resource and for reading another member are in `backend.md`.
-How a report is read and acted on, by hand, is `docs/moderation.md`. The client side is not built (034, not
-written): nothing in the app blocks or reports yet.
+Records: 033 (backend), 034 (client). The general rules for a member's own resource and for reading another
+member are in `backend.md`; the member screen's own rules are in `profile.md`. How a report is read and acted
+on, by hand, is `docs/moderation.md`.
 
 ## The package
 
@@ -98,9 +108,40 @@ written): nothing in the app blocks or reports yet.
 - Never log whom: not the blocked or reported `user_id`, a public id or a name. Never log a report's reason,
   its details or its id. A read hidden by a block logs nothing.
 
+## Client (034)
+
+- **Reachability:** "Block" and "Report" exist only in the menu of `MemberProfileScreen`, on another member's
+  profile, and nothing in the app opens another member's profile yet. A feature through which a member meets
+  another must expose both on other members' profiles before it is released (the gate's third condition), and
+  must offer a lasting way to remove a block that is not in the list.
+- `SessionManager.blockMember(id)`, `unblockMember(id)`, `blockedMembers()` and `reportMember(id, reason,
+  details)`: one `_authorized` call each, nothing cached. They rely on the three writes being idempotent
+  (`mobile.md`). An id is checked before any request (`ApiPaths.checkMemberId`).
+- A block and every unblock are confirmed first (`confirmDialog`); backing out sends nothing. While one is being
+  sent its controls are disabled and, on the member screen, leaving is held back.
+- **After a block the member screen shows nothing of the profile:** it drops the name, text, languages and
+  picture, and the blocked text and its dialog name nobody.
+- **"Unblock" in the blocked state is an immediate undo by the route's id.** It never reads `blockedMembers()`,
+  and afterwards the screen loads again: the profile, or "isn't available". Don't add "Unblock" to the
+  unavailable state, and don't make the blocked text point to "Blocked members": a member who blocked back is
+  not listed there.
+- `/blocked` (`BlockedMembersScreen`) names nobody in its route, loads on every entry and keeps nothing; an
+  unblocked member leaves the list on screen without a reload. It shows names only: the name is the only text
+  of a response these screens show. Opened from home.
+- `/members/<id>/report` (`ReportMemberScreen`) carries the public id and nothing else: never a reason or
+  anything typed. It requests nothing when it opens and shows nothing of the member.
+- **The report form's only check is that a reason is chosen.** No rule of the server about a reason or the
+  details is repeated; the details are sent exactly as typed, always with both keys. A failure keeps the reason
+  and the text.
+- **Reporting never blocks,** and nothing in the app says a report exists once its confirmation is left: no
+  list, no badge, no "already reported". There is nothing to read (reports are write-only).
+- Never print or log a reason, the details, or whom a member blocked or reported. `BlockedMember.toString` is
+  redacted.
+
 ## The gate (restates 031; not lifted)
 
 No feature that lists, suggests or searches members ships, and the app is not released to the public, until all
 three hold: blocking and reporting are deployed; `docs/moderation.md` names a reviewer and a review interval
 (both are blank today, and they are the author's to fill: never fill them in or assume a value); and the feature
-that lets members meet exposes "Block" and "Report" on other members' profiles.
+that lets members meet exposes "Block" and "Report" on other members' profiles (built in the app by 034, and
+reachable from nowhere yet).

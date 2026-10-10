@@ -646,6 +646,78 @@ abstract class AppLocalizations {
   /// **'Block'**
   String get memberMenuBlock;
 
+  /// Title of the screen where the user reports another member. Must not show the member’s name.
+  ///
+  /// In en, this message translates to:
+  /// **'Report member'**
+  String get reportTitle;
+
+  /// Heading above the five reasons of the report form, of which the user chooses one.
+  ///
+  /// In en, this message translates to:
+  /// **'Why are you reporting this member?'**
+  String get reportReasonHeading;
+
+  /// One of the five reasons of the report form: the member harasses or bullies others.
+  ///
+  /// In en, this message translates to:
+  /// **'Harassment or bullying'**
+  String get reportReasonHarassment;
+
+  /// One of the five reasons of the report form: the member’s name, text or picture is inappropriate.
+  ///
+  /// In en, this message translates to:
+  /// **'Inappropriate content'**
+  String get reportReasonInappropriateContent;
+
+  /// One of the five reasons of the report form: the member’s profile is spam or advertising.
+  ///
+  /// In en, this message translates to:
+  /// **'Spam'**
+  String get reportReasonSpam;
+
+  /// One of the five reasons of the report form: the member pretends to be another person.
+  ///
+  /// In en, this message translates to:
+  /// **'Pretending to be someone else'**
+  String get reportReasonImpersonation;
+
+  /// One of the five reasons of the report form: none of the other four.
+  ///
+  /// In en, this message translates to:
+  /// **'Something else'**
+  String get reportReasonOther;
+
+  /// Label of the free-text field of the report form, where the user may describe what happened. Says the field is optional. Must not state a length.
+  ///
+  /// In en, this message translates to:
+  /// **'Details (optional)'**
+  String get reportDetailsLabel;
+
+  /// Notice on the report form: the report is private and the reported member is not told who reported them. Must not promise an answer or an outcome.
+  ///
+  /// In en, this message translates to:
+  /// **'Your report is private. This member won’t be told who reported them.'**
+  String get reportPrivacyNotice;
+
+  /// Button that sends the report.
+  ///
+  /// In en, this message translates to:
+  /// **'Send report'**
+  String get reportSendButton;
+
+  /// Confirmation shown in place of the report form once the report was sent. Says the member can also be blocked from their profile: reporting does not block. Must not promise an answer or an outcome, and must not show the member’s name.
+  ///
+  /// In en, this message translates to:
+  /// **'Your report was sent. You can also block this member from their profile.'**
+  String get reportSent;
+
+  /// Button under the confirmation of a sent report that returns to the reported member’s profile.
+  ///
+  /// In en, this message translates to:
+  /// **'Back to profile'**
+  String get reportBackToProfile;
+
   /// Title of the dialog that asks the user to confirm blocking the member whose profile they are looking at.
   ///
   /// In en, this message translates to:
@@ -880,7 +952,7 @@ abstract class AppLocalizations {
   /// **'That photo couldn’t be used. Choose a different one.'**
   String get errorPhotoUnusable;
 
-  /// Error by the reasons of the report form when the server received a report with no reason.
+  /// Error by the reasons of the report form when the user sends it with no reason chosen, or the server received a report with no reason.
   ///
   /// In en, this message translates to:
   /// **'Choose a reason for the report.'**

@@ -13,6 +13,13 @@
 > deferred exists; "Profile saved." is gone), 030 (the editor is opened from the edit screen; the summary has no
 > button and no longer reloads by itself) and 008 (the client adds `image_picker`).
 >
+> **Changed later:** 034: the member screen is no longer without actions. On another member's profile its app
+> bar has a menu ("Report", "Block"), and the screen blocks, undoes that block and opens the report form. To know
+> whether the profile is the caller's own it also reads `SessionManager.profile()`, so "it reads only the member
+> routes and the catalog" and "the screen can't tell whose profile it shows" no longer hold; the three loads
+> fail whole. `/members/<id>` is no longer the only route that names a member: `/members/<id>/report` does too.
+> Nothing of the profile itself can be changed from the screen, as before.
+>
 > **Current rules:** `.claude/rules/profile.md` ("Client"), `.claude/rules/languages.md`, `.claude/rules/mobile.md`.
 
 - **Scope:** the client side of 031. A member's profile becomes a page they look at, an edit screen, a picture and

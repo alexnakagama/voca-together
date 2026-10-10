@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../api/member_profile.dart';
 import '../l10n/app_localizations.dart';
+import '../router.dart';
 import '../session.dart';
 import '../ui/theme.dart';
 import '../ui/widgets/auth_scaffold.dart';
@@ -34,7 +36,8 @@ import 'profile_language_lists.dart';
 /// no message.
 ///
 /// Another member's profile has a menu in the app bar with "Report" and
-/// "Block". A block is confirmed first; once stored, the screen drops the
+/// "Block". "Report" opens the report screen for the route's [id], and
+/// nothing is loaded again on the way back. A block is confirmed first; once stored, the screen drops the
 /// profile it held and says the member is blocked, with "Unblock" as an
 /// immediate undo: confirmed too, sent for the route's [id] alone (the list
 /// of blocked members is never read), and followed by a new load.
@@ -153,6 +156,10 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
       // what the member came for.
     }
   }
+
+  // Pushed, so back returns to the profile as it was: nothing is reloaded.
+  void _openReport() =>
+      unawaited(context.push<void>(Routes.memberReport(widget.id)));
 
   /// Asks before blocking the member, then blocks them. Nothing is sent
   /// before the answer.
@@ -335,14 +342,13 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
               PopupMenuButton<_MemberAction>(
                 tooltip: l10n.memberMenuTooltip,
                 enabled: !_busy,
-                onSelected: (action) {
-                  if (action == _MemberAction.block) unawaited(_confirmBlock());
+                onSelected: (action) => switch (action) {
+                  _MemberAction.report => _openReport(),
+                  _MemberAction.block => unawaited(_confirmBlock()),
                 },
                 itemBuilder: (context) => [
                   PopupMenuItem(
                     value: _MemberAction.report,
-                    // The report screen isn't built yet.
-                    enabled: false,
                     child: Text(l10n.memberMenuReport),
                   ),
                   PopupMenuItem(

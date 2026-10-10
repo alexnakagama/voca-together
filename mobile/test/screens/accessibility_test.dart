@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:vocatogether/api/api_paths.dart';
+import 'package:vocatogether/api/report_reason.dart';
 import 'package:vocatogether/auth/google_identity_exception.dart';
 import 'package:vocatogether/router.dart';
 import 'package:vocatogether/ui/widgets/google_sign_in_button.dart';
@@ -322,6 +323,70 @@ Future<void> _unblock(WidgetTester tester) async {
     tester,
     find.widgetWithText(TextButton, l10n.unblockButton),
   );
+}
+
+/// The five reasons of the report form.
+final _reportReasons = [
+  l10n.reportReasonHarassment,
+  l10n.reportReasonInappropriateContent,
+  l10n.reportReasonSpam,
+  l10n.reportReasonImpersonation,
+  l10n.reportReasonOther,
+];
+
+/// A member on another member's profile, whose report answers [send].
+void _report(FakeServer s, {Responder? send}) {
+  _otherMember(s);
+  if (send != null) {
+    s.once('PUT', ApiPaths.myReport(otherMemberId), send);
+  }
+}
+
+/// From home: the report form of another member, opened from the menu of
+/// their profile.
+Future<void> _openReport(WidgetTester tester) async {
+  await _openMenu(tester);
+  await tapAndSettle(tester, find.text(l10n.memberMenuReport));
+}
+
+/// Scrolls the report screen back to its top, so that no reason is left cut
+/// in half under the app bar.
+Future<void> _reportTop(WidgetTester tester) async {
+  await tester.drag(
+    find.byType(SingleChildScrollView).last,
+    const Offset(0, 5000),
+    warnIfMissed: false,
+  );
+  await tester.pumpAndSettle();
+}
+
+/// From home: the report form with a reason chosen and a long text typed.
+Future<void> _fillReport(WidgetTester tester) async {
+  await _openReport(tester);
+  await tapAndSettle(tester, find.text(l10n.reportReasonImpersonation));
+  await tester.enterText(field(l10n.reportDetailsLabel), _longBio);
+  await tester.pumpAndSettle();
+  await _reportTop(tester);
+}
+
+/// From home: the report form, after activating "Send report" with nothing
+/// chosen.
+Future<void> _sendEmptyReport(WidgetTester tester) async {
+  await _openReport(tester);
+  await tapAndSettle(
+    tester,
+    find.widgetWithText(FilledButton, l10n.reportSendButton),
+  );
+}
+
+/// From home: the report form, filled and sent.
+Future<void> _sendReport(WidgetTester tester) async {
+  await _fillReport(tester);
+  await tapAndSettle(
+    tester,
+    find.widgetWithText(FilledButton, l10n.reportSendButton),
+  );
+  await _reportTop(tester);
 }
 
 /// A second blocked member, with a name as long as the first's.
@@ -1147,6 +1212,81 @@ final _cases = <_Case>[
     drive: _listUnblock,
     action: l10n.blockedMembersEmpty,
   ),
+  _Case(
+    'report, empty form',
+    signedIn: true,
+    script: _report,
+    drive: _openReport,
+    action: l10n.reportSendButton,
+    also: [
+      l10n.reportPrivacyNotice,
+      l10n.reportReasonHeading,
+      ..._reportReasons,
+    ],
+    largeTextWithKeyboard: true,
+  ),
+  _Case(
+    'report, a reason chosen and a long text',
+    signedIn: true,
+    script: _report,
+    drive: _fillReport,
+    action: l10n.reportSendButton,
+    also: _reportReasons,
+    largeTextWithKeyboard: true,
+  ),
+  _Case(
+    'report, no reason chosen',
+    signedIn: true,
+    script: _report,
+    drive: _sendEmptyReport,
+    action: l10n.reportSendButton,
+    also: [l10n.errorReportReasonRequired, ..._reportReasons],
+    largeTextWithKeyboard: true,
+  ),
+  _Case(
+    'report, field errors',
+    signedIn: true,
+    script: (s) => _report(
+      s,
+      send: (_) => jsonResponse(422, {
+        'error': {
+          'code': 'validation_failed',
+          'fields': [
+            {'field': 'reason', 'code': 'invalid'},
+            {'field': 'details', 'code': 'too_long'},
+          ],
+        },
+      }),
+    ),
+    drive: _sendReport,
+    action: l10n.reportSendButton,
+    also: [l10n.errorReportReasonInvalid, ..._reportReasons],
+    largeTextWithKeyboard: true,
+  ),
+  _Case(
+    'report, send failed',
+    signedIn: true,
+    script: (s) => _report(
+      s,
+      send: (_) =>
+          errorResponse(429, 'rate_limited', headers: {'retry-after': '60'}),
+    ),
+    drive: _sendReport,
+    action: l10n.reportSendButton,
+    also: ['Too many attempts. Try again in 1 minute.', ..._reportReasons],
+    largeTextWithKeyboard: true,
+  ),
+  _Case(
+    'report, sent',
+    signedIn: true,
+    script: (s) => _report(s, send: (_) => noContent()),
+    drive: _sendReport,
+    // Only the control is probed: at twice the text size the confirmation
+    // is taller than what an open keyboard leaves, and scrolls like the rest
+    // (its text and announcement are checked in the screen's own tests).
+    action: l10n.reportBackToProfile,
+    largeTextWithKeyboard: true,
+  ),
 ];
 
 Future<void> _reach(
@@ -1386,6 +1526,20 @@ void main() {
         await tester.tap(confirm);
       },
       l10n.unblockProgress,
+    ),
+    // The busy button keeps its label, which is what says it is working.
+    'report, sending': (
+      (tester) async {
+        final server = FakeServer();
+        _report(server, send: neverAnswers);
+        await pumpApp(tester, server: server, signedIn: true);
+        await _fillReport(tester);
+        final send = find.widgetWithText(FilledButton, l10n.reportSendButton);
+        await tester.ensureVisible(send);
+        await tester.pumpAndSettle();
+        await tester.tap(send);
+      },
+      l10n.reportSendButton,
     ),
     'languages editor, loading': (
       (tester) async {
@@ -1653,6 +1807,94 @@ void main() {
         );
       }
       expect(tester.takeException(), isNull);
+      handle.dispose();
+    });
+
+    testWidgets('the reasons of a report are one choice: each a 48 dp '
+        'option announced with whether it is chosen, with large text on a '
+        'small screen and the keyboard open', (tester) async {
+      final server = FakeServer();
+      _report(server, send: neverAnswers);
+      final handle = tester.ensureSemantics();
+      await pumpApp(
+        tester,
+        server: server,
+        signedIn: true,
+        size: const Size(320, 480),
+        textScale: 2,
+        keyboard: 240,
+      );
+      await _openReport(tester);
+      expect(tester.takeException(), isNull);
+
+      expect(
+        tester.getSemantics(find.text(l10n.reportReasonHeading)),
+        isSemantics(label: l10n.reportReasonHeading, isHeader: true),
+      );
+      Finder radio(String label) =>
+          find.widgetWithText(RadioListTile<ReportReason>, label);
+      Future<void> expectReasons({String? chosen, bool enabled = true}) async {
+        for (final label in _reportReasons) {
+          await tester.ensureVisible(radio(label));
+          await tester.pump(const Duration(seconds: 1));
+          expect(
+            tester.getSemantics(radio(label)),
+            isSemantics(
+              label: label,
+              hasCheckedState: true,
+              isChecked: label == chosen,
+              isInMutuallyExclusiveGroup: true,
+              hasEnabledState: true,
+              isEnabled: enabled,
+              hasTapAction: enabled,
+            ),
+            reason: label,
+          );
+          expect(
+            tester.getSize(radio(label)).shortestSide,
+            greaterThanOrEqualTo(48),
+            reason: label,
+          );
+          expect(tester.getSize(radio(label)).width, lessThanOrEqualTo(320));
+        }
+      }
+
+      await expectReasons();
+      await tapAndSettle(tester, find.text(l10n.reportReasonSpam));
+      await expectReasons(chosen: l10n.reportReasonSpam);
+      // The details field is labelled, and the notice is read.
+      expect(
+        tester
+            .getSemantics(field(l10n.reportDetailsLabel))
+            .getSemanticsData()
+            .label,
+        l10n.reportDetailsLabel,
+      );
+      expect(
+        tester.getSemantics(find.text(l10n.reportPrivacyNotice)),
+        isSemantics(label: l10n.reportPrivacyNotice),
+      );
+
+      // Sending: every reason reads as unavailable, with the choice kept,
+      // and the button keeps its label.
+      final send = find.widgetWithText(FilledButton, l10n.reportSendButton);
+      await tester.ensureVisible(send);
+      await tester.pumpAndSettle();
+      await tester.tap(send);
+      await tester.pump();
+      await expectReasons(chosen: l10n.reportReasonSpam, enabled: false);
+      expect(
+        tester.getSemantics(send),
+        isSemantics(
+          label: l10n.reportSendButton,
+          isButton: true,
+          hasEnabledState: true,
+          isEnabled: false,
+        ),
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pump(const Duration(seconds: 16));
+      await tester.pumpAndSettle();
       handle.dispose();
     });
 

@@ -11,7 +11,8 @@ paths:
 
 Records: 031 ("The profile picture"), 033 (a picture across a block). The general rules for a member's own
 resource and for reading another member are in `backend.md`; the member profile's `has_avatar` is in
-`profile.md`. The client side is not built.
+`profile.md`. The client side is built: its rules are in `profile.md` ("Client: the picture") and record 032, not
+here.
 
 ## What is stored
 

@@ -11,6 +11,7 @@ import 'screens/member_profile_screen.dart';
 import 'screens/profile_edit_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/register_screen.dart';
+import 'screens/report_member_screen.dart';
 import 'screens/splash_screen.dart';
 import 'session.dart';
 
@@ -40,13 +41,18 @@ abstract final class Routes {
   /// about anyone: never a name, a language or an account id.
   static String member(String id) => '/members/$id';
 
+  /// The form that reports the member whose public identifier is [id]
+  /// (decision 034). Like [member], the identifier is all it carries: never
+  /// a reason or anything typed in the form.
+  static String memberReport(String id) => '/members/$id/report';
+
   /// The routes a signed-out user may visit.
   static const authRoutes = {login, register, forgotPassword};
 
   /// The exact routes a signed-in user may visit. The profile, its edit
   /// screen, the languages and the blocked members are the user's own and
-  /// name nobody; the one route that names a member is [member], matched by
-  /// [isMember].
+  /// name nobody; the routes that name a member are [member], matched by
+  /// [isMember], and [memberReport], matched by [isMemberReport].
   static const signedInRoutes = {
     home,
     profile,
@@ -59,9 +65,14 @@ abstract final class Routes {
   /// canonical lowercase UUID, with nothing before or after it.
   static bool isMember(String path) => _memberPath.hasMatch(path);
 
-  static final _memberPath = RegExp(
-    r'^/members/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-  );
+  /// Whether [path] is [memberReport] for a well-formed public identifier,
+  /// with nothing before or after it.
+  static bool isMemberReport(String path) => _memberReportPath.hasMatch(path);
+
+  static const _publicId =
+      '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+  static final _memberPath = RegExp('^/members/$_publicId\$');
+  static final _memberReportPath = RegExp('^/members/$_publicId/report\$');
 }
 
 /// Where a user with [status] may be when navigating to [location]: `null` to
@@ -69,8 +80,8 @@ abstract final class Routes {
 ///
 /// This is the app's only navigation policy; screens never decide access.
 /// Paths are matched exactly (the query is ignored), so anything unexpected,
-/// including unmatched paths and a member path whose identifier is
-/// malformed, goes to the status's default route.
+/// including unmatched paths and a member or report path whose identifier
+/// is malformed, goes to the status's default route.
 String? authRedirect(SessionStatus status, Uri location) {
   final path = location.path;
   switch (status) {
@@ -79,7 +90,9 @@ String? authRedirect(SessionStatus status, Uri location) {
     case SessionStatus.signedOut:
       return Routes.authRoutes.contains(path) ? null : Routes.login;
     case SessionStatus.signedIn:
-      return Routes.signedInRoutes.contains(path) || Routes.isMember(path)
+      return Routes.signedInRoutes.contains(path) ||
+              Routes.isMember(path) ||
+              Routes.isMemberReport(path)
           ? null
           : Routes.home;
   }
@@ -143,6 +156,13 @@ GoRouter createRouter(
       GoRoute(
         path: '/members/:id',
         builder: (context, state) => MemberProfileScreen(
+          session: session,
+          id: state.pathParameters['id']!,
+        ),
+      ),
+      GoRoute(
+        path: '/members/:id/report',
+        builder: (context, state) => ReportMemberScreen(
           session: session,
           id: state.pathParameters['id']!,
         ),

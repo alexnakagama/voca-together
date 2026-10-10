@@ -10,7 +10,9 @@
 > below and **not** lifted) and 018 (a fourth and a fifth per-user write limit, `user_block_write` and
 > `user_report_write`: thirteen limiters).
 >
-> **Client side:** 034, not written. Nothing in the app blocks or reports yet.
+> **Client side:** 034, in force: the app blocks, unblocks, lists the blocked members and reports. Where the
+> text below says the client is not built or is deferred, 034 is what was built. "Block" and "Report" are still
+> not reachable through the app's navigation, so the gate's third condition is open.
 >
 > **Current rules:** `.claude/rules/safety.md`, `.claude/rules/backend.md`, and for the two member reads
 > `.claude/rules/profile.md` and `.claude/rules/avatar.md`. How a report is read and acted on:

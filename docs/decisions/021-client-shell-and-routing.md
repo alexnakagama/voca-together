@@ -6,8 +6,10 @@
 > (`SessionStatus` and the redirect contract stayed). 028 lets a signed-in user be on any route of
 > `Routes.signedInRoutes`, not only `/home`. 032: routes are no longer all parameterless and the caller's own:
 > `/members/<id>` names a member by public identifier, and `authRedirect` also accepts that pattern (still a
-> function of the status and the path alone). The deferred work was done in 023 (session restore), 024
-> (screens, logout) and 025 (Google sign-in); deep links are still off.
+> function of the status and the path alone). 034: a second pattern, `/members/<id>/report`
+> (`Routes.isMemberReport`), and a new exact route, `/blocked`; the redirect contract is unchanged. The deferred
+> work was done in 023 (session restore), 024 (screens, logout) and 025 (Google sign-in); deep links are still
+> off.
 >
 > **Current rules:** `.claude/rules/mobile.md`.
 

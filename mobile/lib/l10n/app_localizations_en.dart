@@ -351,6 +351,44 @@ class AppLocalizationsEn extends AppLocalizations {
   String get memberMenuBlock => 'Block';
 
   @override
+  String get reportTitle => 'Report member';
+
+  @override
+  String get reportReasonHeading => 'Why are you reporting this member?';
+
+  @override
+  String get reportReasonHarassment => 'Harassment or bullying';
+
+  @override
+  String get reportReasonInappropriateContent => 'Inappropriate content';
+
+  @override
+  String get reportReasonSpam => 'Spam';
+
+  @override
+  String get reportReasonImpersonation => 'Pretending to be someone else';
+
+  @override
+  String get reportReasonOther => 'Something else';
+
+  @override
+  String get reportDetailsLabel => 'Details (optional)';
+
+  @override
+  String get reportPrivacyNotice =>
+      'Your report is private. This member won’t be told who reported them.';
+
+  @override
+  String get reportSendButton => 'Send report';
+
+  @override
+  String get reportSent =>
+      'Your report was sent. You can also block this member from their profile.';
+
+  @override
+  String get reportBackToProfile => 'Back to profile';
+
+  @override
   String get memberBlockTitle => 'Block this member?';
 
   @override
