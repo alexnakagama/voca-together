@@ -3,9 +3,11 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
 import 'package:vocatogether/api/api_paths.dart';
 import 'package:vocatogether/auth/google_identity_exception.dart';
+import 'package:vocatogether/router.dart';
 import 'package:vocatogether/ui/widgets/form_error_banner.dart';
 import 'package:vocatogether/ui/widgets/google_sign_in_button.dart';
 
@@ -25,6 +27,11 @@ const _idToken2 = 'LEAKidtokenTwo.payload.signature';
 /// purpose, and found nowhere else.
 const _name = 'PRIVname Ana';
 const _bio = 'PRIVbio evenings';
+
+/// Another member's name and text, marked too: shown on their profile until
+/// they are blocked, and in no route.
+const _otherName = 'PRIVother Bea';
+const _otherBio = 'PRIVotherbio mornings';
 
 /// A photo from the member's device, with a marker of its own: sent only in
 /// the body of their own upload, and never shown as text.
@@ -224,6 +231,23 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
       ),
     )
     ..once('GET', ApiPaths.memberAvatar(testMemberId), (_) => _echo(500))
+    // Another member's profile, and their block: an echoing failure, then
+    // stored.
+    ..once(
+      'GET',
+      ApiPaths.memberProfile(otherMemberId),
+      (_) => jsonResponse(
+        200,
+        memberProfileBody(
+          id: otherMemberId,
+          displayName: _otherName,
+          bio: _otherBio,
+          languages: languagesBody(spoken: [('es', 'native')]),
+        ),
+      ),
+    )
+    ..once('PUT', ApiPaths.myBlock(otherMemberId), (_) => _echo(500))
+    ..once('PUT', ApiPaths.myBlock(otherMemberId), (_) => noContent())
     // Google: an echoing 409, an echoing 500, then a session.
     ..once(
       'POST',
@@ -549,6 +573,88 @@ Future<void> _runFlows(WidgetTester tester, List<String> locations) async {
   onPage();
   expect(find.text(_name), findsOneWidget);
 
+  await tester.pageBack();
+  await tester.pumpAndSettle();
+  record();
+  expect(app.location(tester), '/home');
+
+  // Another member's profile, its menu and the block: the route holds that
+  // profile's public identifier and nothing else, in every state.
+  void onOther() {
+    record();
+    expect(app.location(tester), '/members/$otherMemberId');
+    _checkScreen(tester);
+  }
+
+  Future<void> chooseBlock() async {
+    await tapAndSettle(tester, find.byTooltip(l10n.memberMenuTooltip));
+    onOther();
+    expect(find.text(l10n.memberMenuReport), findsOneWidget);
+    await tapAndSettle(tester, find.text(l10n.memberMenuBlock));
+    onOther();
+    expect(find.text(l10n.memberBlockTitle), findsOneWidget);
+  }
+
+  final confirmBlock = find.widgetWithText(TextButton, l10n.memberBlockConfirm);
+  unawaited(
+    GoRouter.of(tester.element(find.byType(Navigator).first))
+        .push<void>(Routes.member(otherMemberId)),
+  );
+  await tester.pumpAndSettle();
+  onOther();
+  expect(find.text(_otherName), findsOneWidget);
+  expect(find.text(_otherBio), findsOneWidget);
+  // Backing out sends nothing.
+  await chooseBlock();
+  await tapAndSettle(
+    tester,
+    find.widgetWithText(TextButton, l10n.memberBlockCancel),
+  );
+  onOther();
+  expect(server.count(ApiPaths.myBlock(otherMemberId)), 0);
+  // Refused with an echoing body: the app's own message, and the profile.
+  await chooseBlock();
+  await tapAndSettle(tester, confirmBlock);
+  onOther();
+  expect(find.byType(FormErrorBanner), findsOneWidget);
+  expect(find.text(_otherName), findsOneWidget);
+  // Blocked: nothing of the member is shown any more, their name included.
+  await chooseBlock();
+  await tapAndSettle(tester, confirmBlock);
+  onOther();
+  expect(find.text(l10n.memberBlocked), findsOneWidget);
+  expect(find.byType(FormErrorBanner), findsNothing);
+  for (final text in _texts(tester)) {
+    expect(text, isNot(contains('PRIV')), reason: text);
+  }
+  // That member's identifier travels only in the path of their profile's
+  // read and of the two blocks, and their name and text travel nowhere.
+  final aboutOther = [
+    for (final r in server.requests)
+      if (r.url.toString().contains(otherMemberId) ||
+          r.body.contains(otherMemberId) ||
+          r.headers.values.any((v) => v.contains(otherMemberId)))
+        r,
+  ];
+  expect(aboutOther.map((r) => '${r.method} ${r.url.path}'), [
+    'GET ${ApiPaths.memberProfile(otherMemberId)}',
+    'PUT ${ApiPaths.myBlock(otherMemberId)}',
+    'PUT ${ApiPaths.myBlock(otherMemberId)}',
+  ]);
+  for (final r in aboutOther) {
+    expect(r.url.hasQuery, isFalse);
+    expect(r.bodyBytes, isEmpty);
+    expect(r.headers.values.any((v) => v.contains(otherMemberId)), isFalse);
+  }
+  for (final r in server.requests) {
+    expect(r.body, isNot(contains('PRIVother')), reason: r.url.path);
+    expect(r.url.toString(), isNot(contains('PRIVother')));
+    expect(
+      r.headers.values.any((v) => v.contains('PRIVother')),
+      isFalse,
+      reason: r.url.path,
+    );
+  }
   await tester.pageBack();
   await tester.pumpAndSettle();
   record();

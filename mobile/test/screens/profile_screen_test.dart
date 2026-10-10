@@ -1119,7 +1119,9 @@ void main() {
       expect(_shown(tester), testPicture);
       expect(_chips(tester), hasLength(3));
       expect(_seePublic, findsOneWidget);
-      expect(server.count(ApiPaths.profile), 1);
+      // The page's read, and the member screen's (to know whose profile it
+      // showed): none on the way back.
+      expect(server.count(ApiPaths.profile), 2);
       expect(server.count(ApiPaths.myAvatar), 1);
       expect(server.count(ApiPaths.myLanguages), 1);
       expect(server.count(ApiPaths.languages), 2);

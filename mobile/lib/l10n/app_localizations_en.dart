@@ -342,6 +342,35 @@ class AppLocalizationsEn extends AppLocalizations {
   String get memberLanguagesEmpty => 'No languages added yet.';
 
   @override
+  String get memberMenuTooltip => 'More options';
+
+  @override
+  String get memberMenuReport => 'Report';
+
+  @override
+  String get memberMenuBlock => 'Block';
+
+  @override
+  String get memberBlockTitle => 'Block this member?';
+
+  @override
+  String get memberBlockMessage =>
+      'You won’t see each other’s profiles. They won’t be told that you blocked them.';
+
+  @override
+  String get memberBlockConfirm => 'Block';
+
+  @override
+  String get memberBlockCancel => 'Cancel';
+
+  @override
+  String get memberBlockProgress => 'Blocking the member';
+
+  @override
+  String get memberBlocked =>
+      'You’ve blocked this member. You can unblock them from “Blocked members”.';
+
+  @override
   String get profileVisibilityNotice =>
       'Other members will be able to see your name, your picture and what you write about yourself. Your email address stays private.';
 

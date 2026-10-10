@@ -431,6 +431,42 @@
   "@memberLanguagesEmpty": {
     "description": "Text of the languages section of a member’s public profile when that member has chosen no language, spoken or learning."
   },
+  "memberMenuTooltip": "More options",
+  "@memberMenuTooltip": {
+    "description": "Tooltip and accessibility label of the menu button in the app bar of another member’s public profile. The menu holds “Report” and “Block”."
+  },
+  "memberMenuReport": "Report",
+  "@memberMenuReport": {
+    "description": "Menu item on another member’s public profile that opens the form to report that member. Separate from “Block”."
+  },
+  "memberMenuBlock": "Block",
+  "@memberMenuBlock": {
+    "description": "Menu item on another member’s public profile that blocks that member, after a confirmation. Separate from “Report”."
+  },
+  "memberBlockTitle": "Block this member?",
+  "@memberBlockTitle": {
+    "description": "Title of the dialog that asks the user to confirm blocking the member whose profile they are looking at."
+  },
+  "memberBlockMessage": "You won’t see each other’s profiles. They won’t be told that you blocked them.",
+  "@memberBlockMessage": {
+    "description": "Text of the dialog that asks the user to confirm blocking a member. Says that neither member will see the other’s profile and that the other member is not told."
+  },
+  "memberBlockConfirm": "Block",
+  "@memberBlockConfirm": {
+    "description": "Dialog button that blocks the member."
+  },
+  "memberBlockCancel": "Cancel",
+  "@memberBlockCancel": {
+    "description": "Dialog button that closes the dialog without blocking the member."
+  },
+  "memberBlockProgress": "Blocking the member",
+  "@memberBlockProgress": {
+    "description": "Accessibility label of the progress indicator shown on a member’s public profile while the block is being sent."
+  },
+  "memberBlocked": "You’ve blocked this member. You can unblock them from “Blocked members”.",
+  "@memberBlocked": {
+    "description": "Text shown in place of a member’s public profile once the user has blocked them. Says the member is blocked and names the “Blocked members” screen as the place to unblock them. Must not show the member’s name."
+  },
   "profileVisibilityNotice": "Other members will be able to see your name, your picture and what you write about yourself. Your email address stays private.",
   "@profileVisibilityNotice": {
     "description": "Notice on the profile form saying which information other members will see."

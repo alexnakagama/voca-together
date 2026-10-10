@@ -20,15 +20,20 @@ import 'profile_language_lists.dart';
 /// /v1/profiles/{id}` through [SessionManager]).
 ///
 /// [id] is the profile's public identifier, the only thing the route
-/// carries. Nothing is changed from here, also when the profile is the
-/// member's own: no edit control and no Friends area. It never decides
+/// carries. Nothing of the profile is changed from here, also when it is
+/// the member's own: no edit control and no Friends area. It never decides
 /// access; when the session ends the router leaves this screen on its own.
 ///
-/// The profile and the catalog (for the languages' names) load together
-/// and fail whole. A profile that doesn't exist is shown as unavailable,
-/// with nothing to retry. The picture is asked for only when the profile
-/// says there is one, and loads by itself: one that fails to load is the
-/// placeholder, with no message.
+/// The profile, the catalog (for the languages' names) and the caller's own
+/// profile (to know whether this one is theirs) load together and fail
+/// whole. A profile that doesn't exist is shown as unavailable, with nothing
+/// to retry. The picture is asked for only when the profile says there is
+/// one, and loads by itself: one that fails to load is the placeholder, with
+/// no message.
+///
+/// Another member's profile has a menu in the app bar with "Report" and
+/// "Block". A block is confirmed first; once stored, the screen drops the
+/// profile it held and says the member is blocked.
 class MemberProfileScreen extends StatefulWidget {
   const MemberProfileScreen({
     super.key,
@@ -45,6 +50,9 @@ class MemberProfileScreen extends StatefulWidget {
   State<MemberProfileScreen> createState() => _MemberProfileScreenState();
 }
 
+/// What the app bar's menu offers on another member's profile.
+enum _MemberAction { report, block }
+
 class _MemberProfileScreenState extends State<MemberProfileScreen> {
   /// The load hasn't answered yet (or is being retried).
   bool _loading = true;
@@ -60,6 +68,19 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
   /// The member's picture; null with none, while it loads and when it
   /// couldn't be loaded.
   Uint8List? _image;
+
+  /// Whether the profile shown is the caller's own. A caller with no
+  /// profile is never the owner.
+  bool _own = false;
+
+  /// A block is being sent: the menu is disabled and leaving is held back.
+  bool _busy = false;
+
+  /// Why the last block failed, shown under the header.
+  String? _blockError;
+
+  /// The member was blocked from here: nothing of the profile is shown.
+  bool _blocked = false;
 
   /// Identifies the latest load; answers to earlier ones are dropped, the
   /// picture's too.
@@ -84,9 +105,11 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
     try {
       final member = widget.session.memberProfile(widget.id);
       final catalog = widget.session.languageCatalog();
-      // Waits for both, so neither is left to fail unobserved.
-      await Future.wait<void>([member, catalog]);
+      final own = widget.session.profile();
+      // Waits for all three, so none is left to fail unobserved.
+      await Future.wait<void>([member, catalog, own]);
       final profile = await member;
+      final ownId = (await own)?.id;
       final names = {
         for (final language in await catalog) language.code: language.name,
       };
@@ -94,6 +117,7 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
       setState(() {
         _profile = profile;
         _names = names;
+        _own = profile != null && profile.id == ownId;
         _loading = false;
       });
       if (profile != null && profile.hasAvatar) {
@@ -124,12 +148,80 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
     }
   }
 
+  /// Asks before blocking the member, then blocks them. Nothing is sent
+  /// before the answer.
+  Future<void> _confirmBlock() async {
+    if (_busy) return;
+    final l10n = AppLocalizations.of(context);
+    final block = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        scrollable: true,
+        title: Text(l10n.memberBlockTitle),
+        // The answers scroll with the text, as in the profile form's
+        // dialog: `actions` stay outside what scrolls.
+        content: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(l10n.memberBlockMessage),
+            const SizedBox(height: Spacing.md),
+            OverflowBar(
+              alignment: MainAxisAlignment.end,
+              overflowAlignment: OverflowBarAlignment.end,
+              spacing: Spacing.sm,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: Text(l10n.memberBlockCancel),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: Text(l10n.memberBlockConfirm),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+    if (block != true || !mounted || _busy) return;
+
+    setState(() {
+      _busy = true;
+      _blockError = null;
+    });
+    try {
+      await widget.session.blockMember(widget.id);
+      if (!mounted) return;
+      // Drops a picture that is still loading.
+      _request++;
+      setState(() {
+        _profile = null;
+        _names = const {};
+        _image = null;
+        _blocked = true;
+        _busy = false;
+      });
+    } on Exception catch (e) {
+      if (!mounted) return;
+      final failure = presentFailure(e, l10n);
+      // The session is gone: the router is already taking the user to log
+      // in, so an error here would only flash.
+      if (failure.kind == FailureKind.sessionEnded) return;
+      setState(() {
+        _blockError = failure.blocksError ?? failure.message;
+        _busy = false;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
     final loadError = _loadError;
     final profile = _profile;
+    final blockError = _blockError;
 
     final List<Widget> content;
     if (_loading) {
@@ -149,6 +241,8 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
         const SizedBox(height: Spacing.md),
         PrimaryButton(label: l10n.tryAgain, onPressed: _retry),
       ];
+    } else if (_blocked) {
+      content = [Text(l10n.memberBlocked, style: theme.textTheme.bodyLarge)];
     } else if (profile == null) {
       // Unknown, removed or never saved: one answer, and asking again
       // wouldn't change it.
@@ -157,6 +251,10 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
       ];
     } else {
       content = [
+        if (_busy) ...[
+          LinearProgressIndicator(semanticsLabel: l10n.memberBlockProgress),
+          const SizedBox(height: Spacing.md),
+        ],
         ProfileHeader(
           name: profile.displayName,
           bio: profile.bio,
@@ -165,6 +263,10 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
               : l10n.memberAvatarLabel(profile.displayName),
           image: _image,
         ),
+        if (blockError != null) ...[
+          const SizedBox(height: Spacing.md),
+          FormErrorBanner(message: blockError),
+        ],
         const Divider(height: Spacing.xl * 2),
         Semantics(
           header: true,
@@ -179,19 +281,51 @@ class _MemberProfileScreenState extends State<MemberProfileScreen> {
       ];
     }
 
-    return Scaffold(
-      appBar: AppBar(title: Text(l10n.memberProfileTitle)),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(Spacing.lg),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(
-                maxWidth: AuthScaffold.maxContentWidth,
+    // Only with another member's profile on screen: not on one's own, while
+    // loading, on a failure, for an unavailable profile or once blocked.
+    final hasMenu = !_loading && loadError == null && profile != null && !_own;
+
+    return PopScope(
+      // Leaving waits for the block's answer.
+      canPop: !_busy,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(l10n.memberProfileTitle),
+          actions: [
+            if (hasMenu)
+              PopupMenuButton<_MemberAction>(
+                tooltip: l10n.memberMenuTooltip,
+                enabled: !_busy,
+                onSelected: (action) {
+                  if (action == _MemberAction.block) unawaited(_confirmBlock());
+                },
+                itemBuilder: (context) => [
+                  PopupMenuItem(
+                    value: _MemberAction.report,
+                    // The report screen isn't built yet.
+                    enabled: false,
+                    child: Text(l10n.memberMenuReport),
+                  ),
+                  PopupMenuItem(
+                    value: _MemberAction.block,
+                    child: Text(l10n.memberMenuBlock),
+                  ),
+                ],
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: content,
+          ],
+        ),
+        body: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(Spacing.lg),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  maxWidth: AuthScaffold.maxContentWidth,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: content,
+                ),
               ),
             ),
           ),

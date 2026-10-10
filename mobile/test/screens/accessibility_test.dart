@@ -2,8 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:vocatogether/api/api_paths.dart';
 import 'package:vocatogether/auth/google_identity_exception.dart';
+import 'package:vocatogether/router.dart';
 import 'package:vocatogether/ui/widgets/google_sign_in_button.dart';
 import 'package:vocatogether/ui/widgets/form_error_banner.dart';
 import 'package:vocatogether/ui/widgets/form_notice_banner.dart';
@@ -233,6 +235,69 @@ void _publicProfile(
   if (avatar != null) {
     s.always('GET', ApiPaths.memberAvatar(testMemberId), avatar);
   }
+}
+
+/// A member with a profile, and another member's profile with a long name,
+/// a long text and languages. [block] answers the block of that member.
+void _otherMember(FakeServer s, {Responder? block}) {
+  _home(s);
+  s
+    ..always(
+      'GET',
+      ApiPaths.profile,
+      (_) => jsonResponse(200, profileBody(displayName: 'Ana')),
+    )
+    ..always('GET', ApiPaths.languages, (_) => jsonResponse(200, catalogBody()))
+    ..always(
+      'GET',
+      ApiPaths.memberProfile(otherMemberId),
+      (_) => jsonResponse(
+        200,
+        memberProfileBody(
+          id: otherMemberId,
+          displayName: _longName,
+          bio: _longBio,
+          languages: languagesBody(
+            spoken: [('es', 'native')],
+            learning: [('ja', 'a2')],
+          ),
+        ),
+      ),
+    );
+  if (block != null) {
+    s.once('PUT', ApiPaths.myBlock(otherMemberId), block);
+  }
+}
+
+/// From home: another member's profile. Nothing in the app leads to one
+/// yet, so the route is pushed as a screen would push it.
+Future<void> _openOther(WidgetTester tester) async {
+  unawaited(
+    GoRouter.of(tester.element(find.byType(Navigator).first))
+        .push<void>(Routes.member(otherMemberId)),
+  );
+  await tester.pumpAndSettle();
+}
+
+/// From home: another member's profile, with its menu open.
+Future<void> _openMenu(WidgetTester tester) async {
+  await _openOther(tester);
+  await tapAndSettle(tester, find.byTooltip(l10n.memberMenuTooltip));
+}
+
+/// From home: another member's profile, with the block confirmation open.
+Future<void> _askBlock(WidgetTester tester) async {
+  await _openMenu(tester);
+  await tapAndSettle(tester, find.text(l10n.memberMenuBlock));
+}
+
+/// From home: another member's profile, after confirming the block.
+Future<void> _block(WidgetTester tester) async {
+  await _askBlock(tester);
+  await tapAndSettle(
+    tester,
+    find.widgetWithText(TextButton, l10n.memberBlockConfirm),
+  );
 }
 
 /// Opens the picker of "I speak".
@@ -881,6 +946,58 @@ final _cases = <_Case>[
     drive: _openPublic,
     action: l10n.tryAgain,
   ),
+  _Case(
+    'member profile, another member',
+    signedIn: true,
+    script: _otherMember,
+    drive: _openOther,
+    action: 'Japanese',
+    also: [_longName, 'Spanish'],
+  ),
+  _Case(
+    'member profile, the menu open',
+    signedIn: true,
+    script: _otherMember,
+    drive: _openMenu,
+    action: l10n.memberMenuBlock,
+    also: [l10n.memberMenuReport],
+  ),
+  _Case(
+    'member profile, block confirmation',
+    signedIn: true,
+    script: _otherMember,
+    drive: _askBlock,
+    action: l10n.memberBlockConfirm,
+    also: [
+      l10n.memberBlockTitle,
+      l10n.memberBlockMessage,
+      l10n.memberBlockCancel,
+    ],
+  ),
+  _Case(
+    'member profile, block failed',
+    signedIn: true,
+    script: (s) => _otherMember(s, block: networkFailure),
+    drive: _block,
+    action: l10n.errorNetwork,
+    also: [_longName, 'Japanese'],
+  ),
+  _Case(
+    'member profile, too many blocked members',
+    signedIn: true,
+    script: (s) =>
+        _otherMember(s, block: (_) => fieldError('blocks', 'too_many')),
+    drive: _block,
+    action: l10n.errorBlocksTooMany,
+    also: [_longName],
+  ),
+  _Case(
+    'member profile, blocked',
+    signedIn: true,
+    script: (s) => _otherMember(s, block: (_) => noContent()),
+    drive: _block,
+    action: l10n.memberBlocked,
+  ),
 ];
 
 Future<void> _reach(
@@ -1068,6 +1185,22 @@ void main() {
       },
       l10n.memberProfileLoading,
     ),
+    'member profile, blocking': (
+      (tester) async {
+        final server = FakeServer();
+        _otherMember(server, block: neverAnswers);
+        await pumpApp(tester, server: server, signedIn: true);
+        await _askBlock(tester);
+        final confirm = find.widgetWithText(
+          TextButton,
+          l10n.memberBlockConfirm,
+        );
+        await tester.ensureVisible(confirm);
+        await tester.pumpAndSettle();
+        await tester.tap(confirm);
+      },
+      l10n.memberBlockProgress,
+    ),
     'languages editor, loading': (
       (tester) async {
         final server = FakeServer();
@@ -1204,6 +1337,68 @@ void main() {
         tester.getSemantics(find.text(l10n.languagesHeading)),
         isSemantics(label: l10n.languagesHeading, isHeader: true),
       );
+      expect(find.byType(BackButton).hitTestable(), findsOneWidget);
+      handle.dispose();
+    });
+
+    testWidgets('the member menu is a labelled 48 dp control, its items '
+        'are buttons, and the blocked text is read', (tester) async {
+      final server = FakeServer();
+      _otherMember(server, block: (_) => noContent());
+      final handle = tester.ensureSemantics();
+      await pumpApp(
+        tester,
+        server: server,
+        signedIn: true,
+        size: const Size(320, 480),
+        textScale: 2,
+      );
+      await _openOther(tester);
+      expect(tester.takeException(), isNull);
+
+      final menu = find.byTooltip(l10n.memberMenuTooltip);
+      expect(menu.hitTestable(), findsOneWidget);
+      expect(
+        tester.getSemantics(find.byIcon(Icons.adaptive.more)),
+        isSemantics(
+          isButton: true,
+          hasTapAction: true,
+          tooltip: l10n.memberMenuTooltip,
+        ),
+      );
+      expect(
+        tester
+            .getSize(find.widgetWithIcon(IconButton, Icons.adaptive.more))
+            .shortestSide,
+        greaterThanOrEqualTo(48),
+      );
+      // The way back is beside it.
+      expect(find.byType(BackButton).hitTestable(), findsOneWidget);
+
+      await tapAndSettle(tester, menu);
+      for (final label in [l10n.memberMenuReport, l10n.memberMenuBlock]) {
+        final node = tester.getSemantics(find.text(label)).getSemanticsData();
+        expect(node.label, label);
+        expect(node.flagsCollection.isButton, isTrue, reason: label);
+      }
+      await tapAndSettle(tester, find.text(l10n.memberMenuBlock));
+      for (final label in [l10n.memberBlockCancel, l10n.memberBlockConfirm]) {
+        expect(
+          tester.getSize(find.widgetWithText(TextButton, label)).shortestSide,
+          greaterThanOrEqualTo(48),
+          reason: label,
+        );
+      }
+      await tapAndSettle(
+        tester,
+        find.widgetWithText(TextButton, l10n.memberBlockConfirm),
+      );
+      expect(tester.takeException(), isNull);
+      expect(
+        tester.getSemantics(find.text(l10n.memberBlocked)),
+        isSemantics(label: l10n.memberBlocked),
+      );
+      expect(find.byTooltip(l10n.memberMenuTooltip), findsNothing);
       expect(find.byType(BackButton).hitTestable(), findsOneWidget);
       handle.dispose();
     });

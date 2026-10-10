@@ -25,6 +25,7 @@ const _id = '7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f';
 
 final _profilePath = ApiPaths.memberProfile(_id);
 final _avatarPath = ApiPaths.memberAvatar(_id);
+final _blockPath = ApiPaths.myBlock(_id);
 
 Finder get _screen => find.byType(MemberProfileScreen);
 Finder get _retry => find.widgetWithText(FilledButton, l10n.tryAgain);
@@ -53,9 +54,35 @@ List<Widget> _actions(WidgetTester tester) =>
         .actions ??
     const [];
 
-/// A backend for a signed-in user on home, with the three-language catalog;
-/// the member routes are scripted by each test.
+/// The app bar's menu button, and what it holds once open.
+Finder get _menu => find.byTooltip(l10n.memberMenuTooltip);
+Finder get _menuItems => find.byWidgetPredicate((w) => w is PopupMenuItem);
+Finder get _confirmBlock =>
+    find.widgetWithText(TextButton, l10n.memberBlockConfirm);
+Finder get _cancelBlock =>
+    find.widgetWithText(TextButton, l10n.memberBlockCancel);
+
+/// Whether the menu button takes a tap.
+bool _menuEnabled(WidgetTester tester) => tester
+    .widget<PopupMenuButton<Object?>>(
+      find.byWidgetPredicate((w) => w is PopupMenuButton),
+    )
+    .enabled;
+
+/// Opens the menu and chooses "Block": the confirmation is then open.
+Future<void> _chooseBlock(WidgetTester tester) async {
+  await tester.tap(_menu);
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(l10n.memberMenuBlock));
+  await tester.pumpAndSettle();
+  expect(find.text(l10n.memberBlockTitle), findsOneWidget);
+}
+
+/// A backend for a signed-in user on home, who has a profile of their own,
+/// with the three-language catalog; the member routes are scripted by each
+/// test.
 FakeServer _backend() => FakeServer()
+  ..always('GET', ApiPaths.profile, (_) => jsonResponse(200, profileBody()))
   ..always('GET', ApiPaths.languages, (_) => jsonResponse(200, catalogBody()))
   ..always('GET', ApiPaths.me, (_) => jsonResponse(200, meBody()))
   ..always('GET', ApiPaths.healthz, (_) => healthy())
@@ -173,14 +200,15 @@ void main() {
         ('Spanish', 'A2'),
       ]);
 
-      // One read of each, with nothing but the id in the path, and nothing
-      // asked of the reader's own profile, languages or picture.
+      // One read of each, with nothing but the id in the path. Of the
+      // reader's own data only the profile is read, once, to know whose
+      // profile this is: never their languages or picture.
       expect(server.to(_profilePath).single.method, 'GET');
       expect(server.to(_profilePath).single.url.hasQuery, isFalse);
       expect(server.to(_avatarPath).single.method, 'GET');
       expect(server.to(_avatarPath).single.url.hasQuery, isFalse);
       expect(server.count(ApiPaths.languages), 1);
-      expect(server.count(ApiPaths.profile), 0);
+      expect(server.to(ApiPaths.profile).single.method, 'GET');
       expect(server.count(ApiPaths.myLanguages), 0);
       expect(server.count(ApiPaths.myAvatar), 0);
       handle.dispose();
@@ -380,13 +408,13 @@ void main() {
         expect(find.text(l10n.profileFriendsHeading), findsNothing);
         expect(find.text(l10n.profileFriendsComingLater), findsNothing);
         expect(_textFields, findsNothing);
-        // The way back is the screen's only control.
+        // Under the app bar there is no control, and in it only the way
+        // back and, on another member's profile, the menu.
         expect(_controls, findsNothing);
-        expect(_actions(tester), isEmpty);
+        expect(_actions(tester), hasLength(id == testMemberId ? 0 : 1));
         expect(find.byType(BackButton), findsOneWidget);
-        // Nothing was written, and nothing asked of the reader's own data.
+        // Nothing was written.
         expect(server.requests.map((r) => r.method).toSet(), {'GET'});
-        expect(server.count(ApiPaths.profile), 0);
       });
     }
   });
@@ -663,6 +691,503 @@ void main() {
       await tester.pump(const Duration(seconds: 1));
       expect(tester.takeException(), isNull);
       expect(find.byType(HomeScreen), findsOneWidget);
+    });
+  });
+
+  group('the menu', () {
+    testWidgets('another member\'s profile: "Report" and "Block", as two '
+        'separate items', (tester) async {
+      final server = _backend()..always('GET', _profilePath, _member());
+      final handle = tester.ensureSemantics();
+      await _openMember(tester, server);
+
+      expect(_actions(tester), hasLength(1));
+      expect(_menu, findsOneWidget);
+      expect(_menuEnabled(tester), isTrue);
+      // Closed: neither item is on screen yet.
+      expect(_menuItems, findsNothing);
+
+      await tester.tap(_menu);
+      await tester.pumpAndSettle();
+      expect(_menuItems, findsNWidgets(2));
+      expect(
+        tester
+            .widgetList<Text>(
+              find.descendant(of: _menuItems, matching: find.byType(Text)),
+            )
+            .map((t) => t.data),
+        [l10n.memberMenuReport, l10n.memberMenuBlock],
+      );
+      // Opening the menu sends nothing.
+      expect(server.requests.map((r) => r.method).toSet(), {'GET'});
+      handle.dispose();
+    });
+
+    testWidgets('one\'s own profile: no menu', (tester) async {
+      final server = _backend()
+        ..always(
+          'GET',
+          ApiPaths.memberProfile(testMemberId),
+          (_) => jsonResponse(200, memberProfileBody(bio: 'Hi')),
+        );
+      await _openMember(tester, server, id: testMemberId);
+
+      expect(find.text('Ana'), findsOneWidget);
+      expect(_actions(tester), isEmpty);
+      expect(_menu, findsNothing);
+      expect(find.text(l10n.memberMenuBlock), findsNothing);
+      expect(find.text(l10n.memberMenuReport), findsNothing);
+    });
+
+    testWidgets('a caller with no profile is never the owner: the menu is '
+        'shown on another member\'s profile', (tester) async {
+      final server = _backend()
+        ..always('GET', ApiPaths.profile, (_) => noProfile())
+        ..always('GET', _profilePath, _member());
+      await _openMember(tester, server);
+
+      expect(find.text('Bea'), findsOneWidget);
+      expect(_menu, findsOneWidget);
+    });
+
+    testWidgets('no menu while loading', (tester) async {
+      final reply = Completer<http.Response>();
+      final server = _backend()..once('GET', _profilePath, (_) => reply.future);
+      await _openMember(tester, server, settle: false);
+
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(_actions(tester), isEmpty);
+
+      reply.complete(await _member()(http.Request('GET', Uri())));
+      await tester.pumpAndSettle();
+      expect(_menu, findsOneWidget);
+    });
+
+    testWidgets('no menu while the caller\'s own profile is still loading', (
+      tester,
+    ) async {
+      final own = Completer<http.Response>();
+      final server = _backend()
+        ..always('GET', _profilePath, _member())
+        ..once('GET', ApiPaths.profile, (_) => own.future);
+      await _openMember(tester, server, settle: false);
+      await tester.pump();
+
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(find.byType(ProfileHeader), findsNothing);
+      expect(_actions(tester), isEmpty);
+
+      own.complete(jsonResponse(200, profileBody()));
+      await tester.pumpAndSettle();
+      expect(find.text('Bea'), findsOneWidget);
+      expect(_menu, findsOneWidget);
+    });
+
+    testWidgets('no menu on a failed load', (tester) async {
+      final server = _backend()..once('GET', _profilePath, networkFailure);
+      await _openMember(tester, server);
+
+      expect(find.text(l10n.errorNetwork), findsOneWidget);
+      expect(_actions(tester), isEmpty);
+    });
+
+    testWidgets('no menu for an unavailable profile', (tester) async {
+      final server = _backend()
+        ..always('GET', _profilePath, (_) => noProfile());
+      await _openMember(tester, server);
+
+      expect(find.text(l10n.memberProfileUnavailable), findsOneWidget);
+      expect(_actions(tester), isEmpty);
+    });
+
+    group('a failed request for the caller\'s own profile fails the load '
+        'whole, with "Try again"', () {
+      final cases = <String, (Responder, String)>{
+        'network': (networkFailure, l10n.errorNetwork),
+        '500': (
+          (_) => errorResponse(500, 'internal_error'),
+          l10n.errorUnexpected,
+        ),
+        // Not "no profile yet": never read as "not the owner".
+        'a 404 without the code': (
+          (_) => http.Response('Not Found', 404),
+          l10n.errorUnexpected,
+        ),
+      };
+      cases.forEach((name, c) {
+        final (responder, message) = c;
+        testWidgets(name, (tester) async {
+          final server = _backend()
+            ..always('GET', _profilePath, _member(hasAvatar: true))
+            ..always('GET', _avatarPath, (_) => imageResponse(testPicture))
+            ..once('GET', ApiPaths.profile, responder);
+          await _openMember(tester, server);
+
+          expect(find.text(message), findsOneWidget);
+          expect(_retry, findsOneWidget);
+          // Neither the profile nor a menu that might be the wrong one.
+          expect(find.byType(ProfileHeader), findsNothing);
+          expect(find.text('Bea'), findsNothing);
+          expect(_actions(tester), isEmpty);
+          expect(server.count(_avatarPath), 0);
+
+          await tester.tap(_retry);
+          await tester.pumpAndSettle();
+          expect(find.text('Bea'), findsOneWidget);
+          expect(_menu, findsOneWidget);
+          expect(server.count(ApiPaths.profile), 2);
+          expect(server.count(_profilePath), 2);
+        });
+      });
+    });
+  });
+
+  group('blocking', () {
+    /// Another member's full profile, with a picture.
+    FakeServer shown() => _backend()
+      ..always(
+        'GET',
+        _profilePath,
+        _member(
+          name: 'Bea Ito',
+          bio: 'Evenings, mostly.',
+          hasAvatar: true,
+          languages: languagesBody(spoken: [('ja', 'native')]),
+        ),
+      )
+      ..always('GET', _avatarPath, (_) => imageResponse(testPicture));
+
+    void expectProfile(WidgetTester tester) {
+      expect(find.text('Bea Ito'), findsOneWidget);
+      expect(find.text('Evenings, mostly.'), findsOneWidget);
+      expect(_shown(tester), testPicture);
+      expect(_chips(tester), [('Japanese', 'Native')]);
+      expect(find.text(l10n.memberBlocked), findsNothing);
+    }
+
+    testWidgets('"Block" asks first, saying that neither sees the other and '
+        'that the member is not told; dismissing it sends nothing', (
+      tester,
+    ) async {
+      final server = shown();
+      await _openMember(tester, server);
+
+      await _chooseBlock(tester);
+      expect(find.text(l10n.memberBlockMessage), findsOneWidget);
+      expect(l10n.memberBlockMessage, contains('each other’s profiles'));
+      expect(l10n.memberBlockMessage, contains('won’t be told'));
+      // Nothing is sent before the answer.
+      expect(server.count(_blockPath), 0);
+
+      await tester.tap(_cancelBlock);
+      await tester.pumpAndSettle();
+      expect(find.text(l10n.memberBlockTitle), findsNothing);
+      expectProfile(tester);
+
+      // Dismissed by a tap outside it, and by back.
+      await _chooseBlock(tester);
+      await tester.tapAt(const Offset(5, 5));
+      await tester.pumpAndSettle();
+      expect(find.text(l10n.memberBlockTitle), findsNothing);
+      await _chooseBlock(tester);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text(l10n.memberBlockTitle), findsNothing);
+
+      expectProfile(tester);
+      expect(_screen, findsOneWidget);
+      expect(_menuEnabled(tester), isTrue);
+      expect(server.count(_blockPath), 0);
+      expect(server.requests.map((r) => r.method).toSet(), {'GET'});
+    });
+
+    testWidgets('confirming sends one block for that profile, and after the '
+        '204 nothing of the profile is shown', (tester) async {
+      final server = shown()..once('PUT', _blockPath, (_) => noContent());
+      final app = await _openMember(tester, server);
+      expectProfile(tester);
+
+      await _chooseBlock(tester);
+      await tester.tap(_confirmBlock);
+      await tester.pumpAndSettle();
+
+      final request = server.to(_blockPath).single;
+      expect(request.method, 'PUT');
+      expect(request.url.path, '/v1/me/blocks/$_id');
+      expect(request.url.hasQuery, isFalse);
+      expect(request.bodyBytes, isEmpty);
+
+      expect(find.text(l10n.memberBlocked), findsOneWidget);
+      expect(l10n.memberBlocked, contains('Blocked members'));
+      expect(find.text('Bea Ito'), findsNothing);
+      expect(find.text('Evenings, mostly.'), findsNothing);
+      expect(find.byType(ProfileHeader), findsNothing);
+      expect(find.byType(ProfileAvatar), findsNothing);
+      expect(find.byType(LanguageChip), findsNothing);
+      expect(find.text(l10n.languagesHeading), findsNothing);
+      expect(find.byType(FormErrorBanner), findsNothing);
+      expect(find.byType(LinearProgressIndicator), findsNothing);
+      // Nothing left to do here but leave.
+      expect(_actions(tester), isEmpty);
+      expect(_controls, findsNothing);
+      expect(app.location(tester), '/members/$_id');
+      // Nothing was read again, and nothing else written.
+      expect(server.count(_profilePath), 1);
+      expect(server.requests.where((r) => r.method != 'GET'), hasLength(1));
+
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.byType(HomeScreen), findsOneWidget);
+    });
+
+    testWidgets('a picture answered after the block is not shown', (
+      tester,
+    ) async {
+      final picture = Completer<http.Response>();
+      final server = shown()
+        ..once('GET', _avatarPath, (_) => picture.future)
+        ..once('PUT', _blockPath, (_) => noContent());
+      await _openMember(tester, server, settle: false);
+      await tester.pump();
+
+      await _chooseBlock(tester);
+      await tester.tap(_confirmBlock);
+      await tester.pumpAndSettle();
+      expect(find.text(l10n.memberBlocked), findsOneWidget);
+
+      picture.complete(imageResponse(testPicture));
+      await tester.pumpAndSettle();
+      expect(find.byType(ProfileAvatar), findsNothing);
+      expect(find.text(l10n.memberBlocked), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
+    group('a failed block leaves the profile, with its message, and can be '
+        'tried again', () {
+      final cases = <String, (Responder, String)>{
+        'network': (networkFailure, l10n.errorNetwork),
+        '429': (
+          (_) => errorResponse(
+            429,
+            'rate_limited',
+            headers: {'retry-after': '10'},
+          ),
+          'Too many attempts. Try again in 10 seconds.',
+        ),
+        '503': (
+          (_) => errorResponse(
+            503,
+            'service_unavailable',
+            headers: {'retry-after': '5'},
+          ),
+          'VocaTogether is busy right now. Try again in 5 seconds.',
+        ),
+        '500': (
+          (_) => errorResponse(500, 'internal_error'),
+          l10n.errorUnexpected,
+        ),
+        'a 200 where a 204 is due': (
+          (_) => jsonResponse(200, {'blocked': true}),
+          l10n.errorUnexpected,
+        ),
+        // The app never sends its own id; the code has no text of its own.
+        'member: self': (
+          (_) => fieldError('member', 'self'),
+          l10n.errorCheckInput,
+        ),
+        // Whatever a body says, the text shown is the app's own.
+        'a body with text of its own': (
+          (_) => http.Response(
+            '{"error":{"code":"internal_error","message":"SERVERTEXT"}}',
+            500,
+            headers: {'content-type': 'application/json'},
+          ),
+          l10n.errorUnexpected,
+        ),
+        'too many blocked members': (
+          (_) => fieldError('blocks', 'too_many'),
+          l10n.errorBlocksTooMany,
+        ),
+      };
+      cases.forEach((name, c) {
+        final (responder, message) = c;
+        testWidgets(name, (tester) async {
+          final server = shown()
+            ..once('PUT', _blockPath, responder)
+            ..once('PUT', _blockPath, (_) => noContent());
+          final handle = tester.ensureSemantics();
+          final app = await _openMember(tester, server);
+
+          await _chooseBlock(tester);
+          await tester.tap(_confirmBlock);
+          await tester.pumpAndSettle();
+
+          expect(find.text(message), findsOneWidget);
+          expect(find.textContaining('SERVERTEXT'), findsNothing);
+          expect(
+            tester.getSemantics(find.byType(FormErrorBanner)),
+            isSemantics(
+              isLiveRegion: true,
+              label: '${l10n.errorLabel}\n$message',
+            ),
+          );
+          expectProfile(tester);
+          expect(_menuEnabled(tester), isTrue);
+          expect(find.byType(LinearProgressIndicator), findsNothing);
+          expect(server.count(_blockPath), 1);
+          expect(app.session.status, SessionStatus.signedIn);
+          expect(app.location(tester), '/members/$_id');
+
+          // Again: the message goes with the new attempt.
+          await _chooseBlock(tester);
+          await tester.tap(_confirmBlock);
+          await tester.pumpAndSettle();
+          expect(find.byType(FormErrorBanner), findsNothing);
+          expect(find.text(l10n.memberBlocked), findsOneWidget);
+          expect(server.count(_blockPath), 2);
+          handle.dispose();
+        });
+      });
+    });
+
+    testWidgets('a block that hasn\'t answered: the menu is disabled, back '
+        'does nothing, and it ends as a timeout', (tester) async {
+      final server = shown()..once('PUT', _blockPath, neverAnswers);
+      final handle = tester.ensureSemantics();
+      final app = await _openMember(tester, server);
+
+      await _chooseBlock(tester);
+      await tester.tap(_confirmBlock);
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(find.text(l10n.memberBlockTitle), findsNothing);
+      expect(find.bySemanticsLabel(l10n.memberBlockProgress), findsOneWidget);
+      expect(_menuEnabled(tester), isFalse);
+      // The profile until the answer.
+      expectProfile(tester);
+
+      // The menu doesn't open, and neither back leaves.
+      await tester.tap(_menu, warnIfMissed: false);
+      await tester.pump(const Duration(seconds: 1));
+      expect(_menuItems, findsNothing);
+      await tester.pageBack();
+      await tester.pump(const Duration(seconds: 1));
+      expect(_screen, findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pump(const Duration(seconds: 1));
+      expect(_screen, findsOneWidget);
+      expect(app.location(tester), '/members/$_id');
+      expect(server.count(_blockPath), 1);
+
+      await tester.pump(const Duration(seconds: 16));
+      await tester.pumpAndSettle();
+      expect(find.text(l10n.errorTimeout), findsOneWidget);
+      expect(find.bySemanticsLabel(l10n.memberBlockProgress), findsNothing);
+      expectProfile(tester);
+      expect(_menuEnabled(tester), isTrue);
+      expect(server.count(_blockPath), 1);
+
+      // And leaving works again.
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.byType(HomeScreen), findsOneWidget);
+      handle.dispose();
+    });
+
+    testWidgets('confirming twice sends one block', (tester) async {
+      final reply = Completer<http.Response>();
+      final server = shown()..once('PUT', _blockPath, (_) => reply.future);
+      await _openMember(tester, server);
+
+      await _chooseBlock(tester);
+      await tester.tap(_confirmBlock);
+      await tester.pump();
+      // The dialog is on its way out and the menu is disabled.
+      await tester.tap(_confirmBlock, warnIfMissed: false);
+      await tester.tap(_menu, warnIfMissed: false);
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.tap(_menu, warnIfMissed: false);
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(_screen, findsOneWidget);
+      expect(_menuItems, findsNothing);
+      expect(find.text(l10n.memberBlockTitle), findsNothing);
+      expect(server.count(_blockPath), 1);
+
+      reply.complete(noContent());
+      await tester.pumpAndSettle();
+      expect(find.text(l10n.memberBlocked), findsOneWidget);
+      expect(server.count(_blockPath), 1);
+    });
+
+    testWidgets('a block answered after leaving for log in is dropped', (
+      tester,
+    ) async {
+      final reply = Completer<http.Response>();
+      final server = shown()..once('PUT', _blockPath, (_) => reply.future);
+      final app = await _openMember(tester, server);
+
+      await _chooseBlock(tester);
+      await tester.tap(_confirmBlock);
+      await tester.pump();
+      await app.session.logout();
+      await tester.pumpAndSettle();
+      expect(find.byType(LoginScreen), findsOneWidget);
+
+      reply.complete(errorResponse(500, 'internal_error'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.byType(FormErrorBanner), findsNothing);
+      expect(app.location(tester), '/login');
+    });
+
+    testWidgets('the session ending with the confirmation open shows no '
+        'error, and nothing is sent', (tester) async {
+      final server = shown();
+      final app = await _openMember(tester, server);
+
+      await _chooseBlock(tester);
+      await app.session.logout();
+      await tester.pumpAndSettle();
+
+      expect(find.byType(LoginScreen), findsOneWidget);
+      expect(_screen, findsNothing);
+      expect(find.text(l10n.memberBlockTitle), findsNothing);
+      expect(find.byType(FormErrorBanner), findsNothing);
+      expect(app.location(tester), '/login');
+      expect(server.count(_blockPath), 0);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('a block refused because the session ended shows no error', (
+      tester,
+    ) async {
+      final server = shown()
+        ..once(
+          'PUT',
+          _blockPath,
+          (_) => errorResponse(401, 'invalid_access_token'),
+        )
+        ..once(
+          'POST',
+          ApiPaths.refresh,
+          (_) => errorResponse(401, 'invalid_refresh_token'),
+        );
+      final app = await _openMember(tester, server);
+
+      await _chooseBlock(tester);
+      await tester.tap(_confirmBlock);
+      await tester.pumpAndSettle();
+
+      expect(app.session.status, SessionStatus.signedOut);
+      expect(find.byType(LoginScreen), findsOneWidget);
+      expect(_screen, findsNothing);
+      expect(find.byType(FormErrorBanner), findsNothing);
+      expect(app.location(tester), '/login');
+      expect(server.count(_blockPath), 1);
+      expect(tester.takeException(), isNull);
     });
   });
 

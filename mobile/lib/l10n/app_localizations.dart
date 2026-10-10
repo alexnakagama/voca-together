@@ -628,6 +628,60 @@ abstract class AppLocalizations {
   /// **'No languages added yet.'**
   String get memberLanguagesEmpty;
 
+  /// Tooltip and accessibility label of the menu button in the app bar of another member’s public profile. The menu holds “Report” and “Block”.
+  ///
+  /// In en, this message translates to:
+  /// **'More options'**
+  String get memberMenuTooltip;
+
+  /// Menu item on another member’s public profile that opens the form to report that member. Separate from “Block”.
+  ///
+  /// In en, this message translates to:
+  /// **'Report'**
+  String get memberMenuReport;
+
+  /// Menu item on another member’s public profile that blocks that member, after a confirmation. Separate from “Report”.
+  ///
+  /// In en, this message translates to:
+  /// **'Block'**
+  String get memberMenuBlock;
+
+  /// Title of the dialog that asks the user to confirm blocking the member whose profile they are looking at.
+  ///
+  /// In en, this message translates to:
+  /// **'Block this member?'**
+  String get memberBlockTitle;
+
+  /// Text of the dialog that asks the user to confirm blocking a member. Says that neither member will see the other’s profile and that the other member is not told.
+  ///
+  /// In en, this message translates to:
+  /// **'You won’t see each other’s profiles. They won’t be told that you blocked them.'**
+  String get memberBlockMessage;
+
+  /// Dialog button that blocks the member.
+  ///
+  /// In en, this message translates to:
+  /// **'Block'**
+  String get memberBlockConfirm;
+
+  /// Dialog button that closes the dialog without blocking the member.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel'**
+  String get memberBlockCancel;
+
+  /// Accessibility label of the progress indicator shown on a member’s public profile while the block is being sent.
+  ///
+  /// In en, this message translates to:
+  /// **'Blocking the member'**
+  String get memberBlockProgress;
+
+  /// Text shown in place of a member’s public profile once the user has blocked them. Says the member is blocked and names the “Blocked members” screen as the place to unblock them. Must not show the member’s name.
+  ///
+  /// In en, this message translates to:
+  /// **'You’ve blocked this member. You can unblock them from “Blocked members”.'**
+  String get memberBlocked;
+
   /// Notice on the profile form saying which information other members will see.
   ///
   /// In en, this message translates to:
