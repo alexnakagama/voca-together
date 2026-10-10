@@ -127,11 +127,16 @@ func blockBetween(ctx context.Context, pool *pgxpool.Pool, a, b string) (blocked
 	return blocked, nil
 }
 
-// listBlocked returns the users blockerID has blocked, newest first. The id
+// listBlocked returns the users blockerID has blocked, newest first, without
+// those who have blocked blockerID themselves: to blockerID such a member
+// does not exist, and a list that named them would say otherwise. The id
 // only settles the order of two blocks stored at the same instant.
 func listBlocked(ctx context.Context, pool *pgxpool.Pool, blockerID string) ([]string, error) {
 	rows, err := pool.Query(ctx,
-		`SELECT blocked_id::text FROM blocks WHERE blocker_id = $1 ORDER BY created_at DESC, blocked_id`, blockerID)
+		`SELECT b.blocked_id::text FROM blocks b
+		 WHERE b.blocker_id = $1
+		   AND NOT EXISTS (SELECT 1 FROM blocks r WHERE r.blocker_id = b.blocked_id AND r.blocked_id = b.blocker_id)
+		 ORDER BY b.created_at DESC, b.blocked_id`, blockerID)
 	if err != nil {
 		return nil, fmt.Errorf("list blocked: %w", err)
 	}

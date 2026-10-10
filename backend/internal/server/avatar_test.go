@@ -680,7 +680,7 @@ func TestMemberAvatarRouteIsReadOnly(t *testing.T) {
 
 // The mux answers a wrong method before authentication runs, with no service.
 func TestAvatarRoutesAllowOnlyTheirMethods(t *testing.T) {
-	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, nil, Options{})
+	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, Options{})
 	for path, methods := range map[string][]string{
 		avatarPath: {http.MethodPost, http.MethodPatch},
 		membersPath + unknownMemberID + "/avatar": {http.MethodPut, http.MethodPost, http.MethodPatch, http.MethodDelete},
@@ -821,7 +821,7 @@ func TestAvatarHandlersWithoutMiddlewareFailClosed(t *testing.T) {
 		"get":    {http.MethodGet, handleGetAvatar(logger, svc)},
 		"put":    {http.MethodPut, handlePutAvatar(logger, svc)},
 		"delete": {http.MethodDelete, handleDeleteAvatar(logger, svc)},
-		"member": {http.MethodGet, handleGetMemberAvatar(logger, profile.NewService(api.pool, logger), svc)},
+		"member": {http.MethodGet, handleGetMemberAvatar(logger, profile.NewService(api.pool, logger), svc, api.safetyService())},
 	} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(tc.method, avatarPath, bytes.NewReader(pngUpload(t, 64, 64, avatarBlue)))
@@ -1108,7 +1108,7 @@ func TestAvatarRoutesWithAnExpiredDeadlineAreUnavailable(t *testing.T) {
 		"get":    {http.MethodGet, handleGetAvatar(logger, svc)},
 		"put":    {http.MethodPut, handlePutAvatar(logger, svc)},
 		"delete": {http.MethodDelete, handleDeleteAvatar(logger, svc)},
-		"member": {http.MethodGet, handleGetMemberAvatar(logger, profile.NewService(api.pool, logger), svc)},
+		"member": {http.MethodGet, handleGetMemberAvatar(logger, profile.NewService(api.pool, logger), svc, api.safetyService())},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
@@ -1228,5 +1228,81 @@ func TestAvatarInternalErrorIsOpaque(t *testing.T) {
 		if strings.Contains(logs, private) {
 			t.Errorf("logs contain %q: %s", private, logs)
 		}
+	}
+}
+
+// ---- A member's picture is not served across a block ----
+
+// While a block exists, made by either of the two, each gets for the other's
+// picture the answer of an identifier that names nobody, whether the member
+// has a picture or not: avatar_not_found would say the profile exists.
+func TestABlockHidesBothMembersPicturesFromEachOther(t *testing.T) {
+	api := newTestAPI(t)
+	ana, anaID := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+	ben, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "") // no picture
+	cho, _ := api.memberWithProfile(t, "cho@example.com", "Cho", "")
+	anas := requireImage(t, api.putAvatar(ana.AccessToken, pngUpload(t, 64, 64, avatarRed)))
+	if got := requireImage(t, api.getMemberAvatar(ben.AccessToken, anaID)); !bytes.Equal(got, anas) {
+		t.Fatal("ben does not read ana's picture before the block")
+	}
+	requireLoginResponse(t, api.getMemberAvatar(ana.AccessToken, benID), http.StatusNotFound, avatarNotFound)
+
+	hidden := func(t *testing.T) {
+		t.Helper()
+		for reader, tc := range map[string]struct{ token, id string }{
+			"a member with a picture, read by the other": {ben.AccessToken, anaID},
+			"a member without one, read by the other":    {ana.AccessToken, benID},
+		} {
+			unknown := api.getMemberAvatar(tc.token, unknownMemberID)
+			requireMemberNotFound(t, unknown)
+			rec := api.getMemberAvatar(tc.token, tc.id)
+			requireMemberNotFound(t, rec)
+			requireSameResponse(t, reader, rec, unknown)
+			requireSameResponse(t, reader+", against the profile route's miss", rec, api.getMember(tc.token, unknownMemberID))
+			if bytes.Contains(rec.Body.Bytes(), anas[:16]) {
+				t.Errorf("%s: the answer holds picture bytes", reader)
+			}
+		}
+		// A third member and the owners themselves are unaffected.
+		if got := requireImage(t, api.getMemberAvatar(cho.AccessToken, anaID)); !bytes.Equal(got, anas) {
+			t.Error("a third member does not read ana's picture")
+		}
+		requireLoginResponse(t, api.getMemberAvatar(cho.AccessToken, benID), http.StatusNotFound, avatarNotFound)
+		if got := requireImage(t, api.getMemberAvatar(ana.AccessToken, anaID)); !bytes.Equal(got, anas) {
+			t.Error("ana does not read her own picture by her public id")
+		}
+		requireImage(t, api.getAvatar(ana.AccessToken))
+		requireLoginResponse(t, api.getMemberAvatar(ben.AccessToken, benID), http.StatusNotFound, avatarNotFound)
+		// The profile says nothing of a picture either: it is the same miss.
+		requireMemberNotFound(t, api.getMember(ben.AccessToken, anaID))
+	}
+	shown := func(t *testing.T) {
+		t.Helper()
+		if got := requireImage(t, api.getMemberAvatar(ben.AccessToken, anaID)); !bytes.Equal(got, anas) {
+			t.Error("ben does not read ana's picture")
+		}
+		requireLoginResponse(t, api.getMemberAvatar(ana.AccessToken, benID), http.StatusNotFound, avatarNotFound)
+		if !hasAvatar(t, api.getMember(ben.AccessToken, anaID)) {
+			t.Error("ana's profile does not say she has a picture")
+		}
+	}
+
+	// The member with the picture blocks; then the one without; then both.
+	requireBlockDone(t, api.putBlock(ana.AccessToken, benID))
+	t.Run("blocked by the member with the picture", hidden)
+	requireBlockDone(t, api.deleteBlock(ana.AccessToken, benID))
+	t.Run("unblocked", shown)
+
+	requireBlockDone(t, api.putBlock(ben.AccessToken, anaID))
+	t.Run("blocked by the member without one", hidden)
+	requireBlockDone(t, api.putBlock(ana.AccessToken, benID))
+	requireBlockDone(t, api.deleteBlock(ben.AccessToken, anaID))
+	t.Run("one of two blocks removed", hidden)
+	requireBlockDone(t, api.deleteBlock(ana.AccessToken, benID))
+	t.Run("no block left", shown)
+
+	// Nothing of either picture changed.
+	if n := api.avatarCount(t); n != 1 {
+		t.Errorf("avatars = %d, want 1", n)
 	}
 }

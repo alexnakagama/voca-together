@@ -19,6 +19,7 @@ import (
 	"vocatogether/backend/internal/language"
 	"vocatogether/backend/internal/profile"
 	"vocatogether/backend/internal/ratelimit"
+	"vocatogether/backend/internal/safety"
 )
 
 const (
@@ -210,7 +211,7 @@ func memberHandlerRequest(id, readerID string) *http.Request {
 func TestGetMemberProfileDoesNotQueryForAMalformedID(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	h := handleGetMemberProfile(logger, profile.NewService(nil, logger), language.NewService(nil, logger),
-		avatar.NewService(nil, logger))
+		avatar.NewService(nil, logger), safety.NewService(nil, logger))
 
 	const lettered = "abcdefab-cdef-4bcd-8fab-cdefabcdefab"
 	for _, id := range []string{"", "not-an-id", strings.ToUpper(lettered), lettered + " ", "{" + lettered + "}", lettered[:35]} {
@@ -363,7 +364,7 @@ func TestMemberProfileRouteIsReadOnly(t *testing.T) {
 
 // The mux answers a wrong method before authentication runs, with no service.
 func TestMemberProfileRouteAllowsOnlyGet(t *testing.T) {
-	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, nil, Options{})
+	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, Options{})
 	for _, method := range []string{http.MethodPut, http.MethodPost, http.MethodPatch, http.MethodDelete} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(method, membersPath+unknownMemberID, nil))
@@ -379,7 +380,8 @@ func TestMemberProfileHandlerWithoutMiddlewareFailsClosed(t *testing.T) {
 	api := newTestAPI(t)
 	_, id := api.memberWithProfile(t, "ana@example.com", "Ana", "")
 	logger := slog.New(slog.DiscardHandler)
-	h := handleGetMemberProfile(logger, profile.NewService(api.pool, logger), api.languageService(), api.avatarService())
+	h := handleGetMemberProfile(logger, profile.NewService(api.pool, logger), api.languageService(), api.avatarService(),
+		api.safetyService())
 
 	for _, target := range []string{id, unknownMemberID, "not-an-id"} {
 		rec := httptest.NewRecorder()
@@ -555,5 +557,133 @@ func TestGetMemberProfileInternalErrorIsOpaque(t *testing.T) {
 		if strings.Contains(logs, private) {
 			t.Errorf("logs contain %q: %s", private, logs)
 		}
+	}
+}
+
+// ---- A block hides both members from each other ----
+
+// While a block exists, made by either of the two, each gets for the other's
+// profile the very answer of an identifier that names nobody: same status,
+// body and headers. Nobody else is affected, and neither is one's own
+// profile.
+func TestABlockHidesBothMembersProfilesFromEachOther(t *testing.T) {
+	api := newTestAPI(t)
+	ana, anaID := api.memberWithProfile(t, "ana@example.com", "Ana", "Ana's bio")
+	ben, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+	cho, choID := api.memberWithProfile(t, "cho@example.com", "Cho", "")
+	anas := memberJSON(t, anaID, "Ana", "Ana's bio", noLanguages)
+	bens := memberJSON(t, benID, "Ben", "", noLanguages)
+	requireMember(t, api.getMember(ben.AccessToken, anaID), anas)
+	requireMember(t, api.getMember(ana.AccessToken, benID), bens)
+
+	requireBlockDone(t, api.putBlock(ana.AccessToken, benID))
+
+	for reader, tc := range map[string]struct{ token, id string }{
+		"the blocked member reading the blocker": {ben.AccessToken, anaID},
+		"the blocker reading the blocked member": {ana.AccessToken, benID},
+	} {
+		unknown := api.getMember(tc.token, unknownMemberID)
+		requireMemberNotFound(t, unknown)
+		rec := api.getMember(tc.token, tc.id)
+		requireMemberNotFound(t, rec)
+		requireSameResponse(t, reader, rec, unknown)
+		// A query string changes nothing.
+		requireSameResponse(t, reader+" with a query", api.getMember(tc.token, tc.id+"?id="+choID), unknown)
+	}
+
+	// A third member reads both, and both read the third.
+	requireMember(t, api.getMember(cho.AccessToken, anaID), anas)
+	requireMember(t, api.getMember(cho.AccessToken, benID), bens)
+	requireMember(t, api.getMember(ana.AccessToken, choID), memberJSON(t, choID, "Cho", "", noLanguages))
+	requireMember(t, api.getMember(ben.AccessToken, choID), memberJSON(t, choID, "Cho", "", noLanguages))
+	// One's own profile, by its public id and by the owner's route.
+	requireMember(t, api.getMember(ana.AccessToken, anaID), anas)
+	requireMember(t, api.getMember(ben.AccessToken, benID), bens)
+	requireProfile(t, api.getProfile(ana.AccessToken))
+	requireProfile(t, api.getProfile(ben.AccessToken))
+
+	// Unblocking restores the read, for both.
+	requireBlockDone(t, api.deleteBlock(ana.AccessToken, benID))
+	requireMember(t, api.getMember(ben.AccessToken, anaID), anas)
+	requireMember(t, api.getMember(ana.AccessToken, benID), bens)
+}
+
+// With a block in each direction, removing one leaves the two hidden from
+// each other: only when no block is left can they read each other again.
+func TestAMemberStaysHiddenWhileTheOtherDirectionsBlockRemains(t *testing.T) {
+	api := newTestAPI(t)
+	ana, anaID := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+	ben, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+	requireBlockDone(t, api.putBlock(ana.AccessToken, benID))
+	requireBlockDone(t, api.putBlock(ben.AccessToken, anaID))
+	requireMemberNotFound(t, api.getMember(ana.AccessToken, benID))
+	requireMemberNotFound(t, api.getMember(ben.AccessToken, anaID))
+
+	requireBlockDone(t, api.deleteBlock(ana.AccessToken, benID))
+	requireMemberNotFound(t, api.getMember(ana.AccessToken, benID))
+	requireMemberNotFound(t, api.getMember(ben.AccessToken, anaID))
+
+	requireBlockDone(t, api.deleteBlock(ben.AccessToken, anaID))
+	requireMember(t, api.getMember(ana.AccessToken, benID), memberJSON(t, benID, "Ben", "", noLanguages))
+	requireMember(t, api.getMember(ben.AccessToken, anaID), memberJSON(t, anaID, "Ana", "", noLanguages))
+}
+
+// A member who has blocked others and is blocked by others still reads their
+// own profile by its public id: nobody is hidden from themselves.
+func TestABlockDoesNotHideOnesOwnProfile(t *testing.T) {
+	api := newTestAPI(t)
+	ana, anaID := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+	ben, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+	cho, choID := api.memberWithProfile(t, "cho@example.com", "Cho", "")
+	requireBlockDone(t, api.putBlock(ana.AccessToken, benID))
+	requireBlockDone(t, api.putBlock(cho.AccessToken, anaID))
+	requireBlockDone(t, api.putBlock(ben.AccessToken, choID))
+
+	requireMember(t, api.getMember(ana.AccessToken, anaID), memberJSON(t, anaID, "Ana", "", noLanguages))
+	requireMember(t, api.getMember(ben.AccessToken, benID), memberJSON(t, benID, "Ben", "", noLanguages))
+	requireMember(t, api.getMember(cho.AccessToken, choID), memberJSON(t, choID, "Cho", "", noLanguages))
+}
+
+// A read hidden by a block costs a token like any other miss, on both
+// routes, which share the allowance.
+func TestMemberReadLimitCountsReadsHiddenByABlock(t *testing.T) {
+	for route, read := range map[string]func(api testAPI, token, id string) *httptest.ResponseRecorder{
+		"the profile": func(api testAPI, token, id string) *httptest.ResponseRecorder { return api.getMember(token, id) },
+		"the picture": func(api testAPI, token, id string) *httptest.ResponseRecorder { return api.getMemberAvatar(token, id) },
+	} {
+		t.Run(route, func(t *testing.T) {
+			api := newTestAPIWith(t, Options{UserLimits: UserLimits{MemberRead: tightUserLimiter()}})
+			ana, anaID := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+			ben, _ := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+			requireBlockDone(t, api.putBlock(ben.AccessToken, anaID))
+			requireBlockDone(t, api.putBlock(ana.AccessToken, unknownMemberID)) // the block limit is not this one
+
+			requireMemberNotFound(t, read(api, ben.AccessToken, anaID))
+			requireLoginResponse(t, api.getMember(ben.AccessToken, anaID), http.StatusTooManyRequests, rateLimited)
+			requireLoginResponse(t, api.getMemberAvatar(ben.AccessToken, anaID), http.StatusTooManyRequests, rateLimited)
+		})
+	}
+}
+
+// A read hidden by a block writes no log line at all, like every member
+// read: nothing can say that a block exists, or between whom.
+func TestReadsHiddenByABlockAreNotLogged(t *testing.T) {
+	api := newTestAPI(t)
+	ana, anaID := api.memberWithProfile(t, "ana@example.com", "MARKERNAME", "MARKERBIO")
+	ben, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+	requireBlockDone(t, api.putBlock(ana.AccessToken, benID))
+	api.svc.Wait()
+	before := api.logs.String()
+
+	for range 2 {
+		requireMemberNotFound(t, api.getMember(ben.AccessToken, anaID))
+		requireMemberNotFound(t, api.getMember(ana.AccessToken, benID))
+		requireMemberNotFound(t, api.getMemberAvatar(ben.AccessToken, anaID))
+		requireMemberNotFound(t, api.getMemberAvatar(ana.AccessToken, benID))
+	}
+
+	api.svc.Wait()
+	if added := strings.TrimPrefix(api.logs.String(), before); added != "" {
+		t.Errorf("reads hidden by a block were logged: %s", added)
 	}
 }

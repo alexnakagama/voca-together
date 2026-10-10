@@ -47,13 +47,19 @@ member are in `backend.md`; the backend rules of the profile picture are in `ava
   trimmed or lower-cased. `profile.Service.Public` decides what an id names and makes no query for a malformed
   one; handlers pass the path value as it came and don't parse it themselves.
 - `GET /v1/profiles/{id}` is for signed-in members only. Everything that is not the id of a saved profile is the
-  same 404 `profile_not_found`: unknown, malformed, a `users.id`, a member with no profile.
+  same 404 `profile_not_found`: unknown, malformed, a `users.id`, a member with no profile. So is a profile with
+  a block between its owner and the reader, in either direction (033): the handler resolves the id through
+  `memberFor`, never `Public` alone, and a member reading their own id is never hidden.
+- `profile.Service.PublicByUsers` returns the public profiles of several users by **internal** user id, for
+  `server` to compose a list with (the blocked members). Its ids come from the server's own data, never from a
+  request, and it returns nothing for a user without a profile.
 - What is public is exactly `memberProfileResponse` (`id`, `display_name`, `bio`, `has_avatar`, `languages`). Keep
   it a type of its own: never reuse the owner's `profileResponse`, and never add an email, an account id, a
   timestamp or anything about sign-in or sessions. `has_avatar` comes from `avatar.Service.Exists`, read with the
   owner's `UserID` like the languages.
 - Never log a public id, for the owner's requests or a reader's. A member read logs nothing.
-- **Gate:** no feature that lists, suggests or searches members ships before reporting and blocking exist.
+- **Gate:** no feature that lists, suggests or searches members ships, and no public release, until the three
+  conditions of 033 hold (`safety.md`, "The gate"). Blocking alone does not lift it.
 
 ## Client: the page and the edit screen (032, 028)
 

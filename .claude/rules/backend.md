@@ -6,41 +6,50 @@ paths:
 # Backend rules
 
 The package map and startup order are in `docs/architecture.md`. Rules for one domain load with that domain's
-files: `auth.md`, `google-sign-in.md`, `profile.md`, `languages.md`, `avatar.md`, and `config.md` for
-configuration.
+files: `auth.md`, `google-sign-in.md`, `profile.md`, `languages.md`, `avatar.md`, `safety.md`, and `config.md`
+for configuration.
 
 ## Packages
 
 - `internal/server` is the HTTP layer only. Protected routes are wrapped **individually** in `server.New` with
   `requireAccessToken`. Handlers read `auth.Identity` from context via `identityFrom` and pass `UserID` explicitly to
   services; a handler mounted without the middleware must fail closed.
-- Domain packages (`auth`, `profile`, `language`, `avatar`) never read the request context or configuration. Their
-  errors are typed and mapped to HTTP in `server` (`writeServiceError`). `profile`, `language` and `avatar` import
-  neither `auth`, nor `server`, nor each other.
+- Domain packages (`auth`, `profile`, `language`, `avatar`, `safety`) never read the request context or
+  configuration. Their errors are typed and mapped to HTTP in `server` (`writeServiceError`). `profile`,
+  `language`, `avatar` and `safety` import neither `auth`, nor `server`, nor each other.
 - `internal/ratelimit` limits are per process; see decision 018 before scaling out.
 
-## A member's own resource (the pattern of decisions 027, 029 and 031)
+## A member's own resource (the pattern of decisions 027, 029, 031 and 033)
 
-- It is selected only by the authenticated `UserID` the handler passes: never add an id to its routes, query or
-  bodies. Request and response structs list their fields explicitly, so anything else in a body is an unknown field.
+- It is selected only by the authenticated `UserID` the handler passes: nothing in a route, a query or a body
+  ever says whose it is. Request and response structs list their fields explicitly, so anything else in a body is
+  an unknown field.
+- A write under `/v1/me` may name **another member as its target**, by public id in the path, when the resource
+  is something the caller does about that member (a block, 033). The resource is still the caller's; the id is
+  resolved with `profile.Service.Public` and the request changes nothing that belongs to the member named. The
+  rules for such a route, the 204 for an id that names nobody among them, are in `safety.md`.
 - Never log what a member wrote or chose. A save logs the `user_id` and nothing else.
 - A save is a full replace and idempotent: saving what is already stored writes nothing and logs nothing. Clients
   rely on it, because they resend a save after a 401 and retry after a 503.
 - A protected route that writes gets a per-user limit (`UserLimits`, `limitByUser`) inside `authn`, so only the
   user's own authenticated requests spend it. Each resource has its own bucket (`ProfileWrite`, `LanguagesWrite`,
-  `AvatarWrite`). `serverOptions` in `main` must wire every one, `MemberRead` included: a limit left out disables
-  itself silently.
+  `AvatarWrite`, `BlockWrite`). `serverOptions` in `main` must wire every one, `MemberRead` included: a limit left
+  out disables itself silently.
 
-## Reading another member (the pattern of decision 031)
+## Reading another member (the pattern of decisions 031 and 033)
 
-- A route that names a member takes the member's **public id** in the path and is a `GET`, nothing else. Every
+- A route under `/v1/profiles` takes the member's **public id** in the path and is a `GET`, nothing else. Every
   write stays under `/v1/me/…`, selected by the session: ownership is a property of the routes, not a check.
-- The handler resolves the id with `profile.Service.Public`, which returns the owner's internal `UserID`, and reads
-  the owner's other public data with that `UserID` through the owning package (`language.Service.Get`,
+- The handler resolves the id with `memberFor` (`server/members.go`): `profile.Service.Public`, which returns the
+  owner's internal `UserID`, and then `safety.Blocked` between the reader and the owner. It reads the owner's
+  other public data with that `UserID` through the owning package (`language.Service.Get`,
   `avatar.Service.Exists` and `Get`). The `UserID` never reaches a response or a log. The domain packages still
   don't import each other: `server` composes.
-- A member who has no profile has no public id, so nothing about them is reachable. Not found, malformed and
-  unavailable are one 404 `profile_not_found`, identical in body and headers.
+- **Whether a member may be read depends on the profile and on blocks, never on the profile alone.** Any new
+  route that returns something of another member goes through `memberFor`, or asks `safety.Blocked` itself
+  (`safety.md`).
+- A member who has no profile has no public id, so nothing about them is reachable. Not found, malformed,
+  unavailable and hidden by a block are one 404 `profile_not_found`, identical in body and headers.
 - The response is its own struct listing the public fields, never an owner's response with fields removed.
 - These reads share the per-user limit `UserLimits.MemberRead`, keyed by the reader, inside `authn`. A member's own
   GETs stay unlimited.

@@ -19,6 +19,7 @@ import (
 	"vocatogether/backend/internal/language"
 	"vocatogether/backend/internal/profile"
 	"vocatogether/backend/internal/ratelimit"
+	"vocatogether/backend/internal/safety"
 	"vocatogether/backend/internal/testutil"
 )
 
@@ -81,7 +82,7 @@ func TestIPLimitedRoutes(t *testing.T) {
 		t.Run(tc.path, func(t *testing.T) {
 			var limits IPLimits
 			*tc.limiter(&limits) = tightLimiter()
-			h := New(slog.New(slog.DiscardHandler), nil, nil, nil, nil, Options{IPLimits: limits})
+			h := New(slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, Options{IPLimits: limits})
 
 			// The first request passes the limiter; malformed JSON is then
 			// rejected by the handler before any service call.
@@ -99,13 +100,13 @@ func TestIPLimitedRoutes(t *testing.T) {
 
 // Password login and Google sign-in share one sign-in bucket per IP.
 func TestLoginAndGoogleShareIPBucket(t *testing.T) {
-	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, nil, Options{IPLimits: IPLimits{Login: tightLimiter()}})
+	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, Options{IPLimits: IPLimits{Login: tightLimiter()}})
 	sendFrom(h, "198.51.100.1", http.MethodPost, loginPath, "application/json", "{")
 	requireRateLimitedResponse(t, sendFrom(h, "198.51.100.1", http.MethodPost, googlePath, "application/json", "{"))
 }
 
 func TestResendAndForgotShareIPBucket(t *testing.T) {
-	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, nil, Options{IPLimits: IPLimits{Email: tightLimiter()}})
+	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, Options{IPLimits: IPLimits{Email: tightLimiter()}})
 	sendFrom(h, "198.51.100.1", http.MethodPost, resendPath, "application/json", "{")
 	requireRateLimitedResponse(t, sendFrom(h, "198.51.100.1", http.MethodPost, forgotPath, "application/json", "{"))
 }
@@ -113,7 +114,7 @@ func TestResendAndForgotShareIPBucket(t *testing.T) {
 // The JSON reset endpoint and the emailed page's form share one bucket; the
 // form gets the page version of the 429.
 func TestResetFormSharesTokenBucketAndGetsAPage(t *testing.T) {
-	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, nil, Options{IPLimits: IPLimits{Token: tightLimiter()}})
+	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, Options{IPLimits: IPLimits{Token: tightLimiter()}})
 	sendFrom(h, "198.51.100.1", http.MethodPost, resetPath, "application/json", "{")
 
 	rec := sendFrom(h, "198.51.100.1", http.MethodPost, resetEmailPath, "application/x-www-form-urlencoded", "")
@@ -126,7 +127,7 @@ func TestResetFormSharesTokenBucketAndGetsAPage(t *testing.T) {
 func TestUnlimitedRoutesNeverRateLimit(t *testing.T) {
 	all := IPLimits{Login: tightLimiter(), Register: tightLimiter(), Email: tightLimiter(),
 		Token: tightLimiter(), Refresh: tightLimiter()}
-	h := New(slog.New(slog.DiscardHandler), dbFreeService(), nil, nil, nil, Options{IPLimits: all})
+	h := New(slog.New(slog.DiscardHandler), dbFreeService(), nil, nil, nil, nil, Options{IPLimits: all})
 	for range 5 {
 		for _, r := range []struct{ method, path string }{
 			{http.MethodGet, "/healthz"},
@@ -146,7 +147,7 @@ func TestUnlimitedRoutesNeverRateLimit(t *testing.T) {
 // trusted hop, clients behind the proxy get separate buckets, and a spoofed
 // left-hand entry doesn't buy a fresh one.
 func TestIPLimitsUseTrustedProxyHops(t *testing.T) {
-	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, nil, Options{TrustedProxyHops: 1, IPLimits: IPLimits{Login: tightLimiter()}})
+	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, Options{TrustedProxyHops: 1, IPLimits: IPLimits{Login: tightLimiter()}})
 	send := func(xff string) int {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, loginPath, strings.NewReader("{"))
@@ -198,7 +199,7 @@ func newLimitedTestAPI(t *testing.T) testAPI {
 	base, _ := url.Parse("https://api.example.com")
 	svc := auth.NewService(pool, rec, base, logger, auth.NewAccountLimits(logger), nil)
 	t.Cleanup(svc.Wait)
-	return testAPI{handler: New(logger, svc, profile.NewService(pool, logger), language.NewService(pool, logger), avatar.NewService(pool, logger), Options{}), svc: svc, pool: pool, emails: rec, logs: logs}
+	return testAPI{handler: New(logger, svc, profile.NewService(pool, logger), language.NewService(pool, logger), avatar.NewService(pool, logger), safety.NewService(pool, logger), Options{}), svc: svc, pool: pool, emails: rec, logs: logs}
 }
 
 // The 429 for a spent per-account limit is byte-for-byte the same for an

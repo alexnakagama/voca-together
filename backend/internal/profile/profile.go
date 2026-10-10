@@ -95,6 +95,27 @@ func (s *Service) Public(ctx context.Context, publicID string) (PublicProfile, e
 	return p, nil
 }
 
+// PublicByUsers returns the public profiles of the users userIDs, in no
+// particular order: one for each of them that has saved a profile, and
+// nothing for one that hasn't, or that no longer exists. No ids is no query.
+//
+// Like Public, the caller is not the owner and decides who may read. Unlike
+// it, the keys are internal user ids, which the caller got from the server's
+// own data and never from a request.
+func (s *Service) PublicByUsers(ctx context.Context, userIDs []string) ([]PublicProfile, error) {
+	if len(userIDs) == 0 {
+		return nil, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("profile: public by users: %w", err)
+	}
+	ps, err := findPublicProfilesByUsers(ctx, s.pool, userIDs)
+	if err != nil {
+		return nil, fmt.Errorf("profile: public by users: %w", err)
+	}
+	return ps, nil
+}
+
 // Save replaces the whole profile of the user userID with in, creating it if
 // there is none, and returns it as stored (normalized). Invalid input returns
 // a *ValidationError and writes nothing; a user that no longer exists returns

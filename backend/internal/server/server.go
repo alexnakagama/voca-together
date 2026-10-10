@@ -11,6 +11,7 @@ import (
 	"vocatogether/backend/internal/language"
 	"vocatogether/backend/internal/profile"
 	"vocatogether/backend/internal/ratelimit"
+	"vocatogether/backend/internal/safety"
 )
 
 // Options configures New. The zero value (used by tests) trusts no proxy,
@@ -26,7 +27,7 @@ type Options struct {
 
 // New returns the API's router. Dependencies are built by the caller (main).
 func New(logger *slog.Logger, authSvc *auth.Service, profileSvc *profile.Service, languageSvc *language.Service,
-	avatarSvc *avatar.Service, opts Options) http.Handler {
+	avatarSvc *avatar.Service, safetySvc *safety.Service, opts Options) http.Handler {
 	lim := opts.IPLimits
 	perIP := func(l *ratelimit.Limiter[netip.Prefix]) func(http.Handler) http.Handler {
 		return limitByIP(l, opts.TrustedProxyHops, writeRateLimited)
@@ -79,15 +80,25 @@ func New(logger *slog.Logger, authSvc *auth.Service, profileSvc *profile.Service
 	mux.Handle("GET /v1/me/avatar", authn(handleGetAvatar(logger, avatarSvc)))
 	mux.Handle("PUT /v1/me/avatar", authn(avatarWrites(handlePutAvatar(logger, avatarSvc))))
 	mux.Handle("DELETE /v1/me/avatar", authn(avatarWrites(handleDeleteAvatar(logger, avatarSvc))))
+	// The caller's own blocks (decision 033). The block is the caller's and
+	// the session decides whose it is, like every write under /v1/me; the id
+	// in the path is another member's public id and names only whom it is
+	// about. Blocking and unblocking share one per-user limit; the list is
+	// the caller's own data and is not limited.
+	blockWrites := limitByUser(logger, opts.UserLimits.BlockWrite)
+	mux.Handle("GET /v1/me/blocks", authn(handleGetBlocks(logger, profileSvc, safetySvc)))
+	mux.Handle("PUT /v1/me/blocks/{id}", authn(blockWrites(handlePutBlock(logger, profileSvc, safetySvc))))
+	mux.Handle("DELETE /v1/me/blocks/{id}", authn(blockWrites(handleDeleteBlock(logger, profileSvc, safetySvc))))
 	// Another member's public profile and picture (decision 031), named by
-	// the profile's public id. A route that names a member is a GET and
+	// the profile's public id. A route under /v1/profiles is a GET and
 	// nothing else: every write stays under /v1/me. Reads are limited per
-	// reader, the two routes sharing one allowance.
+	// reader, the two routes sharing one allowance, and neither is answered
+	// across a block (decision 033).
 	memberReads := limitByUser(logger, opts.UserLimits.MemberRead)
 	mux.Handle("GET /v1/profiles/{id}",
-		authn(memberReads(handleGetMemberProfile(logger, profileSvc, languageSvc, avatarSvc))))
+		authn(memberReads(handleGetMemberProfile(logger, profileSvc, languageSvc, avatarSvc, safetySvc))))
 	mux.Handle("GET /v1/profiles/{id}/avatar",
-		authn(memberReads(handleGetMemberAvatar(logger, profileSvc, avatarSvc))))
+		authn(memberReads(handleGetMemberAvatar(logger, profileSvc, avatarSvc, safetySvc))))
 
 	return securityHeaders(opts.HSTS)(requestDeadline(requestTimeout)(mux))
 }

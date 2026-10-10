@@ -46,6 +46,25 @@ func findPublicProfile(ctx context.Context, pool *pgxpool.Pool, publicID string)
 	return p, true, nil
 }
 
+// findPublicProfilesByUsers returns the profiles of the users userIDs, in no
+// particular order; a user without a profile has no row. One plain read on
+// the primary key, without a lock.
+func findPublicProfilesByUsers(ctx context.Context, pool *pgxpool.Pool, userIDs []string) ([]PublicProfile, error) {
+	rows, err := pool.Query(ctx,
+		`SELECT user_id, public_id, display_name, bio FROM profiles WHERE user_id = ANY($1::uuid[])`, userIDs)
+	if err != nil {
+		return nil, fmt.Errorf("find public profiles: %w", err)
+	}
+	ps, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (p PublicProfile, err error) {
+		err = row.Scan(&p.UserID, &p.PublicID, &p.DisplayName, &p.Bio)
+		return p, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("find public profiles: %w", err)
+	}
+	return ps, nil
+}
+
 // upsertProfile makes in, already normalized, the whole profile of userID
 // and returns the stored row. changed is false when the profile already held
 // exactly that text: nothing is written then, so updated_at keeps meaning

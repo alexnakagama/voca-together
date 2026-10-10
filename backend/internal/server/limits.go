@@ -46,13 +46,14 @@ func NewIPLimits(logger *slog.Logger) IPLimits {
 const maxTrackedUsers = 100_000
 
 // UserLimits are the per-user limiters of protected routes: the ones that
-// write (decision 027) and the ones that read other members' data (decision
-// 031), keyed by the authenticated user's ID. A nil limiter allows
+// write (decisions 027 and 033) and the ones that read other members' data
+// (decision 031), keyed by the authenticated user's ID. A nil limiter allows
 // everything, so the zero value disables limiting (tests).
 type UserLimits struct {
 	ProfileWrite   *ratelimit.Limiter[string] // PUT /v1/me/profile
 	LanguagesWrite *ratelimit.Limiter[string] // PUT /v1/me/languages
 	AvatarWrite    *ratelimit.Limiter[string] // PUT, DELETE /v1/me/avatar (one bucket)
+	BlockWrite     *ratelimit.Limiter[string] // PUT, DELETE /v1/me/blocks/{id} (one bucket)
 	MemberRead     *ratelimit.Limiter[string] // GET /v1/profiles/{id} and its /avatar; keyed by the reader
 }
 
@@ -69,11 +70,16 @@ type UserLimits struct {
 //
 // AvatarWrite is lower than the other writes because each accepted upload
 // costs a decode; it is still more than choosing a picture by hand needs.
+//
+// BlockWrite is one bucket for blocking and unblocking (decision 033), with
+// the allowance of the other writes. Requests for an id that names nobody and
+// repeats of a block spend it like any other.
 func NewUserLimits(logger *slog.Logger) UserLimits {
 	return UserLimits{
 		ProfileWrite:   ratelimit.New[string]("user_profile_write", 10, 6*time.Second, maxTrackedUsers, logger),   // 10/min
 		LanguagesWrite: ratelimit.New[string]("user_languages_write", 10, 6*time.Second, maxTrackedUsers, logger), // 10/min
 		AvatarWrite:    ratelimit.New[string]("user_avatar_write", 5, time.Minute, maxTrackedUsers, logger),       // 60/h
+		BlockWrite:     ratelimit.New[string]("user_block_write", 10, 6*time.Second, maxTrackedUsers, logger),     // 10/min
 		MemberRead:     ratelimit.New[string]("user_member_read", 60, time.Second, maxTrackedUsers, logger),       // 60/min
 	}
 }

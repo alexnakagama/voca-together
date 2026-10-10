@@ -9,8 +9,9 @@ paths:
 
 # Profile picture rules (`PUT`/`GET`/`DELETE /v1/me/avatar`, `GET /v1/profiles/{id}/avatar`, backend)
 
-Record: 031 ("The profile picture"). The general rules for a member's own resource and for reading another member
-are in `backend.md`; the member profile's `has_avatar` is in `profile.md`. The client side is not built.
+Records: 031 ("The profile picture"), 033 (a picture across a block). The general rules for a member's own
+resource and for reading another member are in `backend.md`; the member profile's `has_avatar` is in
+`profile.md`. The client side is not built.
 
 ## What is stored
 
@@ -51,5 +52,8 @@ are in `backend.md`; the member profile's `has_avatar` is in `profile.md`. The c
   answers 204, also when there was no picture; no picture is 404 `avatar_not_found`.
 - `PUT` and `DELETE` share `UserLimits.AvatarWrite`. The member picture route is behind `MemberRead`, shared with
   the member profile route.
-- The member picture route resolves the id with `profile.Service.Public` first: **no profile, no public picture**.
-  Never look a picture up by a public id directly, and never serve one by an unauthenticated link.
+- The member picture route resolves the id through `memberFor` first (`profile.Service.Public`, then
+  `safety.Blocked`): **no profile, no public picture**, and none across a block either. Never look a picture up
+  by a public id directly, and never serve one by an unauthenticated link.
+- With a block between the reader and the member, in either direction, the answer is 404 `profile_not_found`
+  whether or not there is a picture, never `avatar_not_found`: that would say the profile exists (033).

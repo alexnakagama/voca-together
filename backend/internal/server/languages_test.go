@@ -547,7 +547,7 @@ func TestGetLanguagesIgnoresABody(t *testing.T) {
 
 func TestLanguageRoutesAllowOnlyTheirMethods(t *testing.T) {
 	// Nil services: the mux must answer before authentication runs.
-	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, nil, Options{})
+	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, Options{})
 	for path, methods := range map[string][]string{
 		myLanguagesPath: {http.MethodPost, http.MethodPatch, http.MethodDelete},
 		catalogPath:     {http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete},

@@ -159,6 +159,11 @@ reads.
 
 - *No picture:* the member picture route answers 404 across a block, and a second way to serve a blocked
   member's picture is not worth one screen.
+- *Amended at the review of task group 2:* `ListBlocked` leaves out a member who has blocked the caller, so the
+  list cannot name, or confirm a block by, a member who is hidden from the caller; the caller's block stays and
+  is removable by id. And the response is written without `encoding/json`'s HTML escaping: with it, names made
+  of `&`, `<` or `>` took an entry to 359 bytes and a full list over the client's 64 KiB (decision 3's "at most
+  about 270 bytes" assumed no escaping). Reasoning and the accepted price in decision record 033.
 - *Not two transactions' worth of care:* a name changed between the two reads is a name a moment newer.
 
 ### 7. What a block means for features that do not exist yet

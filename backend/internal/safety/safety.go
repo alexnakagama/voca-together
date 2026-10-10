@@ -91,7 +91,11 @@ func (s *Service) Blocked(ctx context.Context, a, b string) (bool, error) {
 }
 
 // ListBlocked returns the ids of the users userID has blocked, most recently
-// blocked first: at most MaxBlocks. It never holds who blocked userID.
+// blocked first: at most MaxBlocks. It never holds who blocked userID: not
+// a member who only blocked them, and not one userID has blocked too. That
+// block of userID's still exists, still hides the two from each other and
+// still counts toward MaxBlocks; it is only not listed, so that the list
+// cannot tell userID that they were blocked.
 func (s *Service) ListBlocked(ctx context.Context, userID string) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("safety: list blocked: %w", err)

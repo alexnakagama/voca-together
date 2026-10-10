@@ -219,7 +219,7 @@ func TestResetPasswordFormInternalErrorIsOpaque(t *testing.T) {
 }
 
 func TestResetPasswordPageMethods(t *testing.T) {
-	handler := New(nil, nil, nil, nil, nil, Options{})
+	handler := New(nil, nil, nil, nil, nil, nil, Options{})
 	for _, method := range []string{http.MethodPut, http.MethodDelete, http.MethodPatch} {
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, httptest.NewRequest(method, resetEmailPath, nil))

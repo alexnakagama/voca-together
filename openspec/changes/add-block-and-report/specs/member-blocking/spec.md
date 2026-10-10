@@ -125,7 +125,9 @@ for an identifier that names no profile. The check SHALL be made by the backend 
 ### Requirement: Listing the members one has blocked
 `GET /v1/me/blocks` SHALL answer 200 with `blocks`, an array of `{id, display_name}` for the members the
 signed-in member has blocked, most recently blocked first. It SHALL list only the caller's own blocks and SHALL
-never show who has blocked the caller. A blocked member who has no profile SHALL NOT be listed.
+never show who has blocked the caller. A blocked member who has no profile SHALL NOT be listed. A blocked member
+who has blocked the caller SHALL NOT be listed either, whoever blocked first; the caller's block of them SHALL
+still exist and SHALL still be removable.
 
 #### Scenario: A member's blocks
 - **WHEN** member A has blocked B and then C
@@ -147,6 +149,24 @@ never show who has blocked the caller. A blocked member who has no profile SHALL
 #### Scenario: A blocked member without a profile
 - **WHEN** a blocked member's profile no longer exists while their account does
 - **THEN** they are not in the list, and they are still blocked
+
+#### Scenario: A blocked member who has blocked the caller
+- **WHEN** A and B have each blocked the other, in either order, and B reads the list
+- **THEN** A is not in it, the response is identical to the one B would get if A's profile did not exist, and
+  B's block of A still exists and can be removed
+
+#### Scenario: The other member's block is removed
+- **WHEN** A and B have each blocked the other, and A unblocks B
+- **THEN** A is in B's list again
+
+### Requirement: The list of blocked members is one small response
+A full list of blocked members SHALL be smaller than 64 KiB, whatever the members' names, so that a client reads
+it whole without paging.
+
+#### Scenario: A full list of long names
+- **WHEN** a member has blocked 200 members whose names are each the longest allowed, made of any characters a
+  name may hold
+- **THEN** the response is 200 and smaller than 64 KiB
 
 ### Requirement: A limit on how many members one may block
 A member SHALL be able to block at most 200 members at a time. A block beyond that SHALL answer 422

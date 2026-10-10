@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"sync"
 	"testing"
@@ -524,6 +525,107 @@ func TestPublicLogsNothing(t *testing.T) {
 	}
 	_, _ = f.svc.Public(ctx, "00000000-0000-4000-8000-000000000000")
 	_, _ = f.svc.Public(ctx, "MARKERID")
+	if logs := f.logs.String(); logs != "" {
+		t.Errorf("public reads logged: %s", logs)
+	}
+}
+
+// ---- Public profiles of several users ----
+
+func TestPublicByUsersReturnsTheProfilesOfTheUsersGiven(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	ben := f.user(t, "ben@example.com")
+	cho := f.user(t, "cho@example.com") // no profile
+	dee := f.user(t, "dee@example.com") // a profile nobody asks for
+	anaSaved, err := f.svc.Save(ctx, ana, Input{DisplayName: "Ana", Bio: "Hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	benSaved, err := f.svc.Save(ctx, ben, Input{DisplayName: "Ben"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Save(ctx, dee, Input{DisplayName: "Dee"}); err != nil {
+		t.Fatal(err)
+	}
+	byUser := func(ps []PublicProfile) map[string]PublicProfile {
+		m := make(map[string]PublicProfile, len(ps))
+		for _, p := range ps {
+			m[p.UserID] = p
+		}
+		return m
+	}
+
+	// The profiles of the users given, each once, and nothing for a user
+	// without one or for an id that is no user's.
+	const nobody = "00000000-0000-4000-8000-000000000000"
+	got, err := f.svc.PublicByUsers(ctx, []string{ben, cho, ana, nobody, ben})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]PublicProfile{
+		ana: {UserID: ana, PublicID: anaSaved.PublicID, DisplayName: "Ana", Bio: "Hi"},
+		ben: {UserID: ben, PublicID: benSaved.PublicID, DisplayName: "Ben"},
+	}
+	if len(got) != 2 || !maps.Equal(byUser(got), want) {
+		t.Errorf("PublicByUsers = %+v, want exactly %+v", got, want)
+	}
+
+	// Only users without a profile: nothing, and no error.
+	if got, err := f.svc.PublicByUsers(ctx, []string{cho, nobody}); err != nil || len(got) != 0 {
+		t.Errorf("for users without a profile: %+v, %v", got, err)
+	}
+
+	// As last saved.
+	if _, err := f.svc.Save(ctx, ben, Input{DisplayName: "Benjamín"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := f.svc.PublicByUsers(ctx, []string{ben}); err != nil || len(got) != 1 || got[0].DisplayName != "Benjamín" {
+		t.Errorf("after an edit: %+v, %v", got, err)
+	}
+
+	// A deleted user's profile went with them.
+	if _, err := f.pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, ben); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := f.svc.PublicByUsers(ctx, []string{ana, ben}); err != nil || len(got) != 1 || got[0].UserID != ana {
+		t.Errorf("after ben was deleted: %+v, %v", got, err)
+	}
+}
+
+// No users is answered without asking the database, even when no query
+// could run; any user reaches it.
+func TestPublicByUsersDoesNotQueryForNoUsers(t *testing.T) {
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for _, ids := range [][]string{nil, {}} {
+		if got, err := f.svc.PublicByUsers(ctx, ids); err != nil || len(got) != 0 {
+			t.Errorf("PublicByUsers(%v) with an ended context = %+v, %v; want nothing", ids, got, err)
+		}
+	}
+	if _, err := f.svc.PublicByUsers(ctx, []string{ana}); !errors.Is(err, context.Canceled) {
+		t.Errorf("one user with an ended context: %v, want context.Canceled", err)
+	}
+}
+
+// Reading several public profiles logs nothing: no id, no text.
+func TestPublicByUsersLogsNothing(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	if _, err := f.svc.Save(ctx, ana, Input{DisplayName: "MARKERNAME", Bio: "MARKERBIO"}); err != nil {
+		t.Fatal(err)
+	}
+	f.logs.Reset()
+
+	if _, err := f.svc.PublicByUsers(ctx, []string{ana, "00000000-0000-4000-8000-000000000000"}); err != nil {
+		t.Fatal(err)
+	}
 	if logs := f.logs.String(); logs != "" {
 		t.Errorf("public reads logged: %s", logs)
 	}

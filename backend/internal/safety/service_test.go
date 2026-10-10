@@ -372,6 +372,7 @@ func TestListBlockedIsNewestFirstAndOnlyTheCallers(t *testing.T) {
 	ben := f.user(t, "ben@example.com")
 	cho := f.user(t, "cho@example.com")
 	dan := f.user(t, "dan@example.com")
+	eve := f.user(t, "eve@example.com")
 
 	list := func(id string) []string {
 		t.Helper()
@@ -391,7 +392,7 @@ func TestListBlockedIsNewestFirstAndOnlyTheCallers(t *testing.T) {
 		}
 	}
 	// Blocks by others, of ana and of someone else, are theirs alone.
-	if err := f.svc.Block(ctx, ben, ana); err != nil {
+	if err := f.svc.Block(ctx, eve, ana); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.svc.Block(ctx, cho, dan); err != nil {
@@ -401,8 +402,8 @@ func TestListBlockedIsNewestFirstAndOnlyTheCallers(t *testing.T) {
 	if got, want := list(ana), []string{dan, cho, ben}; !slices.Equal(got, want) {
 		t.Errorf("ana's list = %v, want the newest first %v", got, want)
 	}
-	if got := list(ben); !slices.Equal(got, []string{ana}) {
-		t.Errorf("ben's list = %v, want ana only", got)
+	if got := list(eve); !slices.Equal(got, []string{ana}) {
+		t.Errorf("eve's list = %v, want ana only", got)
 	}
 	if got := list(dan); len(got) != 0 {
 		t.Errorf("dan, blocked by two members, lists %v: who blocked a member is never listed", got)
@@ -417,6 +418,71 @@ func TestListBlockedIsNewestFirstAndOnlyTheCallers(t *testing.T) {
 	}
 	if got, want := list(ana), []string{ben, dan, cho}; !slices.Equal(got, want) {
 		t.Errorf("ana's list = %v, want %v", got, want)
+	}
+}
+
+// A member who has blocked the caller is left out of the caller's list,
+// whoever blocked first: the list must not say that a member who is hidden
+// from the caller exists. The caller's own block of them is still stored,
+// still counts, and shows again once the other member's block is gone.
+func TestListBlockedLeavesOutAMemberWhoBlockedTheCaller(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	ben := f.user(t, "ben@example.com")
+	cho := f.user(t, "cho@example.com")
+	dan := f.user(t, "dan@example.com")
+	list := func(id string) []string {
+		t.Helper()
+		ids, err := f.svc.ListBlocked(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ids
+	}
+	block := func(blocker, blocked string) {
+		t.Helper()
+		if err := f.svc.Block(ctx, blocker, blocked); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Ana blocks Ben, Cho and Dan; Ben had blocked her first, Dan does after.
+	block(ben, ana)
+	block(ana, ben)
+	block(ana, cho)
+	block(ana, dan)
+	if got, want := list(ana), []string{dan, cho}; !slices.Equal(got, want) {
+		t.Errorf("ana's list = %v, want %v: ben blocked her", got, want)
+	}
+	block(dan, ana)
+	if got, want := list(ana), []string{cho}; !slices.Equal(got, want) {
+		t.Errorf("ana's list = %v, want %v: ben and dan blocked her", got, want)
+	}
+	if got := list(ben); len(got) != 0 {
+		t.Errorf("ben's list = %v, want nothing: ana blocked him", got)
+	}
+	// Every block is stored and counted all the same.
+	if n := f.count(t); n != 5 {
+		t.Errorf("blocks = %d, want 5", n)
+	}
+	if !f.has(t, ana, ben) || !f.has(t, ana, dan) {
+		t.Error("ana's blocks of ben and dan are not stored")
+	}
+
+	// Ben's block goes: Ana's block of him is listed again, in its place.
+	if err := f.svc.Unblock(ctx, ben, ana); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := list(ana), []string{cho, ben}; !slices.Equal(got, want) {
+		t.Errorf("ana's list = %v, want %v", got, want)
+	}
+	// And a block that is not listed can still be removed.
+	if err := f.svc.Unblock(ctx, ana, dan); err != nil {
+		t.Fatal(err)
+	}
+	if f.has(t, ana, dan) || !f.has(t, dan, ana) {
+		t.Error("want ana's block of dan removed and dan's of ana kept")
 	}
 }
 
@@ -619,8 +685,14 @@ func TestBlockLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != MaxBlocks || list[0] != cho || list[1] != ben {
-		t.Errorf("ana's list holds %d members, want %d with cho then ben first", len(list), MaxBlocks)
+	// Ana is at the limit with MaxBlocks stored. Cho blocked her too, so
+	// her block of cho counts and is not listed.
+	if f.count(t) != MaxBlocks+2 || !f.has(t, ana, cho) {
+		t.Errorf("blocks = %d, want ana's %d and the two by others", f.count(t), MaxBlocks)
+	}
+	if len(list) != MaxBlocks-1 || list[0] != ben || slices.Contains(list, cho) {
+		t.Errorf("ana's list holds %d members, want %d with ben first and without cho, who blocked her",
+			len(list), MaxBlocks-1)
 	}
 	if n := f.logged("block: added"); n != 4 {
 		t.Errorf("%d blocks logged, want 4: a refused block and a repeat log nothing", n)
