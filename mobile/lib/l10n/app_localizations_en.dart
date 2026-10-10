@@ -423,6 +423,25 @@ class AppLocalizationsEn extends AppLocalizations {
       'That photo couldn’t be used. Choose a different one.';
 
   @override
+  String get errorReportReasonRequired => 'Choose a reason for the report.';
+
+  @override
+  String get errorReportReasonInvalid =>
+      'That reason can’t be used. Choose a different one.';
+
+  @override
+  String get errorReportDetailsTooLong =>
+      'This text is too long. Make it shorter.';
+
+  @override
+  String get errorReportDetailsInvalid =>
+      'This text contains characters that can’t be used. Remove them and try again.';
+
+  @override
+  String get errorBlocksTooMany =>
+      'You’ve reached the limit of blocked members. Unblock someone to make room.';
+
+  @override
   String get languagesHeading => 'Languages';
 
   @override

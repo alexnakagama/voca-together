@@ -376,6 +376,105 @@ void main() {
     });
   });
 
+  group('reports and blocks', () {
+    // (field, code) → the text and where it goes.
+    final codes = <(String, String), String>{
+      ('reason', 'required'): l10n.errorReportReasonRequired,
+      ('reason', 'invalid'): l10n.errorReportReasonInvalid,
+      ('details', 'too_long'): l10n.errorReportDetailsTooLong,
+      ('details', 'invalid'): l10n.errorReportDetailsInvalid,
+      ('blocks', 'too_many'): l10n.errorBlocksTooMany,
+    };
+    codes.forEach((key, text) {
+      final (field, code) = key;
+      test('$field:$code goes to its own error, with no banner', () {
+        final p = _present(
+          _http(422, 'validation_failed', [FieldError(field, code)]),
+        );
+        expect(p.kind, FailureKind.invalidInput);
+        expect(p.message, isNull);
+        expect(p.reasonError, field == 'reason' ? text : isNull);
+        expect(p.detailsError, field == 'details' ? text : isNull);
+        expect(p.blocksError, field == 'blocks' ? text : isNull);
+        expect(p.displayNameError, isNull);
+        expect(p.bioError, isNull);
+        expect(p.avatarError, isNull);
+      });
+    });
+
+    test('each code of a field has its own text', () {
+      expect(
+        l10n.errorReportReasonRequired,
+        isNot(l10n.errorReportReasonInvalid),
+      );
+      expect(
+        l10n.errorReportDetailsTooLong,
+        isNot(l10n.errorReportDetailsInvalid),
+      );
+    });
+
+    test('both fields of a report are reported together', () {
+      final p = _present(
+        _http(422, 'validation_failed', [
+          const FieldError('reason', 'invalid'),
+          const FieldError('details', 'too_long'),
+        ]),
+      );
+      expect(p.message, isNull);
+      expect(p.reasonError, l10n.errorReportReasonInvalid);
+      expect(p.detailsError, l10n.errorReportDetailsTooLong);
+    });
+
+    // The app never sends its own id, so there is no text for it: the
+    // generic message, and no field error.
+    test('member:self falls to the generic message', () {
+      final p = _present(
+        _http(422, 'validation_failed', [const FieldError('member', 'self')]),
+      );
+      expect(p.kind, FailureKind.invalidInput);
+      expect(p.message, l10n.errorCheckInput);
+      expect(p.reasonError, isNull);
+      expect(p.detailsError, isNull);
+      expect(p.blocksError, isNull);
+    });
+
+    test('a code this app doesn\'t know adds the generic banner', () {
+      for (final field in ['reason', 'details', 'blocks']) {
+        final p = _present(
+          _http(422, 'validation_failed', [FieldError(field, 'too_odd')]),
+        );
+        expect(p.message, l10n.errorCheckInput, reason: field);
+        expect(p.reasonError, isNull);
+        expect(p.detailsError, isNull);
+        expect(p.blocksError, isNull);
+      }
+    });
+
+    // A profile's `bio: too_long` is not a report's `details: too_long`.
+    test('another feature\'s error is not a report or block error', () {
+      final p = _present(
+        _http(422, 'validation_failed', [
+          const FieldError('bio', 'too_long'),
+          const FieldError('spoken', 'too_many'),
+        ]),
+      );
+      expect(p.reasonError, isNull);
+      expect(p.detailsError, isNull);
+      expect(p.blocksError, isNull);
+    });
+
+    // Limits live on the server only: the text states none of them.
+    test('no message states a number', () {
+      for (final text in codes.values) {
+        expect(text, isNot(contains(RegExp(r'\d'))));
+      }
+    });
+
+    test('the limit message says that unblocking makes room', () {
+      expect(l10n.errorBlocksTooMany, contains('Unblock'));
+    });
+  });
+
   group('status fallback for missing or unknown codes', () {
     final cases = <int, (FailureKind, String)>{
       400: (FailureKind.unexpected, l10n.errorUnexpected),

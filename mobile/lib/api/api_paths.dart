@@ -37,6 +37,23 @@ abstract final class ApiPaths {
   /// for [memberProfile].
   static String memberAvatar(String id) => '${memberProfile(id)}/avatar';
 
+  /// The members the signed-in user has blocked.
+  static const myBlocks = '/v1/me/blocks';
+
+  /// The signed-in user's block of the member whose public identifier is
+  /// [id] (decision 033). [id] as for [memberProfile].
+  static String myBlock(String id) {
+    checkMemberId(id);
+    return '$myBlocks/$id';
+  }
+
+  /// The signed-in user's report of the member whose public identifier is
+  /// [id] (decision 033). [id] as for [memberProfile].
+  static String myReport(String id) {
+    checkMemberId(id);
+    return '/v1/me/reports/$id';
+  }
+
   /// Throws [ArgumentError] unless [id] is a canonical public identifier,
   /// as [memberProfile] does.
   static void checkMemberId(String id) {

@@ -288,6 +288,29 @@ Map<String, Object?> memberProfileBody({
   'languages': languages ?? languagesBody(),
 };
 
+/// A well-formed public identifier of another member's profile.
+const otherMemberId = '7c2d9a40-1f6b-4e85-a3d2-5b8c0e9f1a27';
+
+/// A `GET /v1/me/blocks` 200 body. Each entry is (public id, name), in the
+/// order given; the list is always an array, as the backend sends it.
+Map<String, Object?> blocksBody([List<(String, String)> members = const []]) =>
+    {
+      'blocks': [
+        for (final (id, name) in members) {'id': id, 'display_name': name},
+      ],
+    };
+
+/// A 422 `validation_failed` naming one field, as a refused block
+/// (`blocks: too_many`) or report (`details: too_long`) answers.
+http.Response fieldError(String field, String code) => jsonResponse(422, {
+  'error': {
+    'code': 'validation_failed',
+    'fields': [
+      {'field': field, 'code': code},
+    ],
+  },
+});
+
 /// A 200 with a picture, as the avatar routes answer. The transport never
 /// decodes it, so [bytes] can be anything.
 http.Response imageResponse(List<int> bytes, {int status = 200}) =>

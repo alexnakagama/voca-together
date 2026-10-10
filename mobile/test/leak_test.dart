@@ -6,8 +6,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:vocatogether/api/api_paths.dart';
 import 'package:vocatogether/api/api_exception.dart';
+import 'package:vocatogether/api/blocked_member.dart';
 import 'package:vocatogether/api/languages.dart';
 import 'package:vocatogether/api/member_profile.dart';
+import 'package:vocatogether/api/report_reason.dart';
 import 'package:vocatogether/auth/auth_tokens.dart';
 import 'package:vocatogether/auth/google_identity_exception.dart';
 import 'package:vocatogether/auth/token_store.dart';
@@ -43,7 +45,14 @@ final _storedImage = [0xff, 0xd8, 0xff, 0xe0, 1, 2, 3];
 /// A member's public identifier. It can't carry the word, being a UUID.
 const _memberId = '1eac0000-1eac-41ea-81ea-c00000001eac';
 
-final _markers = ['LEAK', 'leak.email', _imageAsList, _memberId];
+/// A member the user blocks and reports: its identifier may travel only in
+/// the path of the block and report routes.
+const _targetId = '1eac1111-1eac-41ea-91ea-c11111111eac';
+
+/// What a member types about another in a report.
+const _details = 'LEAK-details of a report';
+
+final _markers = ['LEAK', 'leak.email', _imageAsList, _memberId, _targetId];
 
 /// Where each secret may appear in a request: (path, location).
 typedef _Place = (String path, String location);
@@ -321,6 +330,83 @@ Future<FakeServer> _runEveryFlow(List<String> strings) async {
   await record(() async => ApiPaths.memberAvatar(_memberId.toUpperCase()));
   strings.add('${MemberProfile.fromJson(member)}');
 
+  // Blocks and reports (033): the list, a block, an unblock and a report
+  // with marked details, each also refused with a body that echoes the
+  // identifier, the name and the details.
+  final blockPath = ApiPaths.myBlock(_targetId);
+  final reportPath = ApiPaths.myReport(_targetId);
+  final blocks = blocksBody([(_targetId, _displayName)]);
+  http.Response echoingReport(int status) => http.Response(
+    '{"error":{"code":"validation_failed","fields":[{"field":"details",'
+    '"code":"too_long"}],"detail":"$_targetId $_displayName $_details"}}',
+    status,
+    headers: {'content-type': 'application/json'},
+  );
+  server
+    ..once('GET', ApiPaths.myBlocks, (_) => jsonResponse(200, blocks))
+    // A list that is off-contract, with a member in it.
+    ..once(
+      'GET',
+      ApiPaths.myBlocks,
+      (_) => jsonResponse(200, {
+        'blocks': [
+          {'id': _targetId, 'display_name': 7, 'note': _displayName},
+        ],
+      }),
+    )
+    ..once('GET', ApiPaths.myBlocks, (_) => echoingReport(500))
+    ..once('PUT', blockPath, (_) => noContent())
+    ..once('PUT', blockPath, (_) => echoingReport(422))
+    ..once('DELETE', blockPath, (_) => noContent())
+    ..once('DELETE', blockPath, (_) => echoingReport(429))
+    ..once('PUT', reportPath, (_) => noContent())
+    ..once('PUT', reportPath, (_) => echoingReport(422))
+    // An answer that is the report itself.
+    ..once(
+      'PUT',
+      reportPath,
+      (r) => http.Response(
+        r.body,
+        200,
+        headers: {'content-type': 'application/json'},
+      ),
+    );
+  for (var i = 0; i < 3; i++) {
+    await record(() => manager.blockedMembers());
+  }
+  for (var i = 0; i < 2; i++) {
+    await record(() => manager.blockMember(_targetId));
+  }
+  for (var i = 0; i < 2; i++) {
+    await record(() => manager.unblockMember(_targetId));
+  }
+  for (var i = 0; i < 3; i++) {
+    await record(
+      () => manager.reportMember(
+        _targetId,
+        reason: ReportReason.harassment,
+        details: _details,
+      ),
+    );
+  }
+  // An identifier that isn't one is refused without being echoed.
+  await record(() async => manager.blockMember('$_targetId-LEAK'));
+  await record(() async => manager.unblockMember(_targetId.toUpperCase()));
+  await record(
+    () async => manager.reportMember(
+      '$_targetId-LEAK',
+      reason: ReportReason.other,
+      details: _details,
+    ),
+  );
+  await record(() async => ApiPaths.myBlock('$_targetId-LEAK'));
+  await record(() async => ApiPaths.myReport(_targetId.toUpperCase()));
+  final blocked = BlockedMember.listFromJson(blocks);
+  strings
+    ..add('$blocked')
+    ..add('${blocked.single}')
+    ..add('${ReportReason.harassment}');
+
   // Programming errors are refused without echoing the value.
   await record(() async => api.refresh(refreshToken: _access2));
   await record(() async => api.logout(accessToken: _refresh2));
@@ -382,6 +468,8 @@ Future<FakeServer> _runEveryFlow(List<String> strings) async {
 void _checkPlacement(List<http.Request> requests) {
   final memberPath = ApiPaths.memberProfile(_memberId);
   final memberAvatarPath = ApiPaths.memberAvatar(_memberId);
+  final blockPath = ApiPaths.myBlock(_targetId);
+  final reportPath = ApiPaths.myReport(_targetId);
   // The routes that carry the access token.
   final protected = [
     ApiPaths.me,
@@ -391,6 +479,9 @@ void _checkPlacement(List<http.Request> requests) {
     ApiPaths.myAvatar,
     memberPath,
     memberAvatarPath,
+    ApiPaths.myBlocks,
+    blockPath,
+    reportPath,
     ApiPaths.logout,
   ];
   final allowed = <String, Set<_Place>>{
@@ -407,6 +498,11 @@ void _checkPlacement(List<http.Request> requests) {
     // A member's identifier goes only into the path of the two member
     // routes: never a query, a header or a body.
     _memberId: {(memberPath, 'url'), (memberAvatarPath, 'url')},
+    // The member a block or a report is about is named only by the path of
+    // its own route, and what is typed about them goes only into the body
+    // of the report.
+    _targetId: {(blockPath, 'url'), (reportPath, 'url')},
+    _details: {(reportPath, 'body')},
     _refresh1: {(ApiPaths.refresh, 'body')},
     _refresh2: {(ApiPaths.refresh, 'body')},
     _idToken: {(ApiPaths.google, 'body')},
@@ -474,6 +570,32 @@ void _checkPlacement(List<http.Request> requests) {
     expect(sent, isNotEmpty, reason: '$method $path');
     for (final r in sent) {
       expect(r.headers['Authorization'], 'Bearer $_access2', reason: '$r');
+    }
+  }
+  expect(seen[_targetId], {(blockPath, 'url'), (reportPath, 'url')});
+  expect(seen[_details], {(reportPath, 'body')});
+  // The bearer travelled on each of the four block and report requests.
+  for (final (method, path) in [
+    ('GET', ApiPaths.myBlocks),
+    ('PUT', blockPath),
+    ('DELETE', blockPath),
+    ('PUT', reportPath),
+  ]) {
+    final sent = requests.where(
+      (r) => r.method == method && r.url.path == path,
+    );
+    expect(sent, isNotEmpty, reason: '$method $path');
+    for (final r in sent) {
+      expect(r.headers['Authorization'], 'Bearer $_access2', reason: '$r');
+    }
+  }
+  // The list, a block and an unblock have no body; a report's body is the
+  // reason and the details as typed, and nothing else.
+  for (final r in requests) {
+    if (r.url.path == reportPath) {
+      expect(jsonDecode(r.body), {'reason': 'harassment', 'details': _details});
+    } else if (r.url.path.startsWith(ApiPaths.myBlocks)) {
+      expect(r.bodyBytes, isEmpty, reason: '$r');
     }
   }
   // The upload's body is the photo and nothing else; nothing but the upload

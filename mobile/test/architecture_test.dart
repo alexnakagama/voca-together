@@ -133,11 +133,14 @@ void main() {
       const uiAllowed = {
         'api/account_api.dart',
         'api/api_exception.dart',
+        // Whom the member blocked, and why a member reports (033): no token.
+        'api/blocked_member.dart',
         'api/languages.dart',
         'api/me.dart',
         // What one member may read about another (031): holds no token.
         'api/member_profile.dart',
         'api/profile.dart',
+        'api/report_reason.dart',
         // Only the failure Google sign-in can end with; it holds no data.
         'auth/google_identity_exception.dart',
         'session.dart',
@@ -231,6 +234,10 @@ void main() {
         'removeAvatar',
         'memberProfile',
         'memberAvatar',
+        'blockedMembers',
+        'blockMember',
+        'unblockMember',
+        'reportMember',
         'logout',
       ]),
     );

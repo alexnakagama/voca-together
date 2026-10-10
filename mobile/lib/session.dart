@@ -5,10 +5,12 @@ import 'package:flutter/foundation.dart';
 import 'api/api_exception.dart';
 import 'api/api_paths.dart';
 import 'api/auth_api.dart';
+import 'api/blocked_member.dart';
 import 'api/languages.dart';
 import 'api/me.dart';
 import 'api/member_profile.dart';
 import 'api/profile.dart';
+import 'api/report_reason.dart';
 import 'auth/auth_clock.dart';
 import 'auth/auth_tokens.dart';
 import 'auth/google_identity.dart';
@@ -341,6 +343,59 @@ class SessionManager extends ChangeNotifier {
     ApiPaths.checkMemberId(id);
     return _authorized(
       (token) => _api.memberAvatar(accessToken: token, id: id),
+    );
+  }
+
+  /// The members the signed-in user has blocked (`GET /v1/me/blocks`), most
+  /// recently blocked first; empty when there are none. Nothing is cached.
+  /// Token handling and failures as for [me].
+  Future<List<BlockedMember>> blockedMembers() {
+    _checkNotDisposed();
+    return _authorized((token) => _api.blockedMembers(accessToken: token));
+  }
+
+  /// Blocks the member whose public identifier is [id]
+  /// (`PUT /v1/me/blocks/{id}`); succeeds when they were blocked already
+  /// too. Token handling and failures as for [me]; the resend after a 401 is
+  /// safe for that reason (033). [id] as for [memberProfile].
+  Future<void> blockMember(String id) {
+    _checkNotDisposed();
+    ApiPaths.checkMemberId(id);
+    return _authorized((token) => _api.blockMember(accessToken: token, id: id));
+  }
+
+  /// Removes the signed-in user's block of the member whose public
+  /// identifier is [id] (`DELETE /v1/me/blocks/{id}`); succeeds when there
+  /// was none too. Token handling and failures as for [me]; the resend after
+  /// a 401 is safe for that reason (033). [id] as for [memberProfile].
+  Future<void> unblockMember(String id) {
+    _checkNotDisposed();
+    ApiPaths.checkMemberId(id);
+    return _authorized(
+      (token) => _api.unblockMember(accessToken: token, id: id),
+    );
+  }
+
+  /// Reports the member whose public identifier is [id]
+  /// (`PUT /v1/me/reports/{id}`), replacing any earlier report of them by
+  /// this user. [details] is sent as typed, empty for none: every rule is
+  /// the server's. Token handling and failures as for [me]; the resend after
+  /// a 401 is safe because the report is idempotent (033). Nothing else is
+  /// retried. [id] as for [memberProfile].
+  Future<void> reportMember(
+    String id, {
+    required ReportReason reason,
+    required String details,
+  }) {
+    _checkNotDisposed();
+    ApiPaths.checkMemberId(id);
+    return _authorized(
+      (token) => _api.reportMember(
+        accessToken: token,
+        id: id,
+        reason: reason,
+        details: details,
+      ),
     );
   }
 

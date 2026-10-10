@@ -71,6 +71,9 @@ final class FailurePresentation {
     this.spokenError,
     this.learningError,
     this.avatarError,
+    this.reasonError,
+    this.detailsError,
+    this.blocksError,
   });
 
   final FailureKind kind;
@@ -94,6 +97,13 @@ final class FailurePresentation {
 
   /// Why the server refused a photo as the profile picture (422 `fields`).
   final String? avatarError;
+
+  /// Errors for a report's reason and details (422 `fields`).
+  final String? reasonError;
+  final String? detailsError;
+
+  /// Why the server refused one more block (422 `fields`).
+  final String? blocksError;
 }
 
 /// The app's one mapping from a failed call to what the user is told
@@ -201,6 +211,9 @@ FailurePresentation _validation(ApiHttpException e, AppLocalizations l10n) {
   String? spoken;
   String? learning;
   String? avatar;
+  String? reason;
+  String? details;
+  String? blocks;
   var unshown = e.fields.isEmpty;
   for (final f in e.fields) {
     final text = switch ((f.field, f.code)) {
@@ -229,6 +242,13 @@ FailurePresentation _validation(ApiHttpException e, AppLocalizations l10n) {
       ('avatar', 'unsupported_type') => l10n.errorAvatarUnsupportedType,
       ('avatar', 'invalid_image') => l10n.errorAvatarInvalidImage,
       ('avatar', 'dimensions_too_large') => l10n.errorAvatarDimensionsTooLarge,
+      // A report and a block (033). `member: self` has no text of its own:
+      // the app never sends it, so it falls to the generic message.
+      ('reason', 'required') => l10n.errorReportReasonRequired,
+      ('reason', 'invalid') => l10n.errorReportReasonInvalid,
+      ('details', 'too_long') => l10n.errorReportDetailsTooLong,
+      ('details', 'invalid') => l10n.errorReportDetailsInvalid,
+      ('blocks', 'too_many') => l10n.errorBlocksTooMany,
       _ => null,
     };
     if (text == null) {
@@ -250,6 +270,12 @@ FailurePresentation _validation(ApiHttpException e, AppLocalizations l10n) {
         learning ??= text;
       case 'avatar':
         avatar ??= text;
+      case 'reason':
+        reason ??= text;
+      case 'details':
+        details ??= text;
+      case 'blocks':
+        blocks ??= text;
     }
   }
   return FailurePresentation(
@@ -262,6 +288,9 @@ FailurePresentation _validation(ApiHttpException e, AppLocalizations l10n) {
     spokenError: spoken,
     learningError: learning,
     avatarError: avatar,
+    reasonError: reason,
+    detailsError: details,
+    blocksError: blocks,
   );
 }
 

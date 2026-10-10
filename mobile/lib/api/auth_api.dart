@@ -5,14 +5,17 @@ import '../auth/auth_tokens.dart';
 import 'api_client.dart';
 import 'api_exception.dart';
 import 'api_paths.dart';
+import 'blocked_member.dart';
 import 'languages.dart';
 import 'me.dart';
 import 'member_profile.dart';
 import 'profile.dart';
+import 'report_reason.dart';
 
 /// The token-bearing calls: sign-in, refresh, logout, `GET /v1/me`, the
 /// user's profile, picture and languages, the language catalog, a member's
-/// public profile and picture, and the reachability probe.
+/// public profile and picture, the user's blocks and reports, and the
+/// reachability probe.
 ///
 /// **Internal to the session layer** (decision 023): only `main` builds it
 /// and only `SessionManager` holds it. It returns [AuthTokens] and takes raw
@@ -23,7 +26,8 @@ import 'profile.dart';
 /// Stateless transport: it knows paths, bodies and expected statuses, and
 /// nothing about sessions. Tokens go in only where the backend reads them:
 /// the access token in `Authorization` (logout, me, profile, languages,
-/// pictures, member profiles), the refresh token in the refresh body, the
+/// pictures, member profiles, blocks, reports), the refresh token in the
+/// refresh body, the
 /// Google ID token in the google body. Nothing is retried; failures are
 /// [ApiException]s.
 class AuthApi {
@@ -250,6 +254,82 @@ class AuthApi {
     required String accessToken,
     required String id,
   }) async => _imageOrNull(ApiPaths.memberAvatar(id), accessToken);
+
+  /// `GET /v1/me/blocks` with the access token → 200 with the members the
+  /// user has blocked, most recently blocked first (033).
+  ///
+  /// A user who has blocked nobody gets an empty list: every 404 here stays
+  /// an error.
+  Future<List<BlockedMember>> blockedMembers({
+    required String accessToken,
+  }) async {
+    final r = await _client.send(
+      'GET',
+      ApiPaths.myBlocks,
+      bearer: accessToken,
+      timeout: requestTimeout,
+    );
+    _expectStatus(r, 200);
+    return BlockedMember.listFromJson(r.json);
+  }
+
+  /// `PUT /v1/me/blocks/{id}` with the access token and no body → 204: the
+  /// user blocks the member [id] names (033). The answer is the same
+  /// whatever [id] names, so it says nothing about that member. [id] as for
+  /// [memberProfile].
+  ///
+  /// Idempotent on the server, so sending it twice is harmless.
+  Future<void> blockMember({
+    required String accessToken,
+    required String id,
+  }) async {
+    final r = await _client.send(
+      'PUT',
+      ApiPaths.myBlock(id),
+      bearer: accessToken,
+      timeout: requestTimeout,
+    );
+    _expectStatus(r, 204);
+  }
+
+  /// `DELETE /v1/me/blocks/{id}` with the access token → 204, also when the
+  /// user had not blocked the member [id] names (033), so sending it twice
+  /// is harmless. [id] as for [memberProfile].
+  Future<void> unblockMember({
+    required String accessToken,
+    required String id,
+  }) async {
+    final r = await _client.send(
+      'DELETE',
+      ApiPaths.myBlock(id),
+      bearer: accessToken,
+      timeout: requestTimeout,
+    );
+    _expectStatus(r, 204);
+  }
+
+  /// `PUT /v1/me/reports/{id}` with the access token → 204: the user's
+  /// report of the member [id] names (033). The body always holds `reason`
+  /// and `details`; [details] is sent as given (empty for none) and the
+  /// backend normalizes and validates it. [id] as for [memberProfile].
+  ///
+  /// Idempotent on the server (one report per pair, replaced whole), so
+  /// sending the same report twice is harmless.
+  Future<void> reportMember({
+    required String accessToken,
+    required String id,
+    required ReportReason reason,
+    required String details,
+  }) async {
+    final r = await _client.send(
+      'PUT',
+      ApiPaths.myReport(id),
+      json: {'reason': reason.wire, 'details': details},
+      bearer: accessToken,
+      timeout: requestTimeout,
+    );
+    _expectStatus(r, 204);
+  }
 
   /// `GET /healthz`: whether the API answers at all. Any 2xx is success.
   Future<void> healthz() =>

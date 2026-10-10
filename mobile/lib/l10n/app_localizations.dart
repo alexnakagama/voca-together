@@ -760,6 +760,36 @@ abstract class AppLocalizations {
   /// **'That photo couldn’t be used. Choose a different one.'**
   String get errorPhotoUnusable;
 
+  /// Error by the reasons of the report form when the server received a report with no reason.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose a reason for the report.'**
+  String get errorReportReasonRequired;
+
+  /// Error by the reasons of the report form when the server does not accept the reason sent.
+  ///
+  /// In en, this message translates to:
+  /// **'That reason can’t be used. Choose a different one.'**
+  String get errorReportReasonInvalid;
+
+  /// Error under the details field of the report form when the server finds the text too long. Must not state a number.
+  ///
+  /// In en, this message translates to:
+  /// **'This text is too long. Make it shorter.'**
+  String get errorReportDetailsTooLong;
+
+  /// Error under the details field of the report form when the server refuses the text because of its characters.
+  ///
+  /// In en, this message translates to:
+  /// **'This text contains characters that can’t be used. Remove them and try again.'**
+  String get errorReportDetailsInvalid;
+
+  /// Error when the member tries to block one more member than the server allows. Says that unblocking someone makes room. Must not state a number.
+  ///
+  /// In en, this message translates to:
+  /// **'You’ve reached the limit of blocked members. Unblock someone to make room.'**
+  String get errorBlocksTooMany;
+
   /// Heading of the section of the profile screen that shows the languages the user speaks and is learning.
   ///
   /// In en, this message translates to:
