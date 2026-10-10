@@ -9,9 +9,10 @@
 > members; the public identifier 027 deferred is decided), 029 (a member's languages are read by other members,
 > through `language`) and 008 (the backend adds `golang.org/x/image`).
 >
-> **Changed later:** 033 added blocking. The "one 404" has one more cause: a block between the reader and the
-> owner, in either direction, on both member reads. A route under `/v1/me` may now carry another member's public
-> identifier, as the target of the caller's own block (`/v1/me/blocks/{id}`); `/v1/profiles/{id}` is still
+> **Changed later:** 033 added blocking and reporting. The "one 404" has one more cause: a block between the
+> reader and the owner, in either direction, on both member reads. A route under `/v1/me` may now carry another
+> member's public identifier, as the target of the caller's own block (`/v1/me/blocks/{id}`) or report
+> (`/v1/me/reports/{id}`); `/v1/profiles/{id}` is still
 > GET-only and every write is still selected by the session. A write for an identifier that names no profile
 > answers 204, not this record's 404. The gate ("Deferred", and the hard gate below) is restated by 033 with
 > three conditions and is **not** lifted. `profile.Service` gained `PublicByUsers`.

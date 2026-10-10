@@ -1126,3 +1126,440 @@ func TestARefusedBlockIsNotLogged(t *testing.T) {
 		t.Errorf("a refused block was logged: %s", f.logs)
 	}
 }
+
+// mustParse returns the content of a valid report.
+func mustParse(t *testing.T, reason, details string) ReportContent {
+	t.Helper()
+	c, err := ParseReport(reason, details)
+	if err != nil {
+		t.Fatalf("ParseReport(%q): %v", reason, err)
+	}
+	return c
+}
+
+// reports returns how many reports are stored, by anyone.
+func (f fixture) reports(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM reports`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// storedReport is the one report of reported by reporter, as stored. version
+// changes whenever the row is rewritten, even with the same values.
+type storedReport struct {
+	reason, details      string
+	createdAt, updatedAt time.Time
+	version              string
+}
+
+func (f fixture) report(t *testing.T, reporter, reported string) storedReport {
+	t.Helper()
+	var r storedReport
+	err := f.pool.QueryRow(context.Background(),
+		`SELECT reason, details, created_at, updated_at, xmin::text || '/' || ctid::text
+		 FROM reports WHERE reporter_id = $1 AND reported_id = $2`, reporter, reported).
+		Scan(&r.reason, &r.details, &r.createdAt, &r.updatedAt, &r.version)
+	if err != nil {
+		t.Fatalf("the report: %v", err)
+	}
+	return r
+}
+
+func TestReport(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	ben := f.user(t, "ben@example.com")
+
+	if err := f.svc.Report(ctx, ana, ben, mustParse(t, "spam", "")); err != nil {
+		t.Fatal(err)
+	}
+	got := f.report(t, ana, ben)
+	if got.reason != "spam" || got.details != "" {
+		t.Errorf("stored = %q, %q; want spam and no details", got.reason, got.details)
+	}
+	if got.createdAt.IsZero() || !got.updatedAt.Equal(got.createdAt) {
+		t.Errorf("created_at %v, updated_at %v; want one time", got.createdAt, got.updatedAt)
+	}
+	if n := f.reports(t); n != 1 {
+		t.Errorf("reports = %d, want 1: a report is one row, in one direction", n)
+	}
+	if n := f.count(t); n != 0 {
+		t.Errorf("blocks = %d: a report blocks nobody", n)
+	}
+
+	// With details, about someone else: stored as parsed.
+	cho := f.user(t, "cho@example.com")
+	if err := f.svc.Report(ctx, ana, cho, mustParse(t, "harassment", " one\r\n\ttwo ")); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.report(t, ana, cho); got.reason != "harassment" || got.details != "one\n two" {
+		t.Errorf("stored = %q, %q; want harassment and the normalized text", got.reason, got.details)
+	}
+}
+
+// Sending what is already stored changes nothing: no row version is written,
+// updated_at stays, and nothing is logged.
+func TestReportIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	ben := f.user(t, "ben@example.com")
+	for _, c := range []ReportContent{mustParse(t, "spam", ""), mustParse(t, "other", "what happened")} {
+		if err := f.svc.Report(ctx, ana, ben, c); err != nil {
+			t.Fatal(err)
+		}
+		before := f.report(t, ana, ben)
+		logged := f.logged("report: saved")
+
+		for range 3 {
+			if err := f.svc.Report(ctx, ana, ben, c); err != nil {
+				t.Fatalf("the same report again: %v", err)
+			}
+		}
+		if after := f.report(t, ana, ben); after != before {
+			t.Errorf("a repeat rewrote the report: %+v, was %+v", after.version, before.version)
+		}
+		if n := f.logged("report: saved"); n != logged {
+			t.Errorf("%d reports logged, want %d: a repeat logs nothing", n, logged)
+		}
+	}
+	if n := f.reports(t); n != 1 {
+		t.Errorf("reports = %d, want 1", n)
+	}
+}
+
+// A different reason or different details replace the content of the pair's
+// one report and move updated_at; created_at and the row's id stay.
+func TestReportReplacesTheEarlierOne(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	ben := f.user(t, "ben@example.com")
+	if err := f.svc.Report(ctx, ana, ben, mustParse(t, "spam", "first")); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	if err := f.pool.QueryRow(ctx, `SELECT id::text FROM reports`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, step := range []struct{ what, reason, details string }{
+		{"another reason", "harassment", "first"},
+		{"other details", "harassment", "second"},
+		{"both", "other", "third"},
+		{"details removed", "other", ""},
+	} {
+		before := f.report(t, ana, ben)
+		logged := f.logged("report: saved")
+		if err := f.svc.Report(ctx, ana, ben, mustParse(t, step.reason, step.details)); err != nil {
+			t.Fatalf("%s: %v", step.what, err)
+		}
+		after := f.report(t, ana, ben)
+		if after.reason != step.reason || after.details != step.details {
+			t.Errorf("%s: stored = %q, %q; want %q, %q", step.what, after.reason, after.details, step.reason, step.details)
+		}
+		if !after.createdAt.Equal(before.createdAt) {
+			t.Errorf("%s: created_at moved", step.what)
+		}
+		if !after.updatedAt.After(before.updatedAt) {
+			t.Errorf("%s: updated_at = %v, was %v; want it later", step.what, after.updatedAt, before.updatedAt)
+		}
+		if n := f.logged("report: saved"); n != logged+1 {
+			t.Errorf("%s: %d reports logged, want %d", step.what, n, logged+1)
+		}
+	}
+	var now string
+	if err := f.pool.QueryRow(ctx, `SELECT id::text FROM reports`).Scan(&now); err != nil {
+		t.Fatalf("one report expected: %v", err)
+	}
+	if now != id {
+		t.Error("the report was replaced by a new row, not changed")
+	}
+}
+
+// Each member's report of one member is their own, and so is each direction
+// of a pair.
+func TestReportsByDifferentMembersAreEachStored(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	ben := f.user(t, "ben@example.com")
+	cho := f.user(t, "cho@example.com")
+	if err := f.svc.Report(ctx, ana, ben, mustParse(t, "spam", "from ana")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.Report(ctx, cho, ben, mustParse(t, "impersonation", "from cho")); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.Report(ctx, ben, ana, mustParse(t, "other", "")); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := f.report(t, ana, ben); got.reason != "spam" || got.details != "from ana" {
+		t.Errorf("ana's report = %q, %q", got.reason, got.details)
+	}
+	if got := f.report(t, cho, ben); got.reason != "impersonation" || got.details != "from cho" {
+		t.Errorf("cho's report = %q, %q", got.reason, got.details)
+	}
+	if got := f.report(t, ben, ana); got.reason != "other" {
+		t.Errorf("ben's report of ana = %q", got.reason)
+	}
+	if n := f.reports(t); n != 3 {
+		t.Errorf("reports = %d, want 3", n)
+	}
+}
+
+// A member can't report themselves, and that is known without asking the
+// database. Neither is a content that ParseReport did not make ever sent to
+// it.
+func TestReportOfOneselfIsRefusedBeforeAnyQuery(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	ben := f.user(t, "ben@example.com")
+	closed, err := pgxpool.New(ctx, os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed.Close()
+	svc := NewService(closed, slog.New(slog.NewJSONHandler(f.logs, nil)))
+	valid := mustParse(t, "spam", "details")
+
+	err = svc.Report(ctx, ana, ana, valid)
+	if got := fieldsOf(t, err); !slices.Equal(got, []string{"member: self"}) {
+		t.Errorf("a report of oneself: fields = %v, want member: self", got)
+	}
+	err = svc.Report(ctx, ana, ben, ReportContent{})
+	if got := fieldsOf(t, err); !slices.Equal(got, []string{"reason: required"}) {
+		t.Errorf("a report with no content: fields = %v, want reason: required", got)
+	}
+	// The same call for someone else does need the database.
+	if err := svc.Report(ctx, ana, ben, valid); err == nil {
+		t.Error("Report reached a closed pool without an error")
+	}
+	if n := f.reports(t); n != 0 {
+		t.Errorf("reports = %d, want 0", n)
+	}
+	if f.logs.Len() != 0 {
+		t.Errorf("a refused report was logged: %s", f.logs)
+	}
+}
+
+func TestReportByADeletedUser(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	ben := f.user(t, "ben@example.com")
+	// An earlier report of ana's stays, with no reporter: it must neither
+	// stop the next statement nor be taken for theirs.
+	if err := f.svc.Report(ctx, ana, ben, mustParse(t, "spam", "earlier")); err != nil {
+		t.Fatal(err)
+	}
+	f.deleteUser(t, ana)
+	f.logs.Reset()
+
+	err := f.svc.Report(ctx, ana, ben, mustParse(t, "other", "later"))
+	if !errors.Is(err, ErrUserGone) {
+		t.Errorf("Report err = %v, want ErrUserGone", err)
+	}
+	var reason, details string
+	if err := f.pool.QueryRow(ctx, `SELECT reason, details FROM reports WHERE reporter_id IS NULL`).
+		Scan(&reason, &details); err != nil {
+		t.Fatalf("the earlier report: %v", err)
+	}
+	if reason != "spam" || details != "earlier" {
+		t.Errorf("the earlier report = %q, %q; want it unchanged", reason, details)
+	}
+	if n := f.reports(t); n != 1 {
+		t.Errorf("reports = %d, want the earlier one", n)
+	}
+	if f.logs.Len() != 0 {
+		t.Errorf("a report by a deleted user was logged: %s", f.logs)
+	}
+}
+
+// The member to report was deleted after the caller resolved them: there is
+// nobody to report, which is not an error, and nothing is stored or logged.
+func TestReportOfADeletedUser(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	ben := f.user(t, "ben@example.com")
+	cho := f.user(t, "cho@example.com")
+	f.deleteUser(t, ben)
+
+	if err := f.svc.Report(ctx, ana, ben, mustParse(t, "spam", "details")); err != nil {
+		t.Errorf("Report of a deleted user: %v, want nil", err)
+	}
+	if n := f.reports(t); n != 0 {
+		t.Errorf("reports = %d, want 0", n)
+	}
+	if f.logs.Len() != 0 {
+		t.Errorf("a report that stored nothing was logged: %s", f.logs)
+	}
+
+	// The failed insert left nothing behind: the reporter can still report.
+	if err := f.svc.Report(ctx, ana, cho, mustParse(t, "spam", "")); err != nil {
+		t.Fatal(err)
+	}
+	if n := f.reports(t); n != 1 {
+		t.Errorf("reports = %d, want 1", n)
+	}
+}
+
+func TestReportWithAnEndedContextWritesNothing(t *testing.T) {
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	ben := f.user(t, "ben@example.com")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := f.svc.Report(ctx, ana, ben, mustParse(t, "spam", "")); !errors.Is(err, context.Canceled) {
+		t.Errorf("Report err = %v, want context.Canceled", err)
+	}
+	if n := f.reports(t); n != 0 {
+		t.Errorf("reports = %d, want 0", n)
+	}
+}
+
+// Several different reports of one member by one member at once: all
+// succeed, one row, and its reason and details are those of one request
+// together, never the reason of one with the details of another.
+func TestConcurrentReportsOfOnePairLeaveOneWholeReport(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	ben := f.user(t, "ben@example.com")
+
+	const n = 16
+	f.warm(t, n)
+	contents := make([]ReportContent, n)
+	for i := range contents {
+		contents[i] = mustParse(t, Reasons[i%len(Reasons)], fmt.Sprintf("request %d", i))
+	}
+	errs := make([]error, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			<-start
+			errs[i] = f.svc.Report(ctx, ana, ben, contents[i])
+		})
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("report %d: %v", i, err)
+		}
+	}
+	if got := f.reports(t); got != 1 {
+		t.Fatalf("reports = %d, want 1", got)
+	}
+	got := f.report(t, ana, ben)
+	if !slices.Contains(contents, ReportContent{reason: got.reason, details: got.details}) {
+		t.Errorf("stored = %q, %q: not the content of any one request", got.reason, got.details)
+	}
+	// Every request differed from the others, so each one wrote.
+	if got := f.logged("report: saved"); got != n {
+		t.Errorf("%d reports logged, want %d", got, n)
+	}
+}
+
+// A report and the reported member's own report of the reporter, at once:
+// each takes only shared locks on the other's row, so neither waits.
+func TestConcurrentMutualReportsBothSucceed(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	ben := f.user(t, "ben@example.com")
+	f.warm(t, 2)
+
+	for round := range 20 {
+		c := mustParse(t, "other", fmt.Sprintf("round %d", round))
+		var errA, errB error
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Go(func() { <-start; errA = f.svc.Report(ctx, ana, ben, c) })
+		wg.Go(func() { <-start; errB = f.svc.Report(ctx, ben, ana, c) })
+		close(start)
+		wg.Wait()
+		if errA != nil || errB != nil {
+			t.Fatalf("round %d: %v, %v", round, errA, errB)
+		}
+	}
+	if n := f.reports(t); n != 2 {
+		t.Errorf("reports = %d, want one each way", n)
+	}
+}
+
+// What a report says and whom it is about never reach the logs: a stored or
+// changed report logs the member who sent it and nothing else, and repeats
+// and refused reports log nothing.
+func TestReportLogsNameTheReporterAndNothingElse(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	ana := f.user(t, "ana@example.com")
+	ben := f.user(t, "ben@example.com")
+	gone := f.user(t, "gone@example.com")
+	f.deleteUser(t, gone)
+	const detailsMark = "DETAILSMARK"
+
+	// Nothing here stores a report.
+	_ = f.svc.Report(ctx, ana, ana, mustParse(t, "impersonation", detailsMark))
+	_ = f.svc.Report(ctx, ana, ben, ReportContent{})
+	if err := f.svc.Report(ctx, ana, gone, mustParse(t, "impersonation", detailsMark)); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.svc.Report(ctx, gone, ben, mustParse(t, "impersonation", detailsMark))
+	if f.logs.Len() != 0 {
+		t.Fatalf("logged without a report stored: %s", f.logs)
+	}
+
+	// Two writes, each followed by a repeat.
+	for _, c := range []ReportContent{
+		mustParse(t, "impersonation", detailsMark),
+		mustParse(t, "inappropriate_content", detailsMark+" again"),
+	} {
+		for range 2 {
+			if err := f.svc.Report(ctx, ana, ben, c); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	lines := strings.Split(strings.TrimSpace(f.logs.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("%d log lines, want one per write: %s", len(lines), f.logs)
+	}
+	for i, raw := range lines {
+		var line map[string]any
+		if err := json.Unmarshal([]byte(raw), &line); err != nil {
+			t.Fatal(err)
+		}
+		if line["msg"] != "report: saved" || line["user_id"] != ana {
+			t.Errorf("log line %d = %v, want report: saved by the reporter", i, line)
+		}
+		for key := range line {
+			if !slices.Contains([]string{"time", "level", "msg", "user_id"}, key) {
+				t.Errorf("log line %d carries %q: %s", i, key, fmt.Sprint(line[key]))
+			}
+		}
+	}
+	for what, text := range map[string]string{
+		"the reported member's user id": ben,
+		"a deleted member's user id":    gone,
+		"the details":                   detailsMark,
+		"a reason":                      "impersonation",
+		"the other reason":              "inappropriate_content",
+	} {
+		if strings.Contains(f.logs.String(), text) {
+			t.Errorf("the logs hold %s", what)
+		}
+	}
+}

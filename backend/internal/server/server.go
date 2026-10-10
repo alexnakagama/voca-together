@@ -89,6 +89,12 @@ func New(logger *slog.Logger, authSvc *auth.Service, profileSvc *profile.Service
 	mux.Handle("GET /v1/me/blocks", authn(handleGetBlocks(logger, profileSvc, safetySvc)))
 	mux.Handle("PUT /v1/me/blocks/{id}", authn(blockWrites(handlePutBlock(logger, profileSvc, safetySvc))))
 	mux.Handle("DELETE /v1/me/blocks/{id}", authn(blockWrites(handleDeleteBlock(logger, profileSvc, safetySvc))))
+	// The caller's own report of another member (decision 033), under the
+	// rules of a block: the session decides whose it is and the path names
+	// only whom it is about. This is the only report route. There is no GET,
+	// no list and no DELETE, here or anywhere: a report is never returned.
+	reportWrites := limitByUser(logger, opts.UserLimits.ReportWrite)
+	mux.Handle("PUT /v1/me/reports/{id}", authn(reportWrites(handlePutReport(logger, profileSvc, safetySvc))))
 	// Another member's public profile and picture (decision 031), named by
 	// the profile's public id. A route under /v1/profiles is a GET and
 	// nothing else: every write stays under /v1/me. Reads are limited per

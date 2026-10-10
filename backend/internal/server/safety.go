@@ -40,8 +40,8 @@ func writeBlocks(w http.ResponseWriter, blocks []blockedMemberResponse) {
 	_ = enc.Encode(blocksResponse{Blocks: blocks})
 }
 
-// targetUserID resolves the public id a block route carries to the internal
-// id of the user it names. found is false for everything that is not
+// targetUserID resolves the public id a block or report route carries to the
+// internal id of the user it names. found is false for everything that is not
 // the id of a saved profile: unknown, malformed (answered by profile.Public
 // without a query), an account id, a member with no profile.
 //
@@ -154,5 +154,71 @@ func handleGetBlocks(logger *slog.Logger, profiles *profile.Service, safetySvc *
 			}
 		}
 		writeBlocks(w, blocks)
+	}
+}
+
+// maxReportBodyBytes is deliberately far above the longest valid report
+// (under 13 KiB even with every character of the details \u-escaped as a
+// surrogate pair), for the reason maxProfileBodyBytes is: details that are
+// too long must be answered by the field's own rule, 422 too_long, and a
+// limit close to it would refuse a long paste as a malformed request instead.
+const maxReportBodyBytes = 64 << 10
+
+// reportRequest lists everything a report may say. Anything else in the
+// body, a reporter or a reported member included, is an unknown field and
+// the request is refused (decodeJSON): who reports is the session and whom
+// is the path. An absent or null field is the empty string.
+type reportRequest struct {
+	Reason  string `json:"reason"`
+	Details string `json:"details"`
+}
+
+// handlePutReport stores the authenticated user's report of the member the
+// path's id names, replacing the one they made of that member before, and
+// answers 204 with no body: when the report was stored, when the same one
+// was stored already, and when the id names no profile, in which case
+// nothing is stored. As for a block, the three are one answer on purpose
+// (decision 033). There is no body because there is nothing to give back:
+// no route ever returns a report.
+//
+// The body is validated before the id is resolved, so what is wrong with a
+// report (400 for its shape, 422 for its reason and details) is answered the
+// same whatever the id names. Reporting oneself is 422 member: self. A block
+// between the two members, in either direction, changes nothing here:
+// blocking first is no way to escape a report.
+//
+// It must run behind requireAccessToken, which also sets no-store, and the
+// report-write limit. Who reports comes only from the session, and the
+// target's internal user id never leaves the handler. The handler logs
+// nothing: not the id, not whom it names, not the reason and not the details.
+func handlePutReport(logger *slog.Logger, profiles *profile.Service, safetySvc *safety.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id, ok := identityFrom(r.Context())
+		if !ok {
+			writeServiceError(w, r, logger, errNoIdentity)
+			return
+		}
+		var req reportRequest
+		if err := decodeJSON(w, r, &req, maxReportBodyBytes); err != nil {
+			writeError(w, http.StatusBadRequest, codeInvalidRequest)
+			return
+		}
+		content, err := safety.ParseReport(req.Reason, req.Details)
+		if err != nil {
+			writeServiceError(w, r, logger, err)
+			return
+		}
+		target, found, err := targetUserID(r.Context(), profiles, r.PathValue("id"))
+		if err != nil {
+			writeServiceError(w, r, logger, err)
+			return
+		}
+		if found {
+			if err := safetySvc.Report(r.Context(), id.UserID, target, content); err != nil {
+				writeServiceError(w, r, logger, err)
+				return
+			}
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }

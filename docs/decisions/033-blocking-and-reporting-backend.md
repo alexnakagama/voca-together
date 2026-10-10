@@ -1,29 +1,33 @@
 # 033: Blocking and reporting (backend)
 
-> **Status:** draft. **Blocking is implemented and tested:** the `blocks` table, `internal/safety`, the three
-> block routes, their limit and the check on the two member reads. **Reporting is approved and not built:** its
-> table, its route, its limit and `docs/moderation.md` are not in the repository, and this record does not
-> describe them yet. It is completed when they are.
+> **Status:** in force. Implemented and tested: the `blocks` and `reports` tables, `internal/safety`, the three
+> block routes and the report route, their two limits and the check on the two member reads. The record was
+> written in two parts, reporting second. **The gate below is not lifted:** `docs/moderation.md` exists and its
+> reviewer and review interval are still blank.
 >
 > **Changes earlier records:** 031 (its "one 404" has one more cause, a block; a route under `/v1/me` may carry
-> another member's public identifier, as the target of the caller's own block; its gate is restated below and
-> **not** lifted) and 018 (a fourth per-user write limit, `user_block_write`: twelve limiters).
+> another member's public identifier, as the target of the caller's own block or report; its gate is restated
+> below and **not** lifted) and 018 (a fourth and a fifth per-user write limit, `user_block_write` and
+> `user_report_write`: thirteen limiters).
 >
-> **Client side:** 034, not written.
+> **Client side:** 034, not written. Nothing in the app blocks or reports yet.
 >
 > **Current rules:** `.claude/rules/safety.md`, `.claude/rules/backend.md`, and for the two member reads
-> `.claude/rules/profile.md` and `.claude/rules/avatar.md`.
+> `.claude/rules/profile.md` and `.claude/rules/avatar.md`. How a report is read and acted on:
+> `docs/moderation.md`.
 
 - **Scope:** a signed-in member blocks and unblocks another member, named by the profile's public identifier,
   and reads the list of the members they blocked. While a block exists between two members, in either
-  direction, neither can read the other's profile or picture. Nobody is told that they were blocked. Nothing
+  direction, neither can read the other's profile or picture. Nobody is told that they were blocked. A member
+  also reports another, with a reason and optional details; a report is stored for the people who run the
+  service and is never returned to anyone ("Reports", below). Nothing
   here lists, suggests or searches members, and nothing is built for features that don't exist (friend
   requests, discovery, chat): only the rule they must follow is written down.
 - **One domain package, `internal/safety`:** "what one member does about another". `Service` has `Block`,
-  `Unblock`, `Blocked` and `ListBlocked`, takes and returns internal user ids only, imports none of `auth`,
-  `server`, `profile`, `language` and `avatar`, never reads the request context, and has the typed errors of the
-  other domains (`ValidationError` with `FieldError`, `ErrUserGone`), mapped in `writeServiceError`. `main` builds
-  it and `server.New` takes it as its sixth argument.
+  `Unblock`, `Blocked`, `ListBlocked` and `Report`, beside the function `ParseReport`; it takes and returns internal
+  user ids only, imports none of `auth`, `server`, `profile`, `language` and `avatar`, never reads the request
+  context, and has the typed errors of the other domains (`ValidationError` with `FieldError`, `ErrUserGone`), mapped
+  in `writeServiceError`. `main` builds it and `server.New` takes it as its sixth argument.
   - *One package for blocks and reports, not two:* they share the target rule (not oneself), the error type and
     the never-log rules, and are wired and documented together.
   - *Not inside `profile`:* a block references users, not profiles (below), and later features will ask
@@ -152,12 +156,102 @@
 - **Limit** (amends 018): `UserLimits.BlockWrite`, `user_block_write`, burst 10 then 1 every 6 s (an assumed
   default), one bucket for `PUT` and `DELETE`, inside `authn` and keyed by the caller, so a member's sessions
   share it and unauthenticated requests spend nothing. Requests for unknown identifiers, repeats and refusals
-  spend it. `serverOptions` wires it and `TestServerOptionsWireEveryRateLimit` covers it. Twelve limiters.
+  spend it. `serverOptions` wires it and `TestServerOptionsWireEveryRateLimit` covers it. Twelve limiters, and
+  thirteen with the report limit below.
 - **Logs:** `block: added` and `block: removed`, with the blocker's `user_id` only and only when a row
   changed. Never the blocked member, by account id, public identifier or name: a line naming both would link
   two members in the one place 031 keeps free of that. The handlers and the hidden reads log nothing.
 - **Account deletion:** both foreign keys cascade, so a block goes when either account does; a deleted
   blocked member leaves the list and no longer counts toward the limit. No endpoint deletes an account (027).
+- **Reports.** The second part of this record: what a report is, where it is stored and why nobody can read
+  it back.
+  - **The `reports` table** (migration 00010): `reports(id uuid PRIMARY KEY, reporter_id → users ON DELETE SET
+    NULL, reported_id NOT NULL → users ON DELETE CASCADE, reason, details NOT NULL DEFAULT '', created_at,
+    updated_at)`, with `reports_reporter_reported_key UNIQUE (reporter_id, reported_id)`, `reports_not_self CHECK
+    (reporter_id <> reported_id)`, `reports_reason CHECK (reason IN (the five))`, `reports_details_length CHECK
+    (char_length(details) <= 1000)` and the index `reports_reported_id_idx (reported_id)`.
+    - *The two foreign keys differ* (approved): a report goes with the account it is about, because nothing
+      about a member outlives their account, and it stays when its author's account goes, with no reporter,
+      because a report must remain usable when its author leaves. A NULL reporter is distinct from every other
+      in the UNIQUE constraint, so several such rows about one member coexist, and the CHECK passes on NULL.
+    - *A surrogate `id`:* the pair cannot be the primary key once the reporter may be NULL. It is never
+      returned by the API; it is what `docs/moderation.md` deletes a handled report by.
+    - *The reason is text with a CHECK, not an enum type:* adding a reason is a migration that replaces the
+      CHECK, with no `ALTER TYPE`. `safety.Reasons` lists the same five.
+    - *Keyed by `users.id`,* like a block and for the same reasons.
+    - *The index* is how reports are read (by SQL, per reported member) and serves the cascade.
+  - **No snapshot** (approved). The table's columns are exactly those seven: a report holds who, about whom,
+    why and when, and no copy of the reported member's name, text, languages or picture. A schema test fixes
+    the column list. *The limitation, accepted:* the profile may have changed before anyone looks, so what a
+    reviewer sees is the profile as it is then, and the reporter's details are the only record of what was
+    seen. `docs/moderation.md` says so where the reviewer reads it.
+  - **The route:** `PUT /v1/me/reports/{id}` with `{"reason": "…", "details": "…"}` → 204 and no body.
+    - *`PUT` on the target:* there is one report per pair (approved), so the pair is the resource and a save
+      is a full replace, the shape of `PUT /v1/me/profile`. A repeat is harmless, which the client's resend
+      after a 401 and a retry after a 503 need; it is in the list of retriable operations in
+      `requestTimeout`'s comment.
+    - *204 and no body:* there is no report to give back, and returning one would be the first read of a
+      report.
+    - *Who reports is the session.* `reportRequest` lists `reason` and `details`; any other key, a reporter or
+      a reported member included, is an unknown field and the request is 400. A non-string value is 400 too.
+    - *The order in the handler* is the limit, the decode (400), `safety.ParseReport` (422), resolving the
+      identifier, `safety.Report` (422 `member: self`). **The body is validated before the identifier is
+      resolved,** so what is wrong with a report is answered the same whatever the identifier names: a 422
+      never depends on whether a profile exists. `ParseReport` is a function of its arguments and makes no
+      query.
+    - *An identifier that names no profile answers 204,* by the reasoning of the block write above, through
+      the same `targetUserID`. So a member can report a member who has blocked them, and one they have
+      blocked: `Report` never asks `Blocked`. Blocking first must not be a way to escape a report.
+    - *Reporting never blocks* (approved): the two are separate actions, and `Report` writes one table.
+  - **`ParseReport` and `ReportContent`.** The reason must be one of the five exactly: an empty one is `reason:
+    required`, and another case, a space around it or an unknown word is `reason: invalid`. Every failing field
+    is reported together. `ReportContent` has no exported field and only `ParseReport` makes one, so a value
+    that reaches `Report` has passed the rules; `Report` refuses the zero value, and the type prints as a
+    placeholder.
+  - **The details rules are fewer than a bio's.** Valid UTF-8, NFC, CRLF and CR as LF, tabs as spaces, no
+    spaces or line breaks around the text, at most 1000 characters (code points; an assumed default, a
+    constant, `safety.DetailsMaxLength`), and no control character but the line feed. Absent, `null`, empty
+    and only spaces all mean none. Parsing is idempotent.
+    - *Why fewer:* the profile's rules against invisible and bidirectional characters protect text **shown to
+      members**. Details are read by the people who run the service and never rendered in the app, and copying
+      those rules across packages (they don't import each other) is not worth it. Blank lines and inner spaces
+      are kept as written.
+    - *U+FFFD is refused* (`details: invalid`), which the design did not spell out: it is what
+      `encoding/json` leaves in place of bytes that are not valid UTF-8, so without it the spec's "bytes that
+      are not valid text" could never be answered over HTTP. 027 does the same for the profile.
+    - *The body cap is 64 KiB,* far above the longest valid report (about 12 KiB with every character escaped
+      as a surrogate pair), so a long paste gets `details: too_long` and not 400, as 027 arranged for the bio.
+  - **`Report` is one statement:** `INSERT … ON CONFLICT (reporter_id, reported_id) DO UPDATE SET reason,
+    details, updated_at = now() WHERE the content differs`. No transaction and no lock taken beforehand.
+    - *Idempotent:* the content already stored matches no row to update, so a repeat writes no row version,
+      leaves `updated_at` and logs nothing. A different reason or different details replace the content in
+      place: `created_at` and `id` stay, `updated_at` moves.
+    - *Concurrent reports of one pair* meet at the unique constraint and take the row in turn; each writes
+      its reason and its details together, so the last wins whole and the row never mixes two requests.
+    - *Locks:* the insert takes `FOR KEY SHARE` on both `users` rows for the foreign keys, which conflicts only
+      with `FOR UPDATE`. It can wait for one of `auth`'s token flows on either user; those wait for nothing
+      this statement holds. Two members reporting each other at once take only shared locks on each other's
+      rows.
+    - *A foreign-key failure on `reporter_id`* is `ErrUserGone` (401): the reporter was deleted after
+      authentication. Their earlier report of that member, if any, has a NULL reporter by then, so the
+      statement finds no conflict, inserts, and is refused by that foreign key; the earlier row is untouched.
+      *On `reported_id`* the target is gone: nothing is stored and the answer is 204.
+    - *Self:* `Report` refuses `reporter == reported` with `member: self` before any query; the CHECK backs it.
+  - **Write-only.** No route returns a report, a count of reports or whether one exists, to the reported
+    member, the reporter or anyone else: `server.go` registers the one `PUT`, so `GET /v1/me/reports` is a 404
+    and every other method on the route a 405. A report changes nothing that any member can request; a test
+    compares every response of the reported member, the reporter and a third member before and after, byte
+    for byte. Reports are read with database access only (`docs/moderation.md`).
+  - **Limit** (amends 018): `UserLimits.ReportWrite`, `user_report_write`, burst 5 then 1 a minute (an assumed
+    default), the picture's allowance and lower than the other writes: a report is rarer than a save, and each
+    one is something a person must later read. Inside `authn`, keyed by the caller, a bucket of its own.
+    Refused reports, repeats and reports for an identifier that names nobody spend it. Thirteen limiters.
+  - **Logs:** `report: saved`, with the reporter's `user_id` only, and only when a row was written or changed.
+    Never the reason, the details, the reported member (by account id, public identifier or name) or the
+    report's id. The reported `user_id` in a log line would link the two members in the one place 031 keeps
+    free of that, and the reason beside the reporter would say what one member thinks of another. The handler
+    logs nothing; an internal failure is the opaque 500 with the route's pattern.
+  - **Account deletion:** by the two foreign keys above. No endpoint deletes an account (027).
 - **What a block means for features that do not exist yet.** This is why `Blocked` is symmetric, and each later
   change must follow it:
   - Any route through which one member reads, finds, lists or contacts another asks `safety.Blocked`, or
@@ -173,10 +267,13 @@
     "Block" and "Report" on other members' profiles before it is released.
 - **The gate of 031 is restated, and not lifted by this change** (approved). No feature that lists, suggests or
   searches members ships, and the app is not released to the public, until **all three** hold:
-  1. blocking and reporting are deployed (blocking is built here; reporting is the rest of this change);
+  1. blocking and reporting are deployed. Both are built here, on the backend; the client's side is 034;
   2. the review process of `docs/moderation.md` is established: a named reviewer and a review interval are
-     written in it. That document does not exist yet;
+     written in it. The document exists and both are blank, on purpose: they are the author's to fill, and no
+     value is assumed. A report stored before then is read by nobody;
   3. the feature that lets members meet exposes "Block" and "Report" on other members' profiles.
+
+  Reporting existing is therefore necessary and not sufficient, as the proposal said of the whole change.
 - **Accepted risks:**
   - *A blocked member can still infer the block:* a profile that answered 200 now answers 404, and a second
     account sees it. Inherent to hiding. No single response says "blocked", and nothing is sent to them.
@@ -195,6 +292,16 @@
     how many of the members they blocked have blocked them.
   - *The time a write takes differs* between an identifier that names a member (a transaction) and one that
     names nobody (one read, or none when malformed), as on the reads (031). It was not measured.
+  - *Reports are stored and nobody reads them* until `docs/moderation.md` names a reviewer and an interval.
+    That is the gate's second condition, and why this change does not lift it.
+  - *False or mass reporting:* one report per pair, a per-account limit, and no automatic effect: a report
+    changes nothing by itself.
+  - *The reported member edits their profile before anyone looks:* a report holds no snapshot (above).
+  - *A deleted reporter's details stay,* and their text may identify them. The approved rule; reports are
+    reachable only with database access. A retention period is deferred with the tooling.
+  - *A reason or details can be changed by a later report,* so a reviewer reads the latest and not the first:
+    one report per pair, replaced whole (approved). `created_at` still says when the first was made.
+  - *The report limit is per process* (018), as every other.
 - **Tests of blocking:** the table (the primary key and the reverse row, `blocks_not_self` by name, both
   cascades, 00009 applied and rolled back with rows present); the service on the database (a block, a repeat
   writing and logging nothing, an unblock with and without a row and leaving the other member's block, `Blocked`
@@ -220,6 +327,31 @@
   member leaving the list and the count, the handlers failing closed, an expired deadline as 503, an opaque 500
   with the route's pattern, and the exact log lines with no line for a hidden read; and that `main` wires the
   limit.
-- **Deferred:** everything about reports (the rest of this change); the client (034); what a block does to
-  friend requests, discovery, search and chat (each of those changes); paging the list; a picture in the list; a way to undo, from the app, a block that is not listed;
-  telling "no profile" from "exists" on a write; an endpoint that deletes an account.
+- **Tests of reporting:** the table (exactly the seven columns, the four constraints by name, the 1000 limit
+  in characters, the cascade with the reported user, the reporter set to NULL with the content and `updated_at`
+  kept, two such rows about one member, 00010 applied and rolled back with rows present and the block kept);
+  `ParseReport` (each reason, `required` and `invalid`, details absent, empty and only spaces, 1000 and 1001 in
+  code points, CRLF, CR and tabs, control characters, invalid UTF-8 and U+FFFD, both fields together, parsing
+  its own output, no error holding the input, and the content never printed); the service on the database (a
+  first report, a repeat writing no row version and logging nothing, each kind of replacement moving
+  `updated_at` only, two reporters, self and a zero content refused with no query, a deleted reporter with an
+  earlier report left as it was, a deleted target, sixteen concurrent different reports leaving one whole
+  row, mutual reports, the exact log lines); over HTTP each scenario of the `member-reporting` spec that has a
+  route: a reason alone and with details, the session as the only reporter with another member's identifiers
+  in the query, every unknown key and non-string value as 400, the reasons and details matrices with the
+  stored text, several thousand characters as 422, invalid bytes, both fields named, a refused report keeping
+  the earlier one, a repeat and a replacement, sixteen concurrent reports from two sessions, self, the same 204
+  and the same 422 or 400 for every kind of identifier (the caller's own included, for a refused body), a
+  report in both directions across a block, no query for a malformed identifier or a refused body, no route
+  that reads a report, every response of three members byte-identical before and after and nothing but
+  `reports` written, nothing of the profile in the row, the 401 matrix, `no-store`, the handler failing
+  closed, the bucket (per member and their sessions, spent by every report, separate from the block bucket and
+  the four others, in both directions), a caller deleted before the write, both deletions, an expired deadline
+  as 503, an opaque 500 with the route's pattern, and the exact log lines; and that `main` wires the limit.
+  `docs/moderation.md`'s statements were each run as written against the test database.
+- **Deferred:** the client (034); a moderation dashboard, or any route that reads reports; a report's status,
+  assignment or an answer to the reporter; automatic hiding after a number of reports; a snapshot of what was
+  reported; a retention period for reports; the reviewer and the interval of `docs/moderation.md`; what a block does
+  to friend requests, discovery, search and chat (each of those changes); paging the list; a picture in the list; a
+  way to undo, from the app, a block that is not listed; telling "no profile" from "exists" on a write; an endpoint
+  that deletes an account.

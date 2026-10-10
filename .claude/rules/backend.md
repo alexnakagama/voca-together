@@ -25,16 +25,16 @@ for configuration.
   ever says whose it is. Request and response structs list their fields explicitly, so anything else in a body is
   an unknown field.
 - A write under `/v1/me` may name **another member as its target**, by public id in the path, when the resource
-  is something the caller does about that member (a block, 033). The resource is still the caller's; the id is
-  resolved with `profile.Service.Public` and the request changes nothing that belongs to the member named. The
-  rules for such a route, the 204 for an id that names nobody among them, are in `safety.md`.
+  is something the caller does about that member (a block or a report, 033). The resource is still the caller's;
+  the id is resolved with `profile.Service.Public` and the request changes nothing that belongs to the member
+  named. The rules for such a route, the 204 for an id that names nobody among them, are in `safety.md`.
 - Never log what a member wrote or chose. A save logs the `user_id` and nothing else.
 - A save is a full replace and idempotent: saving what is already stored writes nothing and logs nothing. Clients
   rely on it, because they resend a save after a 401 and retry after a 503.
 - A protected route that writes gets a per-user limit (`UserLimits`, `limitByUser`) inside `authn`, so only the
   user's own authenticated requests spend it. Each resource has its own bucket (`ProfileWrite`, `LanguagesWrite`,
-  `AvatarWrite`, `BlockWrite`). `serverOptions` in `main` must wire every one, `MemberRead` included: a limit left
-  out disables itself silently.
+  `AvatarWrite`, `BlockWrite`, `ReportWrite`). `serverOptions` in `main` must wire every one, `MemberRead`
+  included: a limit left out disables itself silently.
 
 ## Reading another member (the pattern of decisions 031 and 033)
 

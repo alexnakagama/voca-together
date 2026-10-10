@@ -26,9 +26,11 @@ import (
 // stores the same text and changes nothing, decision 027), saving languages
 // (idempotent in the same way, decision 029), setting or removing a picture
 // (idempotent: the same upload again is recognised and changes nothing, and
-// removing nothing is not an error, decision 031), and blocking or unblocking
+// removing nothing is not an error, decision 031), blocking or unblocking
 // a member (idempotent: a block that exists is not stored again, and
-// removing none is not an error, decision 033).
+// removing none is not an error, decision 033), and reporting a member
+// (idempotent: the report already stored is not written again, decision
+// 033).
 const requestTimeout = 10 * time.Second
 
 // requestDeadline gives each request's context a deadline of d.

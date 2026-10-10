@@ -13,6 +13,8 @@ import (
 const (
 	foreignKeyViolation = "23503"
 	blockedForeignKey   = "blocks_blocked_id_fkey"
+	reporterForeignKey  = "reports_reporter_id_fkey"
+	reportedForeignKey  = "reports_reported_id_fkey"
 )
 
 // errBlockedGone ends insertBlock's transaction when the user to block no
@@ -145,4 +147,44 @@ func listBlocked(ctx context.Context, pool *pgxpool.Pool, blockerID string) ([]s
 		return nil, fmt.Errorf("list blocked: %w", err)
 	}
 	return ids, nil
+}
+
+// upsertReport stores the report of reportedID by reporterID, replacing the
+// content of the one that pair already has. saved is false when nothing was
+// written: the stored report already says the same, or reportedID is not a
+// user (deleted since the caller resolved it). It returns ErrUserGone if
+// reporterID doesn't exist.
+//
+// One statement, no transaction and no lock taken beforehand. The unique
+// constraint on the pair decides between insert and update, so concurrent
+// reports of one pair take the row in turn and each writes its reason and
+// its details together: the last one wins whole. The WHERE keeps a repeat
+// from writing a row version or moving updated_at.
+//
+// The insert takes FOR KEY SHARE on both users rows for the foreign keys,
+// which conflicts only with FOR UPDATE: it can wait for one of auth's token
+// flows on either user, and those wait for nothing this statement holds (see
+// insertBlock). A reporter deleted meanwhile has no row to conflict with
+// (theirs now has a NULL reporter), so the statement inserts and the
+// reporter's foreign key refuses it.
+func upsertReport(ctx context.Context, pool *pgxpool.Pool, reporterID, reportedID string, c ReportContent) (saved bool, err error) {
+	tag, err := pool.Exec(ctx,
+		`INSERT INTO reports (reporter_id, reported_id, reason, details) VALUES ($1, $2, $3, $4)
+		 ON CONFLICT (reporter_id, reported_id) DO UPDATE
+		 SET reason = EXCLUDED.reason, details = EXCLUDED.details, updated_at = now()
+		 WHERE (reports.reason, reports.details) IS DISTINCT FROM (EXCLUDED.reason, EXCLUDED.details)`,
+		reporterID, reportedID, c.reason, c.details)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == foreignKeyViolation {
+		switch pgErr.ConstraintName {
+		case reporterForeignKey:
+			return false, ErrUserGone
+		case reportedForeignKey:
+			return false, nil
+		}
+	}
+	if err != nil {
+		return false, fmt.Errorf("upsert report: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
 }

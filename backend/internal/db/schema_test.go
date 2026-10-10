@@ -1231,3 +1231,320 @@ func TestMigration00009BlocksWithExistingRows(t *testing.T) {
 		t.Errorf("blocking after re-applying: %v", err)
 	}
 }
+
+func insertReport(pool *pgxpool.Pool, reporterID, reportedID, reason, details string) error {
+	_, err := pool.Exec(context.Background(),
+		`INSERT INTO reports (reporter_id, reported_id, reason, details) VALUES ($1, $2, $3, $4)`,
+		reporterID, reportedID, reason, details)
+	return err
+}
+
+// A report holds who, about whom, why and when, and nothing else: no column
+// can hold a copy of the reported member's name, text, languages or picture.
+func TestReportsColumnsAreExactlyTheReport(t *testing.T) {
+	pool := testutil.DB(t)
+	rows, err := pool.Query(context.Background(),
+		`SELECT column_name::text FROM information_schema.columns
+		 WHERE table_schema = 'public' AND table_name = 'reports' ORDER BY ordinal_position`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "id, reporter_id, reported_id, reason, details, created_at, updated_at"
+	if strings.Join(got, ", ") != want {
+		t.Errorf("columns of reports = %s, want exactly %s", strings.Join(got, ", "), want)
+	}
+}
+
+func TestReportsDefaultsAndNotNull(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := mustInsertUser(t, pool, "ben@example.com")
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO reports (reporter_id, reported_id, reason) VALUES ($1, $2, 'spam')`, ana, ben); err != nil {
+		t.Fatal(err)
+	}
+
+	var (
+		id, details          string
+		createdAt, updatedAt time.Time
+	)
+	err := pool.QueryRow(ctx, `SELECT id::text, details, created_at, updated_at FROM reports WHERE reported_id = $1`, ben).
+		Scan(&id, &details, &createdAt, &updatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id == "" || details != "" || createdAt.IsZero() || !updatedAt.Equal(createdAt) {
+		t.Errorf("defaults: id %q, details %q, created_at %v, updated_at %v; want an id, no details and one time",
+			id, details, createdAt, updatedAt)
+	}
+	// Everything but the reporter is required.
+	for _, column := range []string{"id", "reported_id", "reason", "details", "created_at", "updated_at"} {
+		_, err := pool.Exec(ctx, `UPDATE reports SET `+column+` = NULL WHERE reported_id = $1`, ben)
+		requirePgError(t, err, notNullViolation, "")
+	}
+}
+
+// One report by one member about another; the reverse pair, another reporter
+// and another reported member are each a report of their own.
+func TestReportsOnePerReporterAndReported(t *testing.T) {
+	pool := testutil.DB(t)
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := mustInsertUser(t, pool, "ben@example.com")
+	cho := mustInsertUser(t, pool, "cho@example.com")
+	if err := insertReport(pool, ana, ben, "spam", ""); err != nil {
+		t.Fatal(err)
+	}
+	requirePgError(t, insertReport(pool, ana, ben, "other", "again"), uniqueViolation, "reports_reporter_reported_key")
+
+	if err := insertReport(pool, ben, ana, "spam", ""); err != nil {
+		t.Errorf("the reverse report: %v", err)
+	}
+	if err := insertReport(pool, cho, ben, "spam", ""); err != nil {
+		t.Errorf("a second reporter of the same member: %v", err)
+	}
+	if err := insertReport(pool, ana, cho, "spam", ""); err != nil {
+		t.Errorf("a second report by the same member: %v", err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM reports`); n != 4 {
+		t.Errorf("reports = %d, want 4", n)
+	}
+}
+
+func TestReportsNotSelf(t *testing.T) {
+	pool := testutil.DB(t)
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := mustInsertUser(t, pool, "ben@example.com")
+	requirePgError(t, insertReport(pool, ana, ana, "spam", ""), checkViolation, "reports_not_self")
+
+	// Nor by changing a stored report.
+	if err := insertReport(pool, ana, ben, "spam", ""); err != nil {
+		t.Fatal(err)
+	}
+	_, err := pool.Exec(context.Background(), `UPDATE reports SET reported_id = reporter_id WHERE reporter_id = $1`, ana)
+	requirePgError(t, err, checkViolation, "reports_not_self")
+	if n := countRows(t, pool, `SELECT count(*) FROM reports WHERE reporter_id = reported_id`); n != 0 {
+		t.Errorf("reports of oneself = %d, want 0", n)
+	}
+}
+
+func TestReportsReason(t *testing.T) {
+	pool := testutil.DB(t)
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	for i, reason := range []string{"harassment", "inappropriate_content", "spam", "impersonation", "other"} {
+		reported := mustInsertUser(t, pool, "reported"+string(rune('a'+i))+"@example.com")
+		if err := insertReport(pool, ana, reported, reason, ""); err != nil {
+			t.Errorf("reason %q: %v", reason, err)
+		}
+	}
+	ben := mustInsertUser(t, pool, "ben@example.com")
+	for _, reason := range []string{"", "Spam", " spam", "spam ", "rude", "harassment,spam"} {
+		requirePgError(t, insertReport(pool, ana, ben, reason, ""), checkViolation, "reports_reason")
+	}
+}
+
+// The limit is in characters, not bytes, like the profile's text.
+func TestReportsDetailsLength(t *testing.T) {
+	pool := testutil.DB(t)
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := mustInsertUser(t, pool, "ben@example.com")
+	cho := mustInsertUser(t, pool, "cho@example.com")
+	if err := insertReport(pool, ana, ben, "other", strings.Repeat("語", 1000)); err != nil {
+		t.Errorf("1000 characters of three bytes each: %v", err)
+	}
+	requirePgError(t, insertReport(pool, ana, cho, "other", strings.Repeat("a", 1001)),
+		checkViolation, "reports_details_length")
+}
+
+// A report goes with the account it is about, and stays when its author's
+// account goes: about the same member, with the same content and no reporter.
+func TestReportsFollowTheReportedAndOutliveTheReporter(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	const nobody = "00000000-0000-0000-0000-000000000000"
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := mustInsertUser(t, pool, "ben@example.com")
+	cho := mustInsertUser(t, pool, "cho@example.com")
+	dan := mustInsertUser(t, pool, "dan@example.com")
+	requirePgError(t, insertReport(pool, nobody, ana, "spam", ""), foreignKeyViolation, "reports_reporter_id_fkey")
+	requirePgError(t, insertReport(pool, ana, nobody, "spam", ""), foreignKeyViolation, "reports_reported_id_fkey")
+
+	for _, r := range []struct{ reporter, reported, reason, details string }{
+		{ana, ben, "spam", "from ana"},
+		{cho, ben, "harassment", "from cho"},
+		{ana, dan, "other", "about dan"},
+		{ben, dan, "spam", ""},
+	} {
+		if err := insertReport(pool, r.reporter, r.reported, r.reason, r.details); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var before time.Time
+	if err := pool.QueryRow(ctx, `SELECT updated_at FROM reports WHERE reporter_id = $1 AND reported_id = $2`, ana, ben).
+		Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+
+	// The reporters are deleted: their reports stay, and name nobody.
+	for _, reporter := range []string{ana, cho} {
+		if _, err := pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, reporter); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM reports`); n != 4 {
+		t.Errorf("reports after deleting two reporters = %d, want 4", n)
+	}
+	// Two rows about one member with no reporter coexist.
+	rows, err := pool.Query(ctx,
+		`SELECT reason || ':' || details || ':' || (updated_at = created_at)::text FROM reports
+		 WHERE reported_id = $1 AND reporter_id IS NULL ORDER BY details`, ben)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "spam:from ana:true, harassment:from cho:true"; strings.Join(got, ", ") != want {
+		t.Errorf("reports about ben with no reporter = %v, want %s", got, want)
+	}
+	var after time.Time
+	if err := pool.QueryRow(ctx, `SELECT updated_at FROM reports WHERE details = 'from ana'`).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if !after.Equal(before) {
+		t.Errorf("updated_at moved when the reporter was deleted: %v, was %v", after, before)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM reports WHERE reported_id = $1 AND reporter_id IS NULL`, dan); n != 1 {
+		t.Errorf("ana's report about dan = %d rows with no reporter, want 1", n)
+	}
+
+	// The reported user is deleted: every report about them goes, with and
+	// without a reporter. Their own report of dan stays, without them.
+	if _, err := pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, ben); err != nil {
+		t.Fatal(err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM reports WHERE reported_id = $1`, ben); n != 0 {
+		t.Errorf("reports about a deleted user = %d, want 0", n)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM reports WHERE reported_id = $1 AND reporter_id IS NULL`, dan); n != 2 {
+		t.Errorf("reports about dan = %d, want 2 with no reporter", n)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM users`); n != 1 {
+		t.Errorf("users = %d, want dan: deleting a report's member deletes nobody else", n)
+	}
+}
+
+// Reports are read per reported member, and the cascade finds them the same
+// way; the unique constraint starts with the reporter.
+func TestReportsByReportedIndex(t *testing.T) {
+	pool := testutil.DB(t)
+	var def string
+	err := pool.QueryRow(context.Background(),
+		`SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'reports_reported_id_idx'`).Scan(&def)
+	if err != nil {
+		t.Fatalf("index reports_reported_id_idx: %v", err)
+	}
+	if !strings.Contains(def, "(reported_id)") {
+		t.Errorf("index definition = %q, want (reported_id)", def)
+	}
+}
+
+// testutil.DB empties the table like every table of user data.
+func TestReportsAreTruncatedBetweenTests(t *testing.T) {
+	pool := testutil.DB(t)
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := mustInsertUser(t, pool, "ben@example.com")
+	if err := insertReport(pool, ana, ben, "spam", ""); err != nil {
+		t.Fatal(err)
+	}
+	pool = testutil.DB(t)
+	if n := countRows(t, pool, `SELECT count(*) FROM reports`); n != 0 {
+		t.Errorf("reports after testutil.DB = %d, want 0", n)
+	}
+}
+
+// 00010 adds reports. Up leaves every other table as it was and reports
+// nobody; down removes the table with whatever reports it holds and touches
+// nothing else, blocks included.
+func TestMigration00010ReportsWithExistingRows(t *testing.T) {
+	ctx := context.Background()
+	pool := testutil.DB(t)
+	// Leave the schema migrated whatever happens here.
+	t.Cleanup(func() {
+		if err := db.Migrate(ctx, pool); err != nil {
+			t.Errorf("restoring the schema: %v", err)
+		}
+	})
+
+	// Before 00010: users, a profile, a picture and a block exist, the table
+	// does not.
+	if err := db.MigrateDownTo(ctx, pool, 9); err != nil {
+		t.Fatalf("down to 00009: %v", err)
+	}
+	if columnExists(t, pool, "reports", "reporter_id") {
+		t.Fatal("reports exists before 00010")
+	}
+	ana := mustInsertUser(t, pool, "ana@example.com")
+	ben := insertGoogleUser(t, pool, "ben@example.com", "1001")
+	if err := insertProfile(pool, ana, "Ana", "Hi"); err != nil {
+		t.Fatal(err)
+	}
+	if err := insertAvatar(pool, ana, []byte("ana"), hash(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := insertBlock(pool, ana, ben); err != nil {
+		t.Fatal(err)
+	}
+	anaID := publicID(t, pool, ana)
+
+	// Up with users present: nobody is reported.
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("up with users present: %v", err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM reports`); n != 0 {
+		t.Errorf("reports after migrating = %d, want 0", n)
+	}
+	if err := insertReport(pool, ana, ben, "spam", "details"); err != nil {
+		t.Fatal(err)
+	}
+	if err := insertReport(pool, ben, ana, "other", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// Down with reports present: they go; users, identities, the profile with
+	// its public id, the picture and the block stay.
+	if err := db.MigrateDownTo(ctx, pool, 9); err != nil {
+		t.Fatalf("down with reports present: %v", err)
+	}
+	if columnExists(t, pool, "reports", "reporter_id") {
+		t.Error("reports still exists after rolling 00010 back")
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM users u LEFT JOIN user_identities i ON i.user_id = u.id`); n != 2 {
+		t.Errorf("users after rolling back = %d, want 2", n)
+	}
+	if got := publicID(t, pool, ana); got != anaID {
+		t.Errorf("ana's public id after rolling back: %s, want %s", got, anaID)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM avatars WHERE user_id = $1`, ana); n != 1 {
+		t.Errorf("ana's pictures after rolling back = %d, want 1", n)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM blocks WHERE blocker_id = $1 AND blocked_id = $2`, ana, ben); n != 1 {
+		t.Errorf("ana's block after rolling back = %d rows, want 1", n)
+	}
+
+	// Up again: an empty table, and the same users can report.
+	if err := db.Migrate(ctx, pool); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+	if n := countRows(t, pool, `SELECT count(*) FROM reports`); n != 0 {
+		t.Errorf("reports after re-applying = %d, want 0", n)
+	}
+	if err := insertReport(pool, ana, ben, "spam", ""); err != nil {
+		t.Errorf("reporting after re-applying: %v", err)
+	}
+}

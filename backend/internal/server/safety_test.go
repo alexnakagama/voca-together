@@ -1383,3 +1383,1183 @@ func TestBlockInternalErrorIsOpaque(t *testing.T) {
 		}
 	}
 }
+
+// ======== Reports ========
+
+const reportsPath = "/v1/me/reports"
+
+var (
+	reasonRequired = invalidField("reason", "required")
+	reasonInvalid  = invalidField("reason", "invalid")
+	detailsTooLong = invalidField("details", "too_long")
+	detailsInvalid = invalidField("details", "invalid")
+)
+
+func (a testAPI) putReport(accessToken, id, body string) *httptest.ResponseRecorder {
+	return a.profileWith(http.MethodPut, reportsPath+"/"+id, body, "Bearer "+accessToken)
+}
+
+// reportJSON is a PUT body, encoded so any text is valid JSON.
+func reportJSON(t *testing.T, reason, details string) string {
+	t.Helper()
+	body, err := json.Marshal(map[string]string{"reason": reason, "details": details})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
+
+func (a testAPI) reportCount(t *testing.T) int {
+	t.Helper()
+	return a.count(t, "reports")
+}
+
+// report returns the stored report of the account reported by the account
+// reporter, read straight from the database: its content, and a version that
+// changes whenever the row is rewritten or its updated_at moves. found is
+// false when there is none.
+func (a testAPI) report(t *testing.T, reporter, reported string) (reason, details, version string, found bool) {
+	t.Helper()
+	rows, err := a.pool.Query(context.Background(),
+		`SELECT r.reason, r.details, r.xmin::text || '/' || r.ctid::text || ' ' || r.created_at::text || ' ' || r.updated_at::text
+		 FROM reports r JOIN users a ON a.id = r.reporter_id JOIN users b ON b.id = r.reported_id
+		 WHERE a.email = $1 AND b.email = $2`, reporter, reported)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		if found {
+			t.Fatalf("more than one report of %s by %s", reported, reporter)
+		}
+		if err := rows.Scan(&reason, &details, &version); err != nil {
+			t.Fatal(err)
+		}
+		found = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return reason, details, version, found
+}
+
+// requireStoredReport checks the one report of reported by reporter.
+func (a testAPI) requireStoredReport(t *testing.T, reporter, reported, wantReason, wantDetails string) {
+	t.Helper()
+	reason, details, _, found := a.report(t, reporter, reported)
+	if !found {
+		t.Fatalf("no report of %s by %s is stored", reported, reporter)
+	}
+	if reason != wantReason || details != wantDetails {
+		t.Errorf("the report of %s by %s = %q, %q; want %q, %q", reported, reporter, reason, details, wantReason, wantDetails)
+	}
+}
+
+// requireReportDone checks the one answer of a report that was not refused:
+// 204, no body, and no header beyond the ones every protected response has.
+func requireReportDone(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	requireLoggedOut(t, rec)
+}
+
+// reportHandlerRequest is a report of id straight to the handler, as the mux
+// and requireAccessToken would leave it.
+func reportHandlerRequest(id, callerID, body string) *http.Request {
+	req := httptest.NewRequest(http.MethodPut, reportsPath+"/x", strings.NewReader(body))
+	req.SetPathValue("id", id)
+	return as(req, callerID)
+}
+
+// ---- Reporting a member ----
+
+func TestPutReportStoresTheReport(t *testing.T) {
+	api := newTestAPI(t)
+	ana, _ := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+	_, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+	_, choID := api.memberWithProfile(t, "cho@example.com", "Cho", "")
+
+	// A reason alone.
+	requireReportDone(t, api.putReport(ana.AccessToken, benID, `{"reason":"spam"}`))
+	api.requireStoredReport(t, "ana@example.com", "ben@example.com", "spam", "")
+
+	// A reason and details.
+	requireReportDone(t, api.putReport(ana.AccessToken, choID, reportJSON(t, "harassment", "They keep writing to me.")))
+	api.requireStoredReport(t, "ana@example.com", "cho@example.com", "harassment", "They keep writing to me.")
+
+	if n := api.reportCount(t); n != 2 {
+		t.Errorf("reports = %d, want 2", n)
+	}
+	// Reporting is not blocking.
+	if n := api.blockCount(t); n != 0 {
+		t.Errorf("blocks = %d: a report blocked someone", n)
+	}
+	requireMember(t, api.getMember(ana.AccessToken, benID), memberJSON(t, benID, "Ben", "", noLanguages))
+}
+
+// Reporting needs a session, not a profile.
+func TestPutReportByAMemberWithoutAProfile(t *testing.T) {
+	api := newTestAPI(t)
+	ana := api.loggedIn(t, "ana@example.com") // no profile
+	_, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+
+	requireReportDone(t, api.putReport(ana.AccessToken, benID, `{"reason":"other"}`))
+	api.requireStoredReport(t, "ana@example.com", "ben@example.com", "other", "")
+}
+
+// Who reports is the session and whom is the path. Another member's
+// identifiers in the query string name nobody, and a body that carries
+// anything but the reason and the details is refused whole.
+func TestReportBelongsToTheCallerOnly(t *testing.T) {
+	api := newTestAPI(t)
+	ana, _ := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+	_, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+	_, choID := api.memberWithProfile(t, "cho@example.com", "Cho", "")
+	choAccount := api.userID(t, "cho@example.com")
+	query := "?id=" + choID + "&reporter_id=" + choAccount + "&reported_id=" + choID + "&user_id=" + choAccount
+
+	requireReportDone(t, api.profileWith(http.MethodPut, reportsPath+"/"+benID+query, `{"reason":"spam"}`, "Bearer "+ana.AccessToken))
+	api.requireStoredReport(t, "ana@example.com", "ben@example.com", "spam", "")
+	if n := api.reportCount(t); n != 1 {
+		t.Errorf("reports = %d, want only ana's of ben", n)
+	}
+
+	for name, extra := range map[string]string{
+		"a reporter":           `"reporter_id":"` + choAccount + `"`,
+		"a reporter by public": `"reporter":"` + choID + `"`,
+		"a reported member":    `"reported_id":"` + choID + `"`,
+		"an id":                `"id":"` + choID + `"`,
+		"a user id":            `"user_id":"` + choAccount + `"`,
+		"a time":               `"created_at":"2020-01-01T00:00:00Z"`,
+		"a status":             `"status":"open"`,
+		"a capitalised twin":   `"Reason ":"other"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := `{"reason":"harassment","details":"x",` + extra + `}`
+			requireLoginResponse(t, api.putReport(ana.AccessToken, benID, body), http.StatusBadRequest, invalidRequest)
+			requireLoginResponse(t, api.putReport(ana.AccessToken, choID, body), http.StatusBadRequest, invalidRequest)
+		})
+	}
+	// Nothing was stored for Cho or by Cho, and the earlier report stands.
+	api.requireStoredReport(t, "ana@example.com", "ben@example.com", "spam", "")
+	if n := api.reportCount(t); n != 1 {
+		t.Errorf("reports = %d, want 1", n)
+	}
+}
+
+// ---- Report reasons ----
+
+func TestReportReasons(t *testing.T) {
+	api := newTestAPI(t)
+	ana, _ := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+	_, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+
+	for _, reason := range []string{"harassment", "inappropriate_content", "spam", "impersonation", "other"} {
+		requireReportDone(t, api.putReport(ana.AccessToken, benID, `{"reason":"`+reason+`"}`))
+		api.requireStoredReport(t, "ana@example.com", "ben@example.com", reason, "")
+	}
+	requireReportDone(t, api.putReport(ana.AccessToken, benID, reportJSON(t, "spam", "earlier")))
+
+	for name, tc := range map[string]struct {
+		body   string
+		status int
+		want   string
+	}{
+		"no reason":                 {`{}`, http.StatusUnprocessableEntity, reasonRequired},
+		"only details":              {`{"details":"x"}`, http.StatusUnprocessableEntity, reasonRequired},
+		"an empty reason":           {`{"reason":""}`, http.StatusUnprocessableEntity, reasonRequired},
+		"a null reason":             {`{"reason":null}`, http.StatusUnprocessableEntity, reasonRequired},
+		"upper case first":          {`{"reason":"Spam"}`, http.StatusUnprocessableEntity, reasonInvalid},
+		"upper case":                {`{"reason":"HARASSMENT"}`, http.StatusUnprocessableEntity, reasonInvalid},
+		"a space before":            {`{"reason":" spam"}`, http.StatusUnprocessableEntity, reasonInvalid},
+		"a space after":             {`{"reason":"spam "}`, http.StatusUnprocessableEntity, reasonInvalid},
+		"only a space":              {`{"reason":" "}`, http.StatusUnprocessableEntity, reasonInvalid},
+		"an unknown word":           {`{"reason":"rude"}`, http.StatusUnprocessableEntity, reasonInvalid},
+		"two reasons in one":        {`{"reason":"spam,other"}`, http.StatusUnprocessableEntity, reasonInvalid},
+		"a number":                  {`{"reason":3}`, http.StatusBadRequest, invalidRequest},
+		"a boolean":                 {`{"reason":true}`, http.StatusBadRequest, invalidRequest},
+		"a list":                    {`{"reason":["spam"]}`, http.StatusBadRequest, invalidRequest},
+		"an object":                 {`{"reason":{"code":"spam"}}`, http.StatusBadRequest, invalidRequest},
+		"details that are a number": {`{"reason":"other","details":3}`, http.StatusBadRequest, invalidRequest},
+		"details that are a list":   {`{"reason":"other","details":["x"]}`, http.StatusBadRequest, invalidRequest},
+	} {
+		t.Run(name, func(t *testing.T) {
+			requireLoginResponse(t, api.putReport(ana.AccessToken, benID, tc.body), tc.status, tc.want)
+		})
+	}
+	// A refused report keeps the earlier one.
+	api.requireStoredReport(t, "ana@example.com", "ben@example.com", "spam", "earlier")
+	if n := api.reportCount(t); n != 1 {
+		t.Errorf("reports = %d, want 1", n)
+	}
+}
+
+// A body that is not one JSON object of the two fields is a malformed
+// request, whatever the identifier names.
+func TestReportMalformedBodies(t *testing.T) {
+	api := newTestAPI(t)
+	ana, _ := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+	_, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+
+	for name, body := range map[string]string{
+		"empty":         "",
+		"not JSON":      `reason=spam`,
+		"a string":      `"spam"`,
+		"a list":        `[{"reason":"spam"}]`,
+		"null":          `null `,
+		"truncated":     `{"reason":"spam"`,
+		"trailing data": `{"reason":"spam"}{"reason":"other"}`,
+		"oversized":     `{"reason":"spam","details":"` + strings.Repeat("a", maxReportBodyBytes) + `"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			existing := api.putReport(ana.AccessToken, benID, body)
+			if name == "null" {
+				// JSON null decodes to no fields at all: a report with no reason.
+				requireLoginResponse(t, existing, http.StatusUnprocessableEntity, reasonRequired)
+			} else {
+				requireLoginResponse(t, existing, http.StatusBadRequest, invalidRequest)
+			}
+			requireSameResponse(t, "an unknown id", api.putReport(ana.AccessToken, unknownMemberID, body), existing)
+			requireSameResponse(t, "a malformed id", api.putReport(ana.AccessToken, "not-an-id", body), existing)
+		})
+	}
+	if n := api.reportCount(t); n != 0 {
+		t.Errorf("reports = %d, want 0", n)
+	}
+}
+
+// ---- Report details ----
+
+func TestReportDetails(t *testing.T) {
+	api := newTestAPI(t)
+	ana, _ := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+	_, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+
+	// None, however it is said.
+	for name, body := range map[string]string{
+		"absent":      `{"reason":"spam"}`,
+		"null":        `{"reason":"spam","details":null}`,
+		"empty":       `{"reason":"spam","details":""}`,
+		"only spaces": `{"reason":"spam","details":"  \t \r\n "}`,
+	} {
+		requireReportDone(t, api.putReport(ana.AccessToken, benID, reportJSON(t, "other", "something")))
+		rec := api.putReport(ana.AccessToken, benID, body)
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("details %s: status = %d, want 204", name, rec.Code)
+		}
+		api.requireStoredReport(t, "ana@example.com", "ben@example.com", "spam", "")
+	}
+
+	// Stored as normalized.
+	for name, tc := range map[string]struct{ in, want string }{
+		"plain":                   {"They keep writing to me.", "They keep writing to me."},
+		"CRLF and a tab":          {"first line\r\n\tsecond line\r\nthird", "first line\n second line\nthird"},
+		"a lone carriage return":  {"one\rtwo", "one\ntwo"},
+		"surrounding whitespace":  {" \n text \t\n", "text"},
+		"composed":                {"José", "José"},
+		"other scripts":           {"嫌がらせ 🙂", "嫌がらせ 🙂"},
+		"1000 characters":         {strings.Repeat("a", 1000), strings.Repeat("a", 1000)},
+		"1000 three-byte":         {strings.Repeat("語", 1000), strings.Repeat("語", 1000)},
+		"1000 after trimming":     {"  " + strings.Repeat("a", 1000) + "\r\n", strings.Repeat("a", 1000)},
+		"markup is only text":     {`<script>alert(1)</script> & "quotes"`, `<script>alert(1)</script> & "quotes"`},
+		"SQL is only text":        {`'); DROP TABLE reports; --`, `'); DROP TABLE reports; --`},
+		"a reason in the details": {"harassment", "harassment"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			requireReportDone(t, api.putReport(ana.AccessToken, benID, reportJSON(t, "other", tc.in)))
+			api.requireStoredReport(t, "ana@example.com", "ben@example.com", "other", tc.want)
+		})
+	}
+	// The longest valid report, every character escaped as a surrogate pair,
+	// is far below the body limit.
+	escaped := `{"reason":"inappropriate_content","details":"` + strings.Repeat(`𠀀`, 1000) + `"}`
+	if len(escaped) > maxReportBodyBytes/4 {
+		t.Fatalf("the longest valid report is %d bytes, close to the %d limit", len(escaped), maxReportBodyBytes)
+	}
+	requireReportDone(t, api.putReport(ana.AccessToken, benID, escaped))
+	api.requireStoredReport(t, "ana@example.com", "ben@example.com", "inappropriate_content", strings.Repeat("𠀀", 1000))
+
+	// Refused, by the field's own rule, and the stored report stays.
+	requireReportDone(t, api.putReport(ana.AccessToken, benID, reportJSON(t, "spam", "earlier")))
+	for name, tc := range map[string]struct{ body, want string }{
+		"1001 characters":           {reportJSON(t, "other", strings.Repeat("a", 1001)), detailsTooLong},
+		"1001 three-byte":           {reportJSON(t, "other", strings.Repeat("語", 1001)), detailsTooLong},
+		"several thousand":          {reportJSON(t, "other", strings.Repeat("a", 8000)), detailsTooLong},
+		"tens of thousands":         {reportJSON(t, "other", strings.Repeat("a", 60000)), detailsTooLong},
+		"a NUL":                     {`{"reason":"other","details":"a\u0000b"}`, detailsInvalid},
+		"an escape":                 {`{"reason":"other","details":"a\u001bb"}`, detailsInvalid},
+		"a vertical tab":            {`{"reason":"other","details":"a\u000bb"}`, detailsInvalid},
+		"a delete":                  {`{"reason":"other","details":"a\u007fb"}`, detailsInvalid},
+		"bytes that are not UTF-8":  {"{\"reason\":\"other\",\"details\":\"a\xff\xfeb\"}", detailsInvalid},
+		"a lone surrogate":          {`{"reason":"other","details":"a\ud800b"}`, detailsInvalid},
+		"unknown reason, too long":  {reportJSON(t, "rude", strings.Repeat("a", 1001)), `{"error":{"code":"validation_failed","fields":[{"field":"reason","code":"invalid"},{"field":"details","code":"too_long"}]}}`},
+		"no reason, a control char": {`{"details":"a\u0000b"}`, `{"error":{"code":"validation_failed","fields":[{"field":"reason","code":"required"},{"field":"details","code":"invalid"}]}}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			requireLoginResponse(t, api.putReport(ana.AccessToken, benID, tc.body), http.StatusUnprocessableEntity, tc.want)
+		})
+	}
+	api.requireStoredReport(t, "ana@example.com", "ben@example.com", "spam", "earlier")
+	if n := api.reportCount(t); n != 1 {
+		t.Errorf("reports = %d, want 1", n)
+	}
+}
+
+// ---- One report per reporter and reported member ----
+
+func TestPutReportIsIdempotentAndReplaces(t *testing.T) {
+	api := newTestAPI(t)
+	ana, _ := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+	_, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+	cho, _ := api.memberWithProfile(t, "cho@example.com", "Cho", "")
+	body := reportJSON(t, "spam", "The same link, again and again.")
+
+	first := api.putReport(ana.AccessToken, benID, body)
+	requireReportDone(t, first)
+	_, _, before, _ := api.report(t, "ana@example.com", "ben@example.com")
+
+	// The same report again, also written differently: nothing is rewritten.
+	for _, repeat := range []string{body, `{"details":"  The same link, again and again.\r\n","reason":"spam"}`} {
+		rec := api.putReport(ana.AccessToken, benID, repeat)
+		requireReportDone(t, rec)
+		requireSameResponse(t, "a repeat", rec, first)
+	}
+	if _, _, after, _ := api.report(t, "ana@example.com", "ben@example.com"); after != before {
+		t.Errorf("a repeat rewrote the report: %s, was %s", after, before)
+	}
+
+	// A later report replaces the content of the earlier one.
+	rec := api.putReport(ana.AccessToken, benID, reportJSON(t, "harassment", "Now it is insults."))
+	requireReportDone(t, rec)
+	requireSameResponse(t, "a replacement", rec, first)
+	api.requireStoredReport(t, "ana@example.com", "ben@example.com", "harassment", "Now it is insults.")
+	if _, _, after, _ := api.report(t, "ana@example.com", "ben@example.com"); after == before {
+		t.Error("a replacement did not move updated_at")
+	}
+	if n := api.reportCount(t); n != 1 {
+		t.Errorf("reports = %d, want 1", n)
+	}
+
+	// Another member's report of the same member is their own.
+	requireReportDone(t, api.putReport(cho.AccessToken, benID, `{"reason":"impersonation"}`))
+	api.requireStoredReport(t, "ana@example.com", "ben@example.com", "harassment", "Now it is insults.")
+	api.requireStoredReport(t, "cho@example.com", "ben@example.com", "impersonation", "")
+	if n := api.reportCount(t); n != 2 {
+		t.Errorf("reports = %d, want one by each", n)
+	}
+}
+
+// Several different reports of one member at once, from two of the
+// reporter's sessions: all are accepted, one row, and it holds the reason
+// and the details of one request together.
+func TestConcurrentReportsOverHTTP(t *testing.T) {
+	api := newTestAPI(t)
+	ana, _ := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+	second := decodeTokens(t, api.login(loginBody("ana@example.com", loginPassword)))
+	_, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+
+	const n = 16
+	sent := make(map[string]string, n) // details -> reason
+	bodies := make([]string, n)
+	for i := range bodies {
+		reason, details := safety.Reasons[i%len(safety.Reasons)], fmt.Sprintf("request %d", i)
+		sent[details] = reason
+		bodies[i] = reportJSON(t, reason, details)
+	}
+	recs := make([]*httptest.ResponseRecorder, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range n {
+		token := ana.AccessToken
+		if i%2 == 1 {
+			token = second.AccessToken
+		}
+		wg.Go(func() {
+			<-start
+			recs[i] = api.putReport(token, benID, bodies[i])
+		})
+	}
+	close(start)
+	wg.Wait()
+
+	for i, rec := range recs {
+		if rec.Code != http.StatusNoContent {
+			t.Errorf("report %d: status = %d, want 204; body %s", i, rec.Code, rec.Body)
+		}
+	}
+	reason, details, _, found := api.report(t, "ana@example.com", "ben@example.com")
+	if !found || api.reportCount(t) != 1 {
+		t.Fatalf("reports = %d, want one", api.reportCount(t))
+	}
+	if sent[details] != reason {
+		t.Errorf("stored = %q, %q: not the content of any one request", reason, details)
+	}
+}
+
+// ---- A member cannot report themselves ----
+
+func TestReportingOneselfIsRefused(t *testing.T) {
+	api := newTestAPI(t)
+	ana, anaID := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+
+	requireLoginResponse(t, api.putReport(ana.AccessToken, anaID, reportJSON(t, "other", "me")),
+		http.StatusUnprocessableEntity, memberSelf)
+	if n := api.reportCount(t); n != 0 {
+		t.Errorf("reports = %d, want 0", n)
+	}
+	// The body is judged first, as for any identifier.
+	requireLoginResponse(t, api.putReport(ana.AccessToken, anaID, `{"reason":"rude"}`),
+		http.StatusUnprocessableEntity, reasonInvalid)
+	// Their own profile is as readable as before.
+	requireMember(t, api.getMember(ana.AccessToken, anaID), memberJSON(t, anaID, "Ana", "", noLanguages))
+}
+
+// ---- A report does not reveal whether a profile exists ----
+
+// A report answers the same, in status, body and headers, whether the
+// identifier names a member, names nobody or is not an identifier: the 204
+// of a valid one, and the 422 or 400 of one that is not. Only a valid report
+// of an existing member stores anything.
+func TestReportsAnswerTheSameForEveryIdentifier(t *testing.T) {
+	api := newTestAPI(t)
+	ana, anaID := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+	_, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+	api.loggedIn(t, "cho@example.com") // an account that has saved no profile
+	misses := map[string]string{
+		"a well-formed id nobody has":     unknownMemberID,
+		"not an id":                       "not-an-id",
+		"upper case":                      strings.ToUpper(benID),
+		"own id in upper case":            strings.ToUpper(anaID),
+		"braces":                          "%7B" + benID + "%7D",
+		"no hyphens":                      strings.ReplaceAll(benID, "-", ""),
+		"one character short":             benID[:35],
+		"one character long":              benID + "0",
+		"trailing space":                  benID + "%20",
+		"another member's account id":     api.userID(t, "ben@example.com"),
+		"the caller's account id":         api.userID(t, "ana@example.com"),
+		"an account id without a profile": api.userID(t, "cho@example.com"),
+		"an email address":                "ben%40example.com",
+		"me":                              "me",
+	}
+
+	valid := reportJSON(t, "spam", "details")
+	existing := api.putReport(ana.AccessToken, benID, valid)
+	requireReportDone(t, existing)
+	for name, id := range misses {
+		t.Run("valid, "+name, func(t *testing.T) {
+			rec := api.putReport(ana.AccessToken, id, valid)
+			requireReportDone(t, rec)
+			requireSameResponse(t, name, rec, existing)
+		})
+	}
+	// A repeat for the existing member answers that way too.
+	requireSameResponse(t, "a repeat", api.putReport(ana.AccessToken, benID, valid), existing)
+
+	for what, tc := range map[string]struct {
+		body   string
+		status int
+		want   string
+	}{
+		"an unknown reason": {`{"reason":"rude"}`, http.StatusUnprocessableEntity, reasonInvalid},
+		"no reason":         {`{}`, http.StatusUnprocessableEntity, reasonRequired},
+		"long details":      {reportJSON(t, "other", strings.Repeat("a", 1001)), http.StatusUnprocessableEntity, detailsTooLong},
+		"an unknown key":    {`{"reason":"spam","reporter_id":"x"}`, http.StatusBadRequest, invalidRequest},
+	} {
+		refused := api.putReport(ana.AccessToken, benID, tc.body)
+		requireLoginResponse(t, refused, tc.status, tc.want)
+		// Their own id included: what is wrong with the body comes first.
+		requireSameResponse(t, what+", own id", api.putReport(ana.AccessToken, anaID, tc.body), refused)
+		for name, id := range misses {
+			requireSameResponse(t, what+", "+name, api.putReport(ana.AccessToken, id, tc.body), refused)
+		}
+	}
+
+	api.requireStoredReport(t, "ana@example.com", "ben@example.com", "spam", "details")
+	if n := api.reportCount(t); n != 1 {
+		t.Errorf("reports = %d, want only ana's of ben", n)
+	}
+}
+
+// A block between the two members, made by either, does not prevent a
+// report, and the answer is the one an unknown identifier gets: blocking
+// first is no way to escape a report, and a report is no way to confirm a
+// block.
+func TestReportingAcrossABlock(t *testing.T) {
+	api := newTestAPI(t)
+	ana, anaID := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+	ben, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+	cho, choID := api.memberWithProfile(t, "cho@example.com", "Cho", "")
+	body := reportJSON(t, "harassment", "details")
+	unknown := api.putReport(ana.AccessToken, unknownMemberID, body)
+	requireReportDone(t, unknown)
+
+	// Ben has blocked Ana, who can no longer read him and reports him.
+	requireBlockDone(t, api.putBlock(ben.AccessToken, anaID))
+	requireMemberNotFound(t, api.getMember(ana.AccessToken, benID))
+	rec := api.putReport(ana.AccessToken, benID, body)
+	requireReportDone(t, rec)
+	requireSameResponse(t, "reporting a member who blocked the caller", rec, unknown)
+	api.requireStoredReport(t, "ana@example.com", "ben@example.com", "harassment", "details")
+
+	// Ana has blocked Cho, and reports them.
+	requireBlockDone(t, api.putBlock(ana.AccessToken, choID))
+	rec = api.putReport(ana.AccessToken, choID, body)
+	requireReportDone(t, rec)
+	requireSameResponse(t, "reporting a member the caller blocked", rec, unknown)
+	api.requireStoredReport(t, "ana@example.com", "cho@example.com", "harassment", "details")
+
+	// And the member who blocked can report the one they blocked, and be
+	// reported by them, in both directions at once.
+	requireReportDone(t, api.putReport(ben.AccessToken, anaID, body))
+	requireReportDone(t, api.putReport(cho.AccessToken, anaID, body))
+	if n := api.reportCount(t); n != 4 {
+		t.Errorf("reports = %d, want 4", n)
+	}
+	// The blocks are as they were.
+	if n := api.blockCount(t); n != 2 {
+		t.Errorf("blocks = %d, want 2", n)
+	}
+}
+
+// A malformed id is answered without asking the database, and a body that is
+// refused before any id is looked at: the services here have no pool, so any
+// query would panic.
+func TestReportsDoNotQueryForAMalformedIDOrARefusedBody(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	h := handlePutReport(logger, profile.NewService(nil, logger), safety.NewService(nil, logger))
+
+	const lettered = "abcdefab-cdef-4bcd-8fab-cdefabcdefab"
+	for _, id := range []string{"", "not-an-id", strings.ToUpper(lettered), lettered + " ", "{" + lettered + "}", lettered[:35]} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, reportHandlerRequest(id, unknownMemberID, `{"reason":"spam","details":"x"}`))
+		if rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
+			t.Errorf("%q: %d %q, want 204 and no body", id, rec.Code, rec.Body)
+		}
+	}
+	for body, status := range map[string]int{
+		`{"reason":"rude"}`:          http.StatusUnprocessableEntity,
+		`{}`:                         http.StatusUnprocessableEntity,
+		`{"reason":"spam","id":"x"}`: http.StatusBadRequest,
+		`not json`:                   http.StatusBadRequest,
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, reportHandlerRequest(lettered, unknownMemberID, body))
+		if rec.Code != status {
+			t.Errorf("%s for a well-formed id: status = %d, want %d", body, rec.Code, status)
+		}
+	}
+}
+
+// ---- Reports are never returned ----
+
+// No route reads a report: the collection does not exist, and the one route
+// answers PUT and nothing else.
+func TestReportsCannotBeRead(t *testing.T) {
+	h := New(slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, Options{})
+	for path, methods := range map[string][]string{
+		reportsPath:                         {http.MethodGet, http.MethodPut, http.MethodPost, http.MethodPatch, http.MethodDelete},
+		reportsPath + "/":                   {http.MethodGet, http.MethodPut},
+		reportsPath + "/" + unknownMemberID: {http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPatch, http.MethodDelete},
+		reportsPath + "/" + unknownMemberID + "/details": {http.MethodGet, http.MethodPut},
+		"/v1/reports":                                  {http.MethodGet, http.MethodPost},
+		"/v1/reports/" + unknownMemberID:               {http.MethodGet, http.MethodPut},
+		"/v1/profiles/" + unknownMemberID + "/reports": {http.MethodGet, http.MethodPut},
+	} {
+		for _, method := range methods {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(method, path, nil))
+			if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+				t.Errorf("%s %s: status = %d, want 404 or 405", method, path, rec.Code)
+			}
+		}
+	}
+
+	// With a report stored and a valid token, for the reporter and for the
+	// reported member: still nothing, and the report is as it was.
+	api := newTestAPI(t)
+	ana, anaID := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+	ben, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+	requireReportDone(t, api.putReport(ana.AccessToken, benID, reportJSON(t, "spam", "MARKERDETAILS")))
+	_, _, before, _ := api.report(t, "ana@example.com", "ben@example.com")
+	for _, token := range []string{ana.AccessToken, ben.AccessToken} {
+		for _, path := range []string{reportsPath, reportsPath + "/" + benID, reportsPath + "/" + anaID} {
+			for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPatch, http.MethodDelete} {
+				rec := api.profileWith(method, path, `{"reason":"other"}`, "Bearer "+token)
+				if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+					t.Errorf("%s %s: status = %d, want 404 or 405", method, path, rec.Code)
+				}
+				if strings.Contains(rec.Body.String(), "MARKERDETAILS") || strings.Contains(rec.Body.String(), "spam") {
+					t.Errorf("%s %s returned something of a report: %s", method, path, rec.Body)
+				}
+			}
+		}
+	}
+	if _, _, after, found := api.report(t, "ana@example.com", "ben@example.com"); !found || after != before {
+		t.Error("a request that is not a report changed the stored report")
+	}
+	if n := api.reportCount(t); n != 1 {
+		t.Errorf("reports = %d, want 1", n)
+	}
+}
+
+// A report changes nothing that the reported member, or anyone else, can
+// request: every answer is byte for byte what it was before.
+func TestAReportChangesNoResponse(t *testing.T) {
+	api := newTestAPI(t)
+	ana, anaID := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+	ben, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "Ben's bio")
+	cho, choID := api.memberWithProfile(t, "cho@example.com", "Cho", "")
+	requireLanguages(t, api.putLanguages(ben.AccessToken, anasLanguages), anasLanguages)
+	requireImage(t, api.putAvatar(ben.AccessToken, pngUpload(t, 64, 64, avatarRed)))
+	requireBlockDone(t, api.putBlock(ben.AccessToken, choID))
+
+	requests := func() map[string]*httptest.ResponseRecorder {
+		return map[string]*httptest.ResponseRecorder{
+			"ben: me":                        api.me(ben.AccessToken),
+			"ben: own profile":               api.getProfile(ben.AccessToken),
+			"ben: own languages":             api.getLanguages(ben.AccessToken),
+			"ben: own picture":               api.getAvatar(ben.AccessToken),
+			"ben: own blocks":                api.getBlocks(ben.AccessToken),
+			"ben: own public profile":        api.getMember(ben.AccessToken, benID),
+			"ben: the reporter's profile":    api.getMember(ben.AccessToken, anaID),
+			"ben: the reporter's picture":    api.getMemberAvatar(ben.AccessToken, anaID),
+			"the reporter: ben's profile":    api.getMember(ana.AccessToken, benID),
+			"the reporter: ben's picture":    api.getMemberAvatar(ana.AccessToken, benID),
+			"the reporter: own blocks":       api.getBlocks(ana.AccessToken),
+			"a third member: ben's profile":  api.getMember(cho.AccessToken, benID),
+			"a third member: ana's profile":  api.getMember(cho.AccessToken, anaID),
+			"a third member: the catalog":    api.profileWith(http.MethodGet, "/v1/languages", "", "Bearer "+cho.AccessToken),
+			"a third member: own blocks":     api.getBlocks(cho.AccessToken),
+			"a third member: own profile":    api.getProfile(cho.AccessToken),
+			"a third member: ana's picture ": api.getMemberAvatar(cho.AccessToken, anaID),
+		}
+	}
+	before := requests()
+	stored := func() string {
+		var s string
+		err := api.pool.QueryRow(context.Background(),
+			`SELECT (SELECT string_agg(p::text, ';' ORDER BY p.user_id) FROM profiles p)
+			     || (SELECT string_agg(l::text, ';' ORDER BY l.user_id, l.kind, l.position) FROM user_languages l)
+			     || (SELECT string_agg(md5(a.image) || a.updated_at::text, ';' ORDER BY a.user_id) FROM avatars a)
+			     || (SELECT string_agg(b::text, ';') FROM blocks b)
+			     || (SELECT string_agg(u::text, ';' ORDER BY u.id) FROM users u)`).Scan(&s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	storedBefore := stored()
+
+	requireReportDone(t, api.putReport(ana.AccessToken, benID, reportJSON(t, "inappropriate_content", "MARKERDETAILS")))
+	requireReportDone(t, api.putReport(cho.AccessToken, benID, reportJSON(t, "spam", "MARKERDETAILS")))
+	requireReportDone(t, api.putReport(ana.AccessToken, benID, reportJSON(t, "harassment", "MARKERDETAILS again")))
+
+	for name, rec := range requests() {
+		requireSameResponse(t, name, rec, before[name])
+		if strings.Contains(rec.Body.String(), "MARKERDETAILS") || strings.Contains(rec.Body.String(), "report") {
+			t.Errorf("%s says something about a report: %s", name, rec.Body)
+		}
+	}
+	// Nothing of anybody's was written: only the reports.
+	if after := stored(); after != storedBefore {
+		t.Error("a report changed a profile, languages, a picture, a block or an account")
+	}
+	if n := api.reportCount(t); n != 2 {
+		t.Errorf("reports = %d, want 2", n)
+	}
+}
+
+// A report holds nothing of the reported member's profile, at the time or
+// later: what a reviewer sees of it is the profile as it is when they look.
+func TestAReportHoldsNothingOfTheProfile(t *testing.T) {
+	api := newTestAPI(t)
+	ana, _ := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+	ben, benID := api.memberWithProfile(t, "ben@example.com", "MARKERNAME", "MARKERBIO")
+	requireImage(t, api.putAvatar(ben.AccessToken, pngUpload(t, 64, 64, avatarRed)))
+	whole := func() string {
+		var row string
+		if err := api.pool.QueryRow(context.Background(), `SELECT r::text FROM reports r`).Scan(&row); err != nil {
+			t.Fatal(err)
+		}
+		return row
+	}
+
+	requireReportDone(t, api.putReport(ana.AccessToken, benID, reportJSON(t, "impersonation", "what I saw")))
+	before := whole()
+	for _, private := range []string{"MARKERNAME", "MARKERBIO", benID} {
+		if strings.Contains(before, private) {
+			t.Errorf("the stored report holds %q: %s", private, before)
+		}
+	}
+
+	// The profile changes after the report: the report does not.
+	requireProfile(t, api.putProfile(ben.AccessToken, profileJSON(t, "LATERNAME", "LATERBIO")))
+	if after := whole(); after != before {
+		t.Errorf("the report changed with the profile: %s, was %s", after, before)
+	}
+}
+
+// ---- Report routes are for signed-in members only ----
+
+// Without a usable access token a report answers the same 401, whatever the
+// identifier names and whatever the body says, and stores nothing.
+func TestReportRouteRejectsMissingOrUnusableCredentials(t *testing.T) {
+	api := newTestAPI(t)
+	tokens, _ := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+	_, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+	_, choID := api.memberWithProfile(t, "cho@example.com", "Cho", "")
+	requireReportDone(t, api.putReport(tokens.AccessToken, benID, reportJSON(t, "spam", "earlier")))
+	revoked := decodeTokens(t, api.login(loginBody("ana@example.com", loginPassword)))
+	requireLoggedOut(t, api.logout(revoked.AccessToken))
+	expired := decodeTokens(t, api.login(loginBody("ana@example.com", loginPassword)))
+	api.exec(t, `UPDATE sessions SET access_expires_at = now() - interval '1 second' WHERE access_token_hash = $1`,
+		auth.HashToken(expired.AccessToken))
+
+	for name, tc := range map[string]struct {
+		query  string
+		header []string
+	}{
+		"no header":           {},
+		"basic scheme":        {header: []string{"Basic " + tokens.AccessToken}},
+		"no scheme":           {header: []string{tokens.AccessToken}},
+		"refresh token":       {header: []string{"Bearer " + tokens.RefreshToken}},
+		"malformed":           {header: []string{"Bearer " + auth.AccessTokenPrefix + "garbage"}},
+		"unknown":             {header: []string{"Bearer " + auth.NewToken(auth.AccessTokenPrefix).Raw}},
+		"revoked":             {header: []string{"Bearer " + revoked.AccessToken}},
+		"expired":             {header: []string{"Bearer " + expired.AccessToken}},
+		"two headers":         {header: []string{"Bearer " + tokens.AccessToken, "Bearer " + tokens.AccessToken}},
+		"token only in query": {query: "?access_token=" + tokens.AccessToken},
+	} {
+		t.Run(name, func(t *testing.T) {
+			// Cho is not reported and Ben is: a report of either would change
+			// something.
+			existing := api.profileWith(http.MethodPut, reportsPath+"/"+choID+tc.query, reportJSON(t, "other", "later"), tc.header...)
+			requireUnauthorized(t, existing)
+			for _, id := range []string{benID, choID, unknownMemberID, "not-an-id", strings.ToUpper(benID), api.userID(t, "ben@example.com")} {
+				// A body that would be refused is not even looked at.
+				for _, body := range []string{reportJSON(t, "other", "later"), `{"reason":"rude"}`, `not json`, ""} {
+					rec := api.profileWith(http.MethodPut, reportsPath+"/"+id+tc.query, body, tc.header...)
+					requireUnauthorized(t, rec)
+					requireSameResponse(t, id, rec, existing)
+				}
+			}
+		})
+	}
+
+	api.requireStoredReport(t, "ana@example.com", "ben@example.com", "spam", "earlier")
+	if n := api.reportCount(t); n != 1 {
+		t.Errorf("an unauthenticated request changed the reports: %d stored", n)
+	}
+}
+
+// Every answer of the report route is marked no-store, whatever it says.
+func TestReportRouteNeverAllowsCaching(t *testing.T) {
+	api := newTestAPIWith(t, Options{UserLimits: UserLimits{ReportWrite: userLimiter(5)}})
+	ana, anaID := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+	_, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+
+	for _, tc := range []struct {
+		name string
+		rec  *httptest.ResponseRecorder
+		want int
+	}{
+		{"a report", api.putReport(ana.AccessToken, benID, `{"reason":"spam"}`), http.StatusNoContent},
+		{"an unknown id", api.putReport(ana.AccessToken, unknownMemberID, `{"reason":"spam"}`), http.StatusNoContent},
+		{"a refused field", api.putReport(ana.AccessToken, benID, `{"reason":"rude"}`), http.StatusUnprocessableEntity},
+		{"a malformed body", api.putReport(ana.AccessToken, benID, `not json`), http.StatusBadRequest},
+		{"oneself", api.putReport(ana.AccessToken, anaID, `{"reason":"spam"}`), http.StatusUnprocessableEntity},
+		{"over the limit", api.putReport(ana.AccessToken, benID, `{"reason":"spam"}`), http.StatusTooManyRequests},
+		{"no token", api.profileWith(http.MethodPut, reportsPath+"/"+benID, `{"reason":"spam"}`), http.StatusUnauthorized},
+	} {
+		if tc.rec.Code != tc.want {
+			t.Errorf("%s: status = %d, want %d", tc.name, tc.rec.Code, tc.want)
+		}
+		if got := tc.rec.Header().Values("Cache-Control"); !slices.Equal(got, []string{"no-store"}) {
+			t.Errorf("%s (%d): Cache-Control = %q, want no-store", tc.name, tc.rec.Code, got)
+		}
+	}
+}
+
+// Mounted without requireAccessToken by mistake, the handler fails closed:
+// nobody reports without an identity.
+func TestReportHandlerWithoutMiddlewareFailsClosed(t *testing.T) {
+	api := newTestAPI(t)
+	_, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+	logger := slog.New(slog.DiscardHandler)
+	h := handlePutReport(logger, profile.NewService(api.pool, logger), api.safetyService())
+
+	for _, id := range []string{benID, unknownMemberID, "not-an-id"} {
+		for _, body := range []string{`{"reason":"spam"}`, `{"reason":"rude"}`, `not json`} {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPut, reportsPath+"/x", strings.NewReader(body))
+			req.SetPathValue("id", id)
+			h.ServeHTTP(rec, req)
+			if rec.Code != http.StatusInternalServerError || strings.TrimSpace(rec.Body.String()) != internalError {
+				t.Errorf("%s %s: %d %s, want the opaque 500", id, body, rec.Code, rec.Body)
+			}
+		}
+	}
+	if n := api.reportCount(t); n != 0 {
+		t.Errorf("a handler without an identity stored %d reports", n)
+	}
+}
+
+// ---- Reports are limited ----
+
+func TestReportsAreLimitedPerUser(t *testing.T) {
+	api := newTestAPIWith(t, Options{UserLimits: UserLimits{ReportWrite: tightUserLimiter()}})
+	ana, anaID := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+	ben, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+	_, choID := api.memberWithProfile(t, "cho@example.com", "Cho", "")
+	body := reportJSON(t, "spam", "")
+
+	// Requests that don't authenticate never spend anyone's allowance.
+	requireUnauthorized(t, api.profileWith(http.MethodPut, reportsPath+"/"+benID, body))
+	requireUnauthorized(t, api.putReport(auth.NewToken(auth.AccessTokenPrefix).Raw, benID, body))
+
+	requireReportDone(t, api.putReport(ana.AccessToken, benID, body))
+	rec := api.putReport(ana.AccessToken, choID, body)
+	requireLoginResponse(t, rec, http.StatusTooManyRequests, rateLimited)
+	if got := rec.Header().Get("Retry-After"); got == "" || got == "0" {
+		t.Errorf("Retry-After = %q", got)
+	}
+	// Whatever is sent next is refused the same way, before it is read.
+	for name, limited := range map[string]*httptest.ResponseRecorder{
+		"a repeat":         api.putReport(ana.AccessToken, benID, body),
+		"a replacement":    api.putReport(ana.AccessToken, benID, reportJSON(t, "other", "later")),
+		"an unknown id":    api.putReport(ana.AccessToken, unknownMemberID, body),
+		"a malformed id":   api.putReport(ana.AccessToken, "not-an-id", body),
+		"oneself":          api.putReport(ana.AccessToken, anaID, body),
+		"a refused field":  api.putReport(ana.AccessToken, benID, `{"reason":"rude"}`),
+		"a malformed body": api.putReport(ana.AccessToken, benID, `not json`),
+	} {
+		requireLoginResponse(t, limited, http.StatusTooManyRequests, rateLimited)
+		requireSameResponse(t, name, limited, rec)
+	}
+	// Nothing over the limit was stored.
+	api.requireStoredReport(t, "ana@example.com", "ben@example.com", "spam", "")
+	if n := api.reportCount(t); n != 1 {
+		t.Errorf("reports = %d, want 1", n)
+	}
+
+	// The allowance is the member's: a second session of Ana's shares it,
+	// and Ben has his own.
+	second := decodeTokens(t, api.login(loginBody("ana@example.com", loginPassword)))
+	requireLoginResponse(t, api.putReport(second.AccessToken, choID, body), http.StatusTooManyRequests, rateLimited)
+	requireReportDone(t, api.putReport(ben.AccessToken, anaID, body))
+	requireLoginResponse(t, api.putReport(ben.AccessToken, choID, body), http.StatusTooManyRequests, rateLimited)
+
+	// Nothing else of Ana's is touched: she can still block and save.
+	requireBlockDone(t, api.putBlock(ana.AccessToken, benID))
+	requireBlocks(t, api.getBlocks(ana.AccessToken), blocksJSON(t, benID, "Ben"))
+	requireProfile(t, api.putProfile(ana.AccessToken, profileJSON(t, "Ana L.", "")))
+	requireLanguages(t, api.putLanguages(ana.AccessToken, anasLanguages), anasLanguages)
+	requireMe(t, api.me(ana.AccessToken))
+}
+
+// Every report costs a token, whatever comes of it: a refused one, one for
+// an id that names nobody, a repeat.
+func TestReportLimitCountsEveryReport(t *testing.T) {
+	for name, first := range map[string]func(api testAPI, token, own, other string) *httptest.ResponseRecorder{
+		"an unknown id": func(api testAPI, token, _, _ string) *httptest.ResponseRecorder {
+			return api.putReport(token, unknownMemberID, `{"reason":"spam"}`)
+		},
+		"a malformed id": func(api testAPI, token, _, _ string) *httptest.ResponseRecorder {
+			return api.putReport(token, "not-an-id", `{"reason":"spam"}`)
+		},
+		"an unknown reason": func(api testAPI, token, _, other string) *httptest.ResponseRecorder {
+			return api.putReport(token, other, `{"reason":"rude"}`)
+		},
+		"details too long": func(api testAPI, token, _, other string) *httptest.ResponseRecorder {
+			return api.putReport(token, other, `{"reason":"spam","details":"`+strings.Repeat("a", 1001)+`"}`)
+		},
+		"a malformed body": func(api testAPI, token, _, other string) *httptest.ResponseRecorder {
+			return api.putReport(token, other, `not json`)
+		},
+		"an oversized body": func(api testAPI, token, _, other string) *httptest.ResponseRecorder {
+			return api.putReport(token, other, `{"reason":"spam","details":"`+strings.Repeat("a", maxReportBodyBytes)+`"}`)
+		},
+		"oneself": func(api testAPI, token, own, _ string) *httptest.ResponseRecorder {
+			return api.putReport(token, own, `{"reason":"spam"}`)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			api := newTestAPIWith(t, Options{UserLimits: UserLimits{ReportWrite: tightUserLimiter()}})
+			ana, anaID := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+			_, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+
+			if rec := first(api, ana.AccessToken, anaID, benID); rec.Code == http.StatusTooManyRequests {
+				t.Fatalf("the first report was limited")
+			}
+			requireLoginResponse(t, api.putReport(ana.AccessToken, benID, `{"reason":"spam"}`), http.StatusTooManyRequests, rateLimited)
+			if n := api.reportCount(t); n != 0 {
+				t.Errorf("reports = %d, want 0", n)
+			}
+		})
+	}
+
+	// A repeat of a stored report costs one as well.
+	api := newTestAPIWith(t, Options{UserLimits: UserLimits{ReportWrite: userLimiter(2)}})
+	ana := api.loggedIn(t, "ana@example.com")
+	_, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+	requireReportDone(t, api.putReport(ana.AccessToken, benID, `{"reason":"spam"}`))
+	requireReportDone(t, api.putReport(ana.AccessToken, benID, `{"reason":"spam"}`))
+	requireLoginResponse(t, api.putReport(ana.AccessToken, benID, `{"reason":"spam"}`), http.StatusTooManyRequests, rateLimited)
+}
+
+// The report limit is a bucket of its own: spending it leaves the block
+// allowance and the others alone, and spending those leaves it.
+func TestReportLimitIsSeparateFromTheOthers(t *testing.T) {
+	api := newTestAPIWith(t, Options{UserLimits: UserLimits{
+		ProfileWrite: userLimiter(2), LanguagesWrite: tightUserLimiter(), AvatarWrite: tightUserLimiter(),
+		MemberRead: tightUserLimiter(), BlockWrite: tightUserLimiter(), ReportWrite: tightUserLimiter()}})
+	// Each member's profile save here is one of their two profile writes.
+	ana, _ := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+	_, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+	cho, _ := api.memberWithProfile(t, "cho@example.com", "Cho", "")
+
+	// Ana spends the report allowance; the block one and the rest still work.
+	requireReportDone(t, api.putReport(ana.AccessToken, benID, `{"reason":"spam"}`))
+	requireLoginResponse(t, api.putReport(ana.AccessToken, benID, `{"reason":"spam"}`), http.StatusTooManyRequests, rateLimited)
+	requireProfile(t, api.putProfile(ana.AccessToken, profileJSON(t, "Ana L.", "")))
+	requireLanguages(t, api.putLanguages(ana.AccessToken, anasLanguages), anasLanguages)
+	requireImage(t, api.putAvatar(ana.AccessToken, pngUpload(t, 64, 64, avatarRed)))
+	requireMember(t, api.getMember(ana.AccessToken, benID), memberJSON(t, benID, "Ben", "", noLanguages))
+	requireBlockDone(t, api.putBlock(ana.AccessToken, benID))
+
+	// Cho spends every other allowance; the report one is untouched.
+	requireProfile(t, api.putProfile(cho.AccessToken, profileJSON(t, "Cho 2", "")))
+	requireLoginResponse(t, api.putProfile(cho.AccessToken, profileJSON(t, "Cho 3", "")), http.StatusTooManyRequests, rateLimited)
+	requireLanguages(t, api.putLanguages(cho.AccessToken, anasLanguages), anasLanguages)
+	requireLoginResponse(t, api.putLanguages(cho.AccessToken, anasLanguages), http.StatusTooManyRequests, rateLimited)
+	requireImage(t, api.putAvatar(cho.AccessToken, pngUpload(t, 64, 64, avatarRed)))
+	requireLoginResponse(t, api.deleteAvatar(cho.AccessToken), http.StatusTooManyRequests, rateLimited)
+	requireMember(t, api.getMember(cho.AccessToken, benID), memberJSON(t, benID, "Ben", "", noLanguages))
+	requireLoginResponse(t, api.getMember(cho.AccessToken, benID), http.StatusTooManyRequests, rateLimited)
+	requireBlockDone(t, api.putBlock(cho.AccessToken, unknownMemberID))
+	requireLoginResponse(t, api.putBlock(cho.AccessToken, benID), http.StatusTooManyRequests, rateLimited)
+	requireReportDone(t, api.putReport(cho.AccessToken, benID, `{"reason":"spam"}`))
+}
+
+func TestNewUserLimitsForReportsMatchTheDecisionLog(t *testing.T) {
+	l := NewUserLimits(slog.New(slog.DiscardHandler))
+	const burst = 5
+	for i := range burst {
+		if ok, _ := l.ReportWrite.Allow("member"); !ok {
+			t.Fatalf("denied at %d, burst is %d", i+1, burst)
+		}
+	}
+	ok, retryAfter := l.ReportWrite.Allow("member")
+	if ok {
+		t.Errorf("allowed past burst %d", burst)
+	}
+	if retryAfter <= 6*time.Second || retryAfter > time.Minute {
+		t.Errorf("retry after %v, want within the one-minute refill", retryAfter)
+	}
+	// Another member has their own, and the block bucket is untouched.
+	if ok, _ := l.ReportWrite.Allow("other"); !ok {
+		t.Error("another member was refused")
+	}
+	if ok, _ := l.BlockWrite.Allow("member"); !ok {
+		t.Error("the member's block write was refused")
+	}
+}
+
+// ---- Reports and account deletion ----
+
+// A caller deleted after authentication but before the write: their sessions
+// are gone with them, so the answer is the 401 of a dead credential (016),
+// and nothing is stored.
+func TestReportRouteForAUserDeletedMeanwhile(t *testing.T) {
+	api := newTestAPI(t)
+	tokens := api.loggedIn(t, "ana@example.com")
+	_, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+	id := api.userID(t, "ana@example.com")
+	api.exec(t, `DELETE FROM users WHERE id = $1`, id)
+	logger := slog.New(slog.DiscardHandler)
+	h := handlePutReport(logger, profile.NewService(api.pool, logger), api.safetyService())
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, reportHandlerRequest(benID, id, `{"reason":"spam","details":"x"}`))
+	requireResponse(t, rec, http.StatusUnauthorized, invalidAccessToken)
+	if got := rec.Header().Get("WWW-Authenticate"); got != "Bearer" {
+		t.Errorf("WWW-Authenticate = %q, want Bearer", got)
+	}
+	if n := api.reportCount(t); n != 0 {
+		t.Errorf("reports = %d, want 0", n)
+	}
+	// Their next request is the 401 of a dead session.
+	requireUnauthorized(t, api.putReport(tokens.AccessToken, benID, `{"reason":"spam"}`))
+}
+
+// Reports about a deleted member go with them; a deleted reporter's reports
+// stay, about the same member and with the same content, and name nobody.
+func TestReportsAndAccountDeletionOverHTTP(t *testing.T) {
+	api := newTestAPI(t)
+	ana, _ := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+	_, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+	cho, choID := api.memberWithProfile(t, "cho@example.com", "Cho", "")
+	dee, _ := api.memberWithProfile(t, "dee@example.com", "Dee", "")
+	requireReportDone(t, api.putReport(ana.AccessToken, benID, reportJSON(t, "spam", "from ana")))
+	requireReportDone(t, api.putReport(cho.AccessToken, benID, reportJSON(t, "harassment", "from cho")))
+	requireReportDone(t, api.putReport(ana.AccessToken, choID, reportJSON(t, "other", "about cho")))
+
+	// The reporter's account is deleted.
+	api.exec(t, `DELETE FROM users WHERE email = 'ana@example.com'`)
+	if n := api.reportCount(t); n != 3 {
+		t.Fatalf("reports = %d, want 3: a deleted reporter's reports stay", n)
+	}
+	var kept string
+	err := api.pool.QueryRow(context.Background(),
+		`SELECT string_agg(u.email || ':' || r.reason || ':' || r.details, ', ' ORDER BY u.email)
+		 FROM reports r JOIN users u ON u.id = r.reported_id WHERE r.reporter_id IS NULL`).Scan(&kept)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "ben@example.com:spam:from ana, cho@example.com:other:about cho"; kept != want {
+		t.Errorf("reports with no reporter = %q, want %q", kept, want)
+	}
+	// Such a report belongs to nobody: another member's report of Ben is a
+	// new one beside it.
+	requireReportDone(t, api.putReport(dee.AccessToken, benID, reportJSON(t, "spam", "from ana")))
+	if n := api.reportCount(t); n != 4 {
+		t.Errorf("reports = %d, want 4", n)
+	}
+
+	// The reported member's account is deleted: every report about them
+	// goes, with and without a reporter.
+	api.exec(t, `DELETE FROM users WHERE email = 'ben@example.com'`)
+	if n := api.reportCount(t); n != 1 {
+		t.Errorf("reports = %d, want only the one about cho", n)
+	}
+	// A report of the identifier he had is the answer for nobody.
+	requireReportDone(t, api.putReport(cho.AccessToken, benID, `{"reason":"spam"}`))
+	if n := api.reportCount(t); n != 1 {
+		t.Errorf("reports = %d after reporting a deleted member, want 1", n)
+	}
+}
+
+// ---- 503 ----
+
+// A request whose time is already up stores nothing and answers 503; the
+// retry it invites then succeeds.
+func TestReportRouteWithAnExpiredDeadlineIsUnavailable(t *testing.T) {
+	api := newTestAPI(t)
+	tokens := api.loggedIn(t, "ana@example.com")
+	_, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+	logger := slog.New(slog.DiscardHandler)
+	h := handlePutReport(logger, profile.NewService(api.pool, logger), api.safetyService())
+
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	req := httptest.NewRequest(http.MethodPut, reportsPath+"/x", strings.NewReader(`{"reason":"spam"}`)).WithContext(ctx)
+	req.SetPathValue("id", benID)
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Cache-Control", "no-store") // as requireAccessToken leaves it
+	h.ServeHTTP(rec, as(req, api.userID(t, "ana@example.com")))
+	requireLoginResponse(t, rec, http.StatusServiceUnavailable, serviceUnavailable)
+	if got := rec.Header().Get("Retry-After"); got == "" || got == "0" {
+		t.Errorf("Retry-After = %q", got)
+	}
+	if n := api.reportCount(t); n != 0 {
+		t.Errorf("reports = %d, want 0", n)
+	}
+	requireReportDone(t, api.putReport(tokens.AccessToken, benID, `{"reason":"spam"}`))
+}
+
+// ---- Reports are never logged ----
+
+var reportLogLine = regexp.MustCompile(`^time=\S+ level=INFO msg="report: saved" user_id=([0-9a-f-]{36})$`)
+
+// The logs record that a member sent a report, with that member's user id
+// and nothing else: not the reason, not the details, not whom, by account
+// id, public id or name. A repeat, a refused report and one for an
+// identifier that names nobody log nothing.
+func TestReportLogsHoldTheReportersUserIDOnly(t *testing.T) {
+	api := newTestAPI(t)
+	ana, anaID := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+	_, benID := api.memberWithProfile(t, "ben@example.com", "MARKERNAME", "MARKERBIO")
+	api.svc.Wait()
+	before := api.logs.String()
+
+	saved := reportJSON(t, "impersonation", "MARKERDETAILS one")
+	requireReportDone(t, api.putReport(ana.AccessToken, benID, saved))
+	requireReportDone(t, api.putReport(ana.AccessToken, benID, saved)) // a repeat: not logged
+	requireReportDone(t, api.putReport(ana.AccessToken, unknownMemberID, saved))
+	requireReportDone(t, api.putReport(ana.AccessToken, "MARKERID", saved))
+	requireReportDone(t, api.putReport(ana.AccessToken, strings.ToUpper(benID), saved))
+	requireLoginResponse(t, api.putReport(ana.AccessToken, anaID, saved), http.StatusUnprocessableEntity, memberSelf)
+	requireLoginResponse(t, api.putReport(ana.AccessToken, benID, reportJSON(t, "MARKERREASON", "MARKERDETAILS refused")),
+		http.StatusUnprocessableEntity, reasonInvalid)
+	requireLoginResponse(t, api.putReport(ana.AccessToken, benID, reportJSON(t, "impersonation", "MARKERDETAILS\x00")),
+		http.StatusUnprocessableEntity, detailsInvalid)
+	requireLoginResponse(t, api.putReport(ana.AccessToken, benID, reportJSON(t, "impersonation", strings.Repeat("MARKERDETAILS", 100))),
+		http.StatusUnprocessableEntity, detailsTooLong)
+	requireLoginResponse(t, api.putReport(ana.AccessToken, benID, `{"reason":"impersonation","MARKERKEY":"MARKERDETAILS"}`),
+		http.StatusBadRequest, invalidRequest)
+	requireLoginResponse(t, api.putReport(ana.AccessToken, benID, `MARKERDETAILS`), http.StatusBadRequest, invalidRequest)
+	// A changed report is logged again.
+	requireReportDone(t, api.putReport(ana.AccessToken, benID, reportJSON(t, "inappropriate_content", "MARKERDETAILS two")))
+
+	api.svc.Wait()
+	added := strings.TrimPrefix(api.logs.String(), before)
+	lines := strings.Split(strings.TrimSpace(added), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("%d lines logged, want one per stored or changed report:\n%s", len(lines), added)
+	}
+	account := api.userID(t, "ana@example.com")
+	for i, line := range lines {
+		if m := reportLogLine.FindStringSubmatch(line); m == nil || m[1] != account {
+			t.Errorf("line %d = %q, want only that ana sent a report", i+1, line)
+		}
+	}
+	for _, private := range []string{
+		api.userID(t, "ben@example.com"), benID, anaID, unknownMemberID, "MARKER", "impersonation", "inappropriate_content",
+		ana.AccessToken, "example.com",
+	} {
+		if strings.Contains(strings.ToLower(added), strings.ToLower(private)) {
+			t.Errorf("logs contain %q: %s", private, added)
+		}
+	}
+}
+
+// A failure inside is an opaque 500, logged with the route's pattern and
+// never the identifier, anybody's account or anything of the report.
+func TestReportInternalErrorIsOpaque(t *testing.T) {
+	api := newTestAPI(t)
+	ana, anaID := api.memberWithProfile(t, "ana@example.com", "Ana", "")
+	_, benID := api.memberWithProfile(t, "ben@example.com", "Ben", "")
+	api.svc.Wait()
+	before := api.logs.String()
+	// Break the write by hiding a column it names.
+	api.exec(t, `ALTER TABLE reports RENAME COLUMN details TO test_hidden`)
+	t.Cleanup(func() {
+		_, _ = api.pool.Exec(context.Background(), `ALTER TABLE reports RENAME COLUMN test_hidden TO details`)
+	})
+
+	rec := api.putReport(ana.AccessToken, benID, reportJSON(t, "impersonation", "MARKERDETAILS"))
+	requireLoginResponse(t, rec, http.StatusInternalServerError, internalError)
+	if len(rec.Header()["Retry-After"]) != 0 || len(rec.Header()["Www-Authenticate"]) != 0 {
+		t.Errorf("headers = %v", rec.Header())
+	}
+	// What needs no write never reaches the broken table.
+	requireReportDone(t, api.putReport(ana.AccessToken, unknownMemberID, `{"reason":"spam"}`))
+	requireLoginResponse(t, api.putReport(ana.AccessToken, anaID, `{"reason":"spam"}`), http.StatusUnprocessableEntity, memberSelf)
+	requireLoginResponse(t, api.putReport(ana.AccessToken, benID, `{"reason":"rude"}`), http.StatusUnprocessableEntity, reasonInvalid)
+
+	api.svc.Wait()
+	logs := strings.TrimPrefix(api.logs.String(), before)
+	if !strings.Contains(logs, `route="PUT `+reportsPath+`/{id}"`) {
+		t.Errorf("the failure was not logged with its route: %s", logs)
+	}
+	if n := strings.Count(logs, "request failed"); n != 1 {
+		t.Errorf("%d failures logged, want 1", n)
+	}
+	for _, private := range []string{
+		benID, anaID, api.userID(t, "ana@example.com"), api.userID(t, "ben@example.com"), ana.AccessToken, "example.com",
+		"MARKERDETAILS", "impersonation",
+	} {
+		if strings.Contains(logs, private) {
+			t.Errorf("logs contain %q: %s", private, logs)
+		}
+	}
+}

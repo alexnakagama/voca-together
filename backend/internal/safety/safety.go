@@ -1,5 +1,5 @@
-// Package safety owns what one member does about another: blocking them
-// (decision 033). It knows nothing about HTTP or sessions, and it names
+// Package safety owns what one member does about another: blocking them and
+// reporting them (decision 033). It knows nothing about HTTP or sessions, and it names
 // members only by their internal user id: the caller resolves a public
 // identifier before calling and never passes one in, so none can be stored,
 // returned or logged here.
@@ -17,7 +17,7 @@ import (
 // the list of blocked members to one response without paging.
 const MaxBlocks = 200
 
-// Service implements the blocking use cases.
+// Service implements the blocking and reporting use cases.
 type Service struct {
 	pool   *pgxpool.Pool
 	logger *slog.Logger

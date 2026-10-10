@@ -10,7 +10,8 @@
 > a third per-user write limit (`user_avatar_write`): eleven limiters. 031 also added a second bounded queue
 > that answers 503 when it is full, for decoding uploaded pictures, beside the argon2 one. 033 added a fourth
 > per-user write limit (`user_block_write`, for blocking and unblocking a member): twelve limiters. Both are
-> idempotent and so safe to retry after a 503.
+> idempotent and so safe to retry after a 503. 033 then added a fifth (`user_report_write`, for reporting a
+> member, with the picture's allowance): thirteen limiters. A report is idempotent too.
 >
 > **Current rules:** `.claude/rules/backend.md` (API conventions), `.claude/rules/auth.md`,
 > `.claude/rules/config.md`.

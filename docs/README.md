@@ -13,6 +13,7 @@ to it or moving anything.
 | **Why**: reasoning, alternatives, races, accepted risks, deferred work, as history | `docs/decisions/NNN-topic.md` | on demand, one record at a time |
 | The index of those records, by topic and by status | `docs/decisions.md` | on demand |
 | Client setup and the device smoke test | `mobile/README.md` | on demand |
+| **An operating procedure** someone follows by hand: reading reports and acting on them | `docs/moderation.md` | on demand |
 | Plans for work in progress | not in the repository | never |
 
 The rule files, their areas and the paths that load each are listed in `CLAUDE.md`.

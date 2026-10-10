@@ -111,7 +111,8 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64)
 // to 404, a spent per-account limit to 429, overload, unavailable Google
 // keys or the request deadline to 503, anything else to an opaque 500 whose
 // details go only to the log. Service errors never contain secrets, profile
-// text, a member's languages, anything of an image or whom a member blocked.
+// text, a member's languages, anything of an image, whom a member blocked or
+// anything of a report.
 func writeServiceError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, err error) {
 	var verr *auth.ValidationError
 	var profileErr *profile.ValidationError

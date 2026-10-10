@@ -5,21 +5,27 @@ paths:
   - "backend/internal/server/safety_test.go"
   - "backend/internal/server/members.go"
   - "backend/internal/db/migrations/00009_blocks.sql"
+  - "backend/internal/db/migrations/00010_reports.sql"
+  - "docs/moderation.md"
 ---
 
-# Safety rules: blocking (`PUT`/`DELETE /v1/me/blocks/{id}`, `GET /v1/me/blocks`, backend)
+# Safety rules: blocking and reporting (`/v1/me/blocks`, `/v1/me/reports/{id}`, backend)
 
-Record: 033 (draft: blocking is built; reporting is approved and **not implemented**, see the last section). The
-general rules for a member's own resource and for reading another member are in `backend.md`. The client side is
-not built.
+Record: 033. The general rules for a member's own resource and for reading another member are in `backend.md`.
+How a report is read and acted on, by hand, is `docs/moderation.md`. The client side is not built (034, not
+written): nothing in the app blocks or reports yet.
 
 ## The package
 
-- `internal/safety` owns blocks and imports none of `auth`, `server`, `profile`, `language` and `avatar`.
+- `internal/safety` owns blocks and reports and imports none of `auth`, `server`, `profile`, `language` and
+  `avatar`.
 - It names members only by internal user id. A public id is resolved in `server` (`profile.Service.Public`) before
   the call and never passed in, so `safety` cannot store, return or log one.
 - A block is one row per direction in `blocks`, keyed by `users.id`: it survives the blocked member's profile
   being removed and saved again, and it goes when either account does.
+- A report is one row per reporter and reported member in `reports`, keyed by `users.id` too. It goes with the
+  **reported** account (`ON DELETE CASCADE`) and stays, with a NULL reporter, when the **reporter's** goes (`ON
+  DELETE SET NULL`). Never make the two foreign keys alike.
 
 ## What a block means
 
@@ -58,19 +64,43 @@ not built.
   an entry without redoing that sum (033).
 - `PUT` and `DELETE` share `UserLimits.BlockWrite`. The list is the caller's own data and is not limited.
 
+## The report route
+
+- `PUT /v1/me/reports/{id}` with `{"reason","details"}` → 204 and no body. The report belongs to the caller: the
+  reporter is always the session, and the path's `{id}` is the *target's* public id. `reportRequest` lists the
+  two fields; any other key is 400, so nothing in a body names a reporter.
+- **Reports are write-only.** No route returns a report, a count or whether one exists, to anyone, the reporter
+  included, and a report changes nothing any member can request. Never add a `GET` or a `DELETE` under
+  `/v1/me/reports`, a field about reports to a response, or anything that acts on a report by itself (hiding
+  after N reports, a block). Reports are read with database access only, by the process in `docs/moderation.md`.
+- **Order in the handler: decode (400), `safety.ParseReport` (422), resolve the id, `safety.Report`.** The body
+  is validated before the id is resolved, so a 422 or a 400 never depends on what the id names. Keep that order.
+- An id that names no profile answers 204 with nothing stored, as on the block routes and through the same
+  `targetUserID`. Only the caller's own id is told apart, after the body: 422 `member: self`.
+- `Report` never asks `Blocked`: a member can report one who blocked them, and one they blocked.
+- The reason is one of `safety.Reasons` exactly (the CHECK `reports_reason` lists the same five; a new reason is
+  a migration and both lists). Details are optional and at most `safety.DetailsMaxLength` (1000) characters:
+  NFC, line breaks as LF, tabs as spaces, trimmed, no control character but LF, no U+FFFD. They are **not** the
+  profile's rules: details are never shown to a member, so invisible and bidirectional characters are kept.
+  Never render details in the app without revisiting that.
+- Only `safety.ParseReport` makes a `ReportContent`; `Report` takes nothing else. One statement (`INSERT … ON
+  CONFLICT … DO UPDATE … WHERE the content differs`): a repeat writes and logs nothing, a different reason or
+  details replace the pair's one report whole, `updated_at` moves and `created_at` stays.
+- A report holds no copy of the reported member's name, text, languages or picture. Don't add a column for one.
+- `UserLimits.ReportWrite` is the route's own bucket (the picture's allowance). Refused reports, repeats and
+  unknown ids spend it. The body cap (64 KiB) is far above the field limit on purpose: a long paste is 422
+  `details: too_long`, not 400.
+
 ## Logs
 
 - `block: added` and `block: removed`, with the blocker's `user_id` only and only when a row changed.
-- Never log whom: not the blocked `user_id`, a public id or a name. A read hidden by a block logs nothing.
+- `report: saved`, with the reporter's `user_id` only and only when a row was written or changed.
+- Never log whom: not the blocked or reported `user_id`, a public id or a name. Never log a report's reason,
+  its details or its id. A read hidden by a block logs nothing.
 
 ## The gate (restates 031; not lifted)
 
 No feature that lists, suggests or searches members ships, and the app is not released to the public, until all
 three hold: blocking and reporting are deployed; `docs/moderation.md` names a reviewer and a review interval
-(the document is not written yet); and the feature that lets members meet exposes "Block" and "Report" on other
-members' profiles.
-
-## Reporting: approved, not implemented
-
-`PUT /v1/me/reports/{id}`, the `reports` table, `UserLimits.ReportWrite` and `docs/moderation.md` are designed in
-`openspec/changes/add-block-and-report/` and do not exist in the code. Nothing above describes them.
+(both are blank today, and they are the author's to fill: never fill them in or assume a value); and the feature
+that lets members meet exposes "Block" and "Report" on other members' profiles.

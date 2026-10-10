@@ -35,7 +35,8 @@ the file `docs/decisions/017-*.md`.
 | Profile | `profile.md` | 027 (backend), 032 then 028 (client), 031 (the public identifier) |
 | Reading another member's profile | `profile.md`, `backend.md` | 031 (backend), 032 (the member screen), then 027 and 029 |
 | Profile pictures | `avatar.md`, `profile.md` | 031 ("The profile picture"), 032 (the picture control and the photo chooser), 018 (limits and 503s) |
-| Blocking; what a block must hide in a new feature | `safety.md`, `backend.md` | 033 (draft: blocking built, reporting not), then 031 (the member read it hides) |
+| Blocking; what a block must hide in a new feature | `safety.md`, `backend.md` | 033, then 031 (the member read it hides) |
+| Reporting; reading and acting on reports | `safety.md`, `backend.md` | 033 ("Reports"), and `docs/moderation.md` for the manual process |
 | Languages | `languages.md` | 029 (backend), 030 (client, draft), 032 (where the editor is opened from) |
 | A new member-owned resource | `backend.md` | 027 and 029 as the two worked examples; 033 for one that names another member as its target |
 | Client structure and routing | `mobile.md` | 021, 028, 032 (the member route) |
@@ -85,7 +86,7 @@ complete yet, and its row says which part exists).
 | [030](decisions/030-client-languages.md) | Languages in the profile | client | draft: implemented, the editor included, and confirmed by hand on the emulator; the final pass over the documents pending. Its entry point and summary were changed by 032 |
 | [031](decisions/031-public-profile-backend.md) | Public profiles: the public identifier, the member read and the profile picture | backend | amended by 033 |
 | [032](decisions/032-client-social-profile.md) | Social profile in the client: the profile page, the edit screen, the picture and the member profile | client | in force |
-| [033](decisions/033-blocking-and-reporting-backend.md) | Blocking and reporting: blocks, what a block hides, the neutral 204, the restated gate | backend | draft: blocking is implemented and tested (the table, `internal/safety`, the three block routes, the check on the member reads); reporting and `docs/moderation.md` are approved and not built, and the record does not describe them yet |
+| [033](decisions/033-blocking-and-reporting-backend.md) | Blocking and reporting: blocks, what a block hides, the neutral 204, write-only reports, the restated gate | backend | in force; its gate is not lifted (the reviewer and the interval in `docs/moderation.md` are blank), and the client side (034) is not written |
 
 ## What later records changed
 
@@ -105,8 +106,8 @@ Each of these is also noted in the header of the earlier file.
 | 030 | 032 | The editor is opened from the edit screen, not from the summary, which lost its "Edit languages" button and its own reload: the page mounts a new summary on each load. |
 | 018 | 027, 029 | Protected writes have per-user limits; 018 had left protected routes unlimited. |
 | 018 | 031 | A protected read that names another member has a per-user limit (`user_member_read`), and setting or removing a picture a third per-user write limit (`user_avatar_write`). Eleven limiters. Decoding pictures is a second bounded queue that answers 503. |
-| 018 | 033 | A fourth per-user write limit, `user_block_write`, shared by blocking and unblocking a member. Twelve limiters. |
-| 031 | 033 | "One 404" has one more cause: a block between the reader and the owner, in either direction, hides the profile and the picture. A route under `/v1/me` may carry another member's public identifier as the target of the caller's own block, and such a write answers 204, not 404, when the identifier names no profile. The gate is restated with three conditions and not lifted. `profile.Service` gained `PublicByUsers`. |
+| 018 | 033 | A fourth per-user write limit, `user_block_write`, shared by blocking and unblocking a member, and a fifth, `user_report_write`, for reporting one. Thirteen limiters. |
+| 031 | 033 | "One 404" has one more cause: a block between the reader and the owner, in either direction, hides the profile and the picture. A route under `/v1/me` may carry another member's public identifier as the target of the caller's own block or report, and such a write answers 204, not 404, when the identifier names no profile. The gate is restated with three conditions and not lifted. `profile.Service` gained `PublicByUsers`. |
 | 027 | 031 | A profile is readable by other signed-in members by its public identifier, `profiles.public_id`; the owner's responses gained `id`. `users.id` stays private. |
 | 029 | 031 | A member's languages are returned to other signed-in members with their profile; `language.Service.Get` takes the user to read, not necessarily the caller. |
 | 015 | 023 | The client clears its tokens first and calls the server afterwards. |
@@ -130,7 +131,8 @@ Pointers only; the records hold the conditions and the reasons. Check the code b
 | Deep links; verify-email and reset-password inside the app; deep links to a profile | 021, 023, 024, 032 |
 | More locales, golden tests, a Google Sans subset | 022, 024 |
 | Profile: deletion and export, a handle, a profile gate | 027, 028, 031 |
-| Reporting and the moderation process (blocking is built): the gate before any feature that lists, suggests or searches members, and before a public release, restated with three conditions | 033, 031 |
+| The gate before any feature that lists, suggests or searches members, and before a public release, restated with three conditions: a named reviewer and a review interval in `docs/moderation.md`, and "Block" and "Report" exposed where members meet | 033, 031 |
+| Reports: a dashboard or any route that reads them, status and assignment, an answer to the reporter, a snapshot of what was reported, a retention period | 033 |
 | What a block does to friend requests, discovery, search and chat; exposing "Block" and "Report" where members meet | 033 |
 | The blocked list: paging, a picture, undoing from the app a block that is not listed | 033 |
 | Profile pictures: a cache and a version, thumbnails, an object store, cropping, more formats, a take-down tool | 031, 032 |

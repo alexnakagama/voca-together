@@ -57,6 +57,7 @@ Rules say what holds now and load by themselves; decision records say why and ar
 | `.claude/rules/google-sign-in.md` | The Google sign-in contract | with the Google files of both sides |
 | `.claude/rules/profile.md`, `languages.md` | Each feature's rules, backend and client | with that feature's files |
 | `.claude/rules/avatar.md` | The profile picture: what is accepted, stored, served and logged (backend) | with the avatar files |
+| `.claude/rules/safety.md` | Blocking and reporting: what a block hides, the neutral 204, write-only reports, the gate (backend) | with the safety files |
 | `.claude/rules/config.md` | Environment variables, startup configuration | with `backend/internal/config/**`, `backend/cmd/api/**`, `.env.example` |
 | `docs/architecture.md` | Package and layer map of both parts, client status | read on demand |
 | `docs/decisions.md` | Index of the decision records: by task, by status, what superseded what, deferred work | read on demand |
@@ -68,9 +69,9 @@ not trigger it. When planning or answering without having touched such a path, r
 ## Architecture boundaries
 
 - Backend dependency direction: `cmd/api/main.go` builds everything → `internal/server` (HTTP only) →
-  `internal/auth`, `internal/profile`, `internal/language` and `internal/avatar` (domains; `profile`, `language`
-  and `avatar` import neither `auth` nor each other); `internal/auth` → `internal/email`, `internal/googleid`.
-  Never the reverse. Only `main`
+  `internal/auth`, `internal/profile`, `internal/language`, `internal/avatar` and `internal/safety` (domains;
+  `profile`, `language`, `avatar` and `safety` import neither `auth` nor each other); `internal/auth` →
+  `internal/email`, `internal/googleid`. Never the reverse. Only `main`
   reads configuration; domain packages never read the request context.
 - Migrations: add new numbered files in `backend/internal/db/migrations/`; never edit applied ones.
 - Mobile: `main.dart` is the composition root and the only place long-lived objects are built. Pass them down by
@@ -84,7 +85,8 @@ not trigger it. When planning or answering without having touched such a path, r
   decision records it cites (`docs/decisions.md` lists them by task). Read each record's header first: it says what
   later records changed.
 - Never log emails, passwords, tokens, token hashes, user agents, IPs or request bodies. Google ID tokens, `sub` and
-  the client ID count too, and so does anything of an uploaded or stored picture.
+  the client ID count too, and so does anything of an uploaded or stored picture. Never log whom a member blocked
+  or reported, or a report's reason or details: such a line holds only the `user_id` of the member who acted.
 - `DATABASE_URL` and `RESEND_API_KEY` are secrets. Everything in `mobile/config/*.json` is compiled into the APK and
   is public: never put a secret there.
 - No account enumeration: responses and work must not reveal whether an account exists (the one deliberate
